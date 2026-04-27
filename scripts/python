@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# scripts/python — wraps the sabi venv's Python with two PYTHONPATH shims:
+#
+#   1. The sabi `src/` directory, so `import sabi` resolves to the worktree
+#      we're working in (rather than the editable install of the main repo).
+#
+#   2. A pinned ProbPipe checkout, if `.probpipe-pin` exists at the repo
+#      root. The pin file holds an absolute path to a ProbPipe worktree (or
+#      any directory containing the `probpipe/` package). This shadows the
+#      editable probpipe install in the venv with the pinned source — used
+#      while ProbPipe PRs are in flight and we need fixes that aren't on
+#      `main` yet.
+#
+# Usage:
+#   ./scripts/python -m pytest tests/
+#   ./scripts/python -m sabi.runner.main problem=banana
+#
+# When ProbPipe `main` carries everything we need, delete `.probpipe-pin`
+# (or empty it) and the shim falls back to the venv's editable install.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SABI_SRC="$REPO_ROOT/src"
+PIN_FILE="$REPO_ROOT/.probpipe-pin"
+VENV_PYTHON="${SABI_VENV_PYTHON:-/Users/andrewroberts/Desktop/git-repos/sabi/.venv/bin/python}"
+
+PIN_PATH=""
+if [[ -f "$PIN_FILE" ]]; then
+  # Skip blank lines and `#`-prefixed comments; first remaining line is the pin.
+  # `|| true` to keep `set -e` happy when the pin file has only comments.
+  PIN_PATH="$( { grep -v -E '^[[:space:]]*(#|$)' "$PIN_FILE" || true; } | head -n 1 | xargs)"
+fi
+
+if [[ -n "$PIN_PATH" ]]; then
+  if [[ ! -d "$PIN_PATH" ]]; then
+    echo "scripts/python: .probpipe-pin points at '$PIN_PATH' but it is not a directory." >&2
+    exit 1
+  fi
+  if [[ ! -d "$PIN_PATH/probpipe" ]]; then
+    echo "scripts/python: '$PIN_PATH' does not contain a 'probpipe/' package directory." >&2
+    exit 1
+  fi
+  export PYTHONPATH="$SABI_SRC:$PIN_PATH${PYTHONPATH:+:$PYTHONPATH}"
+else
+  export PYTHONPATH="$SABI_SRC${PYTHONPATH:+:$PYTHONPATH}"
+fi
+
+exec "$VENV_PYTHON" "$@"

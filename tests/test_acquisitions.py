@@ -1,0 +1,77 @@
+import jax
+import jax.numpy as jnp
+
+from sabi.acquisitions.base import AcquisitionState
+from sabi.acquisitions.ei import ExpectedImprovement
+from sabi.acquisitions.random import Random
+from sabi.initial_designs.base import sample_initial
+from sabi.problems.gaussian2d import gaussian2d
+from sabi.surrogates.gp import GPSurrogate
+
+
+def _state(problem, key_seed=0, n=20):
+    """Build an AcquisitionState seeded by samples from problem.prior — that's
+    where acquisition candidates will also be drawn from, so the GP gets
+    trained on the same support."""
+    X = sample_initial(problem, jax.random.key(key_seed), n)
+    Y = jax.vmap(problem.target_function)(X)
+    gp = GPSurrogate().fit(X, Y)
+    return AcquisitionState(
+        problem=problem,
+        surrogate=gp,
+        X=X,
+        Y=Y,
+        current_form=problem.log_density_form,
+        tempering_state=None,
+    )
+
+
+def test_random_acquisition_shape_and_bounds():
+    problem = gaussian2d()
+    state = _state(problem)
+    batch = Random().select_batch(state, q=4, key=jax.random.key(7))
+    assert batch.shape == (4,) + problem.input_shape
+    # support is interval(low, high) per element; check membership
+    assert jnp.all(jnp.asarray(problem.support.check(batch)))
+
+
+def test_ei_acquisition_shape():
+    problem = gaussian2d()
+    state = _state(problem)
+    batch = ExpectedImprovement(n_candidates=512).select_batch(
+        state, q=3, key=jax.random.key(11)
+    )
+    assert batch.shape == (3,) + problem.input_shape
+
+
+def test_ei_picks_points_with_higher_surrogate_mean_than_random():
+    """EI is defined to prefer points with high surrogate mean + variance.
+    Verify directly against the surrogate (decouples from GP fit quality)."""
+    problem = gaussian2d()
+    state = _state(problem, n=60)
+
+    ei_batch = ExpectedImprovement(n_candidates=4096).select_batch(
+        state, q=16, key=jax.random.key(2)
+    )
+    random_batch = Random().select_batch(state, q=16, key=jax.random.key(3))
+
+    ei_pred = state.surrogate.predict(ei_batch)
+    rand_pred = state.surrogate.predict(random_batch)
+
+    assert float(jnp.mean(ei_pred.mean)) > float(jnp.mean(rand_pred.mean))
+
+
+def test_ei_average_best_beats_random_average_best_across_seeds():
+    problem = gaussian2d()
+    state = _state(problem, n=60)
+
+    ei_bests = []
+    rand_bests = []
+    for seed in range(8):
+        ei_batch = ExpectedImprovement(n_candidates=2048).select_batch(
+            state, q=8, key=jax.random.key(100 + seed)
+        )
+        rand_batch = Random().select_batch(state, q=8, key=jax.random.key(200 + seed))
+        ei_bests.append(float(jnp.max(jax.vmap(problem.target_function)(ei_batch))))
+        rand_bests.append(float(jnp.max(jax.vmap(problem.target_function)(rand_batch))))
+    assert sum(ei_bests) / len(ei_bests) > sum(rand_bests) / len(rand_bests)

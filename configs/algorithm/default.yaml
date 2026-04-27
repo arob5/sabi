@@ -1,0 +1,5 @@
+n_initial: 16
+n_rounds: 20
+q: 1
+# `gp_pushforward` (default) or `weighted_empirical` (no-GP baseline).
+surrogate_posterior: gp_pushforward

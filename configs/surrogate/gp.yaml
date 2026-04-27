@@ -1,0 +1,5 @@
+name: gp
+ls_factor: 1.5
+ls_floor: 0.05
+noise: 1.0e-4
+jitter: 1.0e-3

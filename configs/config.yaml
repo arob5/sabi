@@ -1,0 +1,11 @@
+defaults:
+  - problem: gaussian2d
+  - surrogate: gp
+  - acquisition: ei
+  - algorithm: default
+  - _self_
+
+seed: 0
+
+metrics:
+  - name: reference_mmd

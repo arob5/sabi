@@ -1,0 +1,6 @@
+name: gaussian2d
+mean: [0.0, 0.0]
+cov:
+  - [1.0, 0.5]
+  - [0.5, 1.0]
+bounds_radius: 5.0
