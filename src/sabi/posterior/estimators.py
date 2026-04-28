@@ -1,38 +1,28 @@
-"""Free-function deterministic posterior estimators on `SurrogatePosterior`s.
+"""Free-function deterministic posterior estimators.
 
-Each estimator is a function `(sp: SurrogatePosterior) -> Distribution[Array]`
-that returns a concrete deterministic posterior approximation. Type
-dispatch on `sp` matches ProbPipe's op-dispatch style.
+Each estimator is a function `(sp) -> Distribution[Array]` that returns a
+concrete deterministic posterior approximation. Type dispatch on `sp`
+matches ProbPipe's op-dispatch style.
 
-For Dirac surrogate posteriors (`WeightedEmpiricalSurrogatePosterior`),
-all sensible deterministic estimators coincide and reduce to the
-underlying empirical — there's nothing random to estimate.
+For Dirac surrogate posteriors (`WeightedEmpiricalRandomMeasure`), all
+sensible deterministic estimators coincide and reduce to the underlying
+empirical — there's nothing random to estimate.
 
 v1.2 ships:
 
 - `expected_target(sp)` — plug the surrogate's predictive mean into the
   log-density form. Renamed from "plug-in mean" because it's the
   expectation of the target map under the surrogate distribution. Biased
-  in the GP-pushforward case (the plug-in is not the same as the unbiased
-  expected posterior `mean(rm)`).
+  in the GP-pushforward case (the plug-in is not the same as the
+  unbiased expected posterior `mean(rm)`).
 
 The unbiased expected posterior is exposed via `mean(sp)` (handled by
 ProbPipe's `mean` op via `SupportsMean`). For Dirac SPs this returns the
 inner empirical; for the GP-pushforward case there is no general
 `SupportsMean` implementation in v1.2 and `mean(gp_sp)` raises.
 
-Future estimators (NOT in v1.2):
-
-- `expected_log_density(sp)` — mean of the random log-density at each x
-  (= `expected_target` for log-density emulators; differs for forward
-  model emulators).
-- `expected_density(sp)` — mean of the random unnormalized density at
-  each x (i.e. `E_f[exp(log p̃(x; f))]`).
-- `median_density(sp)` — pointwise median of the random unnormalized
-  density.
-
-These motivate the partial-pushforward primitive — see
-`docs/probpipe_issues.md`.
+Future estimators (NOT in v1.2) — see `docs/probpipe_issues.md` for the
+partial-pushforward primitive that would generalize their construction.
 """
 
 from __future__ import annotations
@@ -42,22 +32,19 @@ from typing import Any, ClassVar
 import jax
 import jax.numpy as jnp
 from jax import Array
-from probpipe import condition_on, sample
+from probpipe import condition_on, mean, sample
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
-from sabi.posterior.surrogate_posterior import (
-    GPPushforwardSurrogatePosterior,
-    SurrogatePosterior,
-    WeightedEmpiricalSurrogatePosterior,
-)
+from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.forms import LogDensityForm
 from sabi.surrogates.base import Surrogate
 
 
 def expected_target(
-    sp: SurrogatePosterior,
+    sp,
     *,
     sampler: str | None = None,
     sampler_kwargs: dict[str, Any] | None = None,
@@ -68,21 +55,19 @@ def expected_target(
 
     Type dispatch on `sp`:
 
-    - `WeightedEmpiricalSurrogatePosterior` (Dirac): returns the inner
+    - `WeightedEmpiricalRandomMeasure` (Dirac): returns the inner
       empirical (which IS the deterministic target). `sampler` /
-      `sampler_kwargs` are ignored — sampling from an empirical is
-      already supported and cheap.
-    - `GPPushforwardSurrogatePosterior`: returns an
-      `_ExpectedTargetDistribution` whose `_unnormalized_log_prob` is
-      the form composed with the surrogate's predictive mean. Sampling
-      delegates to ProbPipe `condition_on` (auto-dispatched MCMC).
-      `sampler` selects a specific method (e.g. `"tfp_nuts"`,
-      `"tfp_hmc"`); `sampler_kwargs` forwards arguments like
-      `num_results`, `num_warmup`.
+      `sampler_kwargs` are ignored.
+    - `SurrogatePosterior`: returns an `_ExpectedTargetDistribution`
+      whose `_unnormalized_log_prob` is the form composed with the
+      surrogate's predictive mean. Sampling delegates to ProbPipe
+      `condition_on` (auto-dispatched MCMC). `sampler` selects a
+      specific method (e.g. `"tfp_nuts"`); `sampler_kwargs` forwards
+      arguments like `num_results`, `num_warmup`.
     """
-    if isinstance(sp, WeightedEmpiricalSurrogatePosterior):
+    if isinstance(sp, WeightedEmpiricalRandomMeasure):
         return sp.inner_distribution
-    if isinstance(sp, GPPushforwardSurrogatePosterior):
+    if isinstance(sp, SurrogatePosterior):
         return _ExpectedTargetDistribution(
             surrogate=sp.surrogate,
             log_density_form=sp.log_density_form,
@@ -94,8 +79,7 @@ def expected_target(
             name=name or f"expected_target_{sp.name}",
         )
     raise TypeError(
-        f"expected_target: unsupported SurrogatePosterior type "
-        f"{type(sp).__name__}."
+        f"expected_target: unsupported posterior type {type(sp).__name__}."
     )
 
 
@@ -103,13 +87,11 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
     """The deterministic posterior obtained by plugging the surrogate's
     predictive mean into the log-density form.
 
-    `_unnormalized_log_prob(x) = log_density_form(x, surrogate.predict(x).mean,
-    prior=prior)`.
+    `_unnormalized_log_prob(x) = log_density_form(x, surrogate_mean(x), prior=prior)`.
 
     Sampling delegates to ProbPipe `condition_on(self)`; the registry
     auto-selects an MCMC method (typically `tfp_nuts`) since this
-    distribution satisfies `SupportsUnnormalizedLogProb` (as of ProbPipe
-    PR #151, MCMC dispatch accepts that strictly weaker protocol).
+    distribution satisfies `SupportsUnnormalizedLogProb`.
     """
 
     _sampling_cost: ClassVar[str] = "high"
@@ -146,14 +128,16 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
 
     def _unnormalized_log_prob(self, value: Array) -> Array:
         x = jnp.asarray(value)
-        # surrogate.predict expects a leading batch axis
         single = x.shape == self._input_shape
         x_batch = x[None] if single else x
-        pred = self._surrogate.predict(x_batch)
+        # Surrogate is an ArrayRandomFunction; __call__(X) returns a
+        # Distribution whose `mean` is the predictive mean across the n axis.
+        pred = self._surrogate(x_batch)
+        pred_mean = jnp.asarray(mean(pred))
         if single:
-            y = pred.mean[0]
+            y = pred_mean[0]
         else:
-            y = pred.mean
+            y = pred_mean
         return self._form(x, y, prior=self._prior)
 
     def _sample(self, key, sample_shape: tuple[int, ...] = ()) -> Array:

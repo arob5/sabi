@@ -10,6 +10,10 @@ the surrogate emulates the log-posterior (`Identity` form), that corresponds
 to hunting for high-posterior-density regions, which is a reasonable v0
 heuristic. v1 replaces the candidate-set evaluation with the shared optimizer
 in `acquisitions/optim.py` (design doc §5).
+
+The surrogate is now a ProbPipe `ArrayRandomFunction` whose `__call__(X)`
+returns a `Normal` distribution (marginal mode). EI reads `mean` and
+`variance` via ProbPipe's ops on that distribution.
 """
 
 from __future__ import annotations
@@ -20,18 +24,19 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jax.scipy.stats import norm
+from probpipe import mean, variance
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.initial_designs.base import sample_initial
 
 
-def _ei(mean: Array, variance: Array, best: Array, xi: float) -> Array:
-    std = jnp.sqrt(jnp.maximum(variance, 1e-30))
-    improvement = mean - best - xi
+def _ei(pred_mean: Array, pred_variance: Array, best: Array, xi: float) -> Array:
+    std = jnp.sqrt(jnp.maximum(pred_variance, 1e-30))
+    improvement = pred_mean - best - xi
     z = improvement / std
     ei = improvement * norm.cdf(z) + std * norm.pdf(z)
     # Zero EI where variance collapses (already-evaluated points).
-    return jnp.where(variance <= 1e-30, 0.0, ei)
+    return jnp.where(pred_variance <= 1e-30, 0.0, ei)
 
 
 @dataclass(frozen=True)
@@ -54,17 +59,19 @@ class ExpectedImprovement(Acquisition):
         key_cand, _ = jax.random.split(key)
         candidates = sample_initial(state.problem, key_cand, self.n_candidates)
 
-        pred = state.surrogate.predict(candidates)
+        pred = state.surrogate(candidates)
+        pred_mean = jnp.asarray(mean(pred))
+        pred_variance = jnp.asarray(variance(pred))
 
         if self.best_from == "data":
             best = jnp.max(state.Y)
         elif self.best_from == "mean":
-            train_pred = state.surrogate.predict(state.X)
-            best = jnp.max(train_pred.mean)
+            train_pred = state.surrogate(state.X)
+            best = jnp.max(jnp.asarray(mean(train_pred)))
         else:
             raise ValueError(f"Unknown best_from={self.best_from!r}.")
 
-        scores = _ei(pred.mean, pred.variance, best, self.xi)
+        scores = _ei(pred_mean, pred_variance, best, self.xi)
 
         # Greedy top-q (no in-batch diversification for v0; repeats unlikely
         # because the candidate set is random each call).

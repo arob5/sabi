@@ -1,35 +1,37 @@
 """tinygp-backed GP surrogate with a Matern-5/2 kernel.
 
-v0 spike: scalar output (the GP is fit to log-posterior values). Inputs and
-outputs are standardized before fitting. Hyperparameters are chosen by simple
-data-adaptive heuristics rather than log-marginal-likelihood optimization:
+Inherits from both `Surrogate` (sabi-side fittable random function marker)
+and ProbPipe's `GaussianRandomFunction`. Diamond inheritance over
+`ArrayRandomFunction`, resolved cleanly by Python's C3 MRO.
 
-- **amplitude**: 1 (correct for standardized outputs; Y has unit std).
-- **lengthscale**: a configurable multiple of the median nearest-neighbor
-  distance on the standardized inputs. This scales naturally with training-set
-  size, which keeps the kernel matrix well-conditioned across the loop as
-  data points accumulate.
-- **noise**: small fixed value (relative to standardized Y).
+The class implements the two abstract methods required by
+`GaussianRandomFunction`: `predict_mean(X)` and `predict_variance(X)`.
+The full `predict` / `__call__` machinery (assembling these into a `Normal`
+for marginal mode, `MultivariateNormal` for joint modes) comes from
+`GaussianRandomFunction`. v1.2 supports only marginal mode
+(`joint_inputs=False, joint_outputs=False`); joint covariance lands in
+v1.5 when emulator metrics need it.
 
-Log-marginal-likelihood optimization with optimistix/BFGS was tried first, but
-the BFGS compile cost dominated the spike's run time and the optimizer
-frequently diverged into singular kernel regimes. A principled hyperparameter
-search is deferred to v1 together with the optimization module (§5).
+Hyperparameter strategy is unchanged from v1.x: data-adaptive lengthscale
+(median nearest-neighbor distance × ls_factor, floored), unit amplitude on
+standardized outputs, fixed small noise + Cholesky jitter. A principled
+hyperparameter search is deferred to v1.4+ (with the optimization module).
 
-This surrogate does NOT take a tempering parameter — tempering is applied
-downstream in `LogDensityForm`. See design doc §4.3.
+v1.2 supports `X.shape == (n,) + input_shape` only (no extra leading batch
+axes). Add vmap-over-extra-batch support in v1.5+ if needed.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from typing import Self
 
 import jax.numpy as jnp
 from jax import Array
+from probpipe.distributions.gaussian_random_function import GaussianRandomFunction
 from tinygp import GaussianProcess, kernels
 
-from sabi.surrogates.base import Surrogate, SurrogatePrediction
+from sabi.surrogates.base import Surrogate
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,6 @@ def _median_nn_distance(X: Array) -> Array:
     """Median of each point's nearest-neighbor Euclidean distance."""
     x2 = jnp.sum(X * X, axis=-1)
     D2 = x2[:, None] + x2[None, :] - 2.0 * X @ X.T
-    # Mask the diagonal (self-distance).
     D2 = jnp.where(jnp.eye(X.shape[0], dtype=bool), jnp.inf, jnp.maximum(D2, 0.0))
     nn = jnp.sqrt(jnp.min(D2, axis=-1))
     return jnp.median(nn)
@@ -75,75 +76,129 @@ def _choose_lengthscale(X: Array, factor: float, floor: float) -> Array:
 
 
 def _build_gp(X: Array, lengthscale: Array, noise: float, jitter: float) -> GaussianProcess:
-    kernel = kernels.Matern52(scale=lengthscale)  # amplitude = 1 on standardized Y
+    kernel = kernels.Matern52(scale=lengthscale)
     return GaussianProcess(kernel, X, diag=noise + jitter)
 
 
-@dataclass(frozen=True)
-class GPSurrogate(Surrogate):
+class GPSurrogate(Surrogate, GaussianRandomFunction):
     """GP surrogate with Matern-5/2 isotropic kernel.
 
-    Hyperparameters are data-adaptive (see module docstring): amplitude=1,
-    lengthscale ∝ median NN distance, fixed small noise + jitter floor.
-
-    Attributes set after `fit`:
-        X_train, Y_train: standardized training data kept for conditioning.
-        x_standardizer, y_standardizer: the fitted standardizers.
-        lengthscale: chosen lengthscale on the standardized input scale.
+    `predict_mean` / `predict_variance` implement the abstract `GaussianRandomFunction`
+    interface; `predict` / `__call__` come for free from the parent. `fit(X, Y)`
+    returns a new `GPSurrogate` carrying the conditioned state.
     """
 
-    # Lengthscale (on standardized inputs) = `ls_factor` × median NN distance,
-    # but never below `ls_floor`. 1.5 is a slightly-oversmooth default that keeps
-    # the kernel matrix well-conditioned and still picks up the 2-D geometry.
-    ls_factor: float = 1.5
-    ls_floor: float = 0.05
-    # Small observation noise on the standardized scale.
-    noise: float = 1e-4
-    # Extra jitter added to the diagonal for Cholesky stability. Needed
-    # because Matern-5/2 with moderate lengthscales can produce kernel matrices
-    # with slightly-negative eigenvalues from roundoff.
-    jitter: float = 1e-3
+    # Marginal-only in v1.2 — joint covariance lands when emulator metrics need it.
+    supports_joint_inputs: bool = False
+    supports_joint_outputs: bool = False
 
-    X_train: Array | None = field(default=None, repr=False)
-    Y_train: Array | None = field(default=None, repr=False)
-    x_standardizer: _Standardizer | None = field(default=None, repr=False)
-    y_standardizer: _Standardizer | None = field(default=None, repr=False)
-    lengthscale: Array | None = field(default=None, repr=False)
+    def __init__(
+        self,
+        *,
+        input_shape: tuple[int, ...] = (2,),
+        output_shape: tuple[int, ...] = (),
+        name: str | None = None,
+        ls_factor: float = 1.5,
+        ls_floor: float = 0.05,
+        noise: float = 1e-4,
+        jitter: float = 1e-3,
+        # Internal conditioned-on-training state. Users don't pass these on
+        # construction; `fit` populates them on the returned instance.
+        _x_standardizer: _Standardizer | None = None,
+        _y_standardizer: _Standardizer | None = None,
+        _X_train: Array | None = None,
+        _Y_train: Array | None = None,
+        _lengthscale: Array | None = None,
+    ):
+        # Diamond inheritance: super().__init__ walks the MRO
+        # (Surrogate → GaussianRandomFunction → ArrayRandomFunction) until it
+        # finds `__init__`. ArrayRandomFunction's `__init__` accepts the args.
+        super().__init__(
+            input_shape=input_shape,
+            output_shape=output_shape,
+            name=name or "GPSurrogate",
+        )
+        self.ls_factor = ls_factor
+        self.ls_floor = ls_floor
+        self.noise = noise
+        self.jitter = jitter
+        self._x_standardizer = _x_standardizer
+        self._y_standardizer = _y_standardizer
+        self._X_train = _X_train
+        self._Y_train = _Y_train
+        self._lengthscale = _lengthscale
+
+    @property
+    def lengthscale(self) -> Array | None:
+        return self._lengthscale
 
     def fit(self, X: Array, Y: Array) -> Self:
-        if X.ndim != 2:
-            raise ValueError(f"X must be 2-D, got shape {X.shape}.")
-        if Y.ndim != 1 or Y.shape[0] != X.shape[0]:
-            raise ValueError(f"Y must be 1-D with len(X), got shape {Y.shape}.")
+        if X.ndim != 1 + len(self.input_shape):
+            raise ValueError(
+                f"GPSurrogate.fit: expected X.shape == (n,) + input_shape="
+                f"{self.input_shape}, got {tuple(X.shape)}."
+            )
+        if Y.shape != X.shape[: -len(self.input_shape) or None]:
+            # For our scalar output case (output_shape=()), Y must be shape (n,).
+            expected_y_shape = X.shape[: -len(self.input_shape)] + self.output_shape
+            if Y.shape != expected_y_shape:
+                raise ValueError(
+                    f"GPSurrogate.fit: expected Y.shape={expected_y_shape}, "
+                    f"got {tuple(Y.shape)}."
+                )
 
         x_std = _Standardizer.fit(X, axis=0)
         y_std = _Standardizer.fit(Y, axis=0)
         Xs = x_std.transform(X)
         Ys = y_std.transform(Y)
-
         lengthscale = _choose_lengthscale(Xs, self.ls_factor, self.ls_floor)
 
-        return replace(
-            self,
-            X_train=Xs,
-            Y_train=Ys,
-            x_standardizer=x_std,
-            y_standardizer=y_std,
-            lengthscale=lengthscale,
+        return type(self)(
+            input_shape=self.input_shape,
+            output_shape=self.output_shape,
+            name=self.name,
+            ls_factor=self.ls_factor,
+            ls_floor=self.ls_floor,
+            noise=self.noise,
+            jitter=self.jitter,
+            _x_standardizer=x_std,
+            _y_standardizer=y_std,
+            _X_train=Xs,
+            _Y_train=Ys,
+            _lengthscale=lengthscale,
         )
 
-    def predict(self, X: Array) -> SurrogatePrediction:
-        if self.X_train is None:
-            raise RuntimeError("GPSurrogate.predict called before fit.")
-        assert self.lengthscale is not None
-        assert self.x_standardizer is not None
-        assert self.y_standardizer is not None
-        assert self.Y_train is not None
+    # --- GaussianRandomFunction abstract methods --------------------------
 
-        Xs = self.x_standardizer.transform(X)
-        gp = _build_gp(self.X_train, self.lengthscale, self.noise, self.jitter)
-        cond = gp.condition(self.Y_train, Xs).gp
-        mean = self.y_standardizer.inverse_mean(cond.mean)
+    def predict_mean(self, X: Array) -> Array:
+        """Return the predictive mean at each row of `X`.
+
+        Args:
+            X: shape `(n,) + input_shape`. (v1.2 doesn't support extra leading
+                batch axes.)
+
+        Returns:
+            Shape `(n,) + output_shape`. For sabi's scalar-output benchmarks
+            this is `(n,)`.
+        """
+        self._require_fit()
+        Xs = self._x_standardizer.transform(X)  # type: ignore[union-attr]
+        gp = _build_gp(self._X_train, self._lengthscale, self.noise, self.jitter)  # type: ignore[arg-type]
+        cond = gp.condition(self._Y_train, Xs).gp  # type: ignore[arg-type]
+        return self._y_standardizer.inverse_mean(cond.mean)  # type: ignore[union-attr]
+
+    def predict_variance(self, X: Array) -> Array:
+        """Return the marginal predictive variance at each row of `X`."""
+        self._require_fit()
+        Xs = self._x_standardizer.transform(X)  # type: ignore[union-attr]
+        gp = _build_gp(self._X_train, self._lengthscale, self.noise, self.jitter)  # type: ignore[arg-type]
+        cond = gp.condition(self._Y_train, Xs).gp  # type: ignore[arg-type]
         # Clip tiny-negative variances that arise from Cholesky roundoff.
-        var = self.y_standardizer.inverse_var(jnp.maximum(cond.variance, 0.0))
-        return SurrogatePrediction(mean=mean, variance=var)
+        return self._y_standardizer.inverse_var(jnp.maximum(cond.variance, 0.0))  # type: ignore[union-attr]
+
+    def _require_fit(self) -> None:
+        if self._X_train is None:
+            raise RuntimeError(
+                f"{type(self).__name__} called before fit; conditioning "
+                "state is unset."
+            )

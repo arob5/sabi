@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from probpipe import mean
 
 from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.ei import ExpectedImprovement
@@ -15,7 +16,7 @@ def _state(problem, key_seed=0, n=20):
     trained on the same support."""
     X = sample_initial(problem, jax.random.key(key_seed), n)
     Y = jax.vmap(problem.target_function)(X)
-    gp = GPSurrogate().fit(X, Y)
+    gp = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
     return AcquisitionState(
         problem=problem,
         surrogate=gp,
@@ -55,10 +56,12 @@ def test_ei_picks_points_with_higher_surrogate_mean_than_random():
     )
     random_batch = Random().select_batch(state, q=16, key=jax.random.key(3))
 
-    ei_pred = state.surrogate.predict(ei_batch)
-    rand_pred = state.surrogate.predict(random_batch)
+    ei_pred = state.surrogate(ei_batch)
+    rand_pred = state.surrogate(random_batch)
 
-    assert float(jnp.mean(ei_pred.mean)) > float(jnp.mean(rand_pred.mean))
+    ei_mean = jnp.asarray(mean(ei_pred))
+    rand_mean = jnp.asarray(mean(rand_pred))
+    assert float(jnp.mean(ei_mean)) > float(jnp.mean(rand_mean))
 
 
 def test_ei_average_best_beats_random_average_best_across_seeds():

@@ -1,13 +1,9 @@
 from sabi.posterior.estimators import expected_target
-from sabi.posterior.surrogate_posterior import (
-    GPPushforwardSurrogatePosterior,
-    SurrogatePosterior,
-    WeightedEmpiricalSurrogatePosterior,
-)
+from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
 
 __all__ = [
-    "GPPushforwardSurrogatePosterior",
     "SurrogatePosterior",
-    "WeightedEmpiricalSurrogatePosterior",
+    "WeightedEmpiricalRandomMeasure",
     "expected_target",
 ]

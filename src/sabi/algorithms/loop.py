@@ -36,15 +36,14 @@ from jax import Array
 from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
+from probpipe.core._random_measures import NumericRandomMeasure
+
 from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.initial_designs.base import InitialDesign, sample_initial
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.posterior.estimators import expected_target
-from sabi.posterior.surrogate_posterior import (
-    GPPushforwardSurrogatePosterior,
-    SurrogatePosterior,
-    WeightedEmpiricalSurrogatePosterior,
-)
+from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
 from sabi.surrogates.base import Surrogate
@@ -53,12 +52,16 @@ from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule
 
 
 class SurrogatePosteriorFactory(Protocol):
-    """Builds a `SurrogatePosterior` from the round's surrogate state and the
-    math primitives (support, input_shape, prior, log_density_form).
+    """Builds the round's posterior random measure from the surrogate state
+    and the math primitives (support, input_shape, prior, log_density_form).
+
+    Returns a `NumericRandomMeasure` — concretely either a `SurrogatePosterior`
+    or a `WeightedEmpiricalRandomMeasure` (or any other random-measure
+    subclass a future factory might produce).
 
     `X` and `Y` are the design set; `log_density_form` is the form for the
-    round (possibly tempered). `surrogate` may be ignored by Dirac factories
-    that don't need a fitted GP.
+    round (possibly tempered). `surrogate` may be ignored by factories
+    that don't need a fitted surrogate (e.g., the weighted-empirical baseline).
     """
 
     def __call__(
@@ -72,7 +75,7 @@ class SurrogatePosteriorFactory(Protocol):
         input_shape: tuple[int, ...],
         prior: Distribution | None,
         problem_name: str | None = None,
-    ) -> SurrogatePosterior: ...
+    ) -> NumericRandomMeasure: ...
 
 
 def gp_pushforward_factory(
@@ -85,15 +88,16 @@ def gp_pushforward_factory(
     input_shape: tuple[int, ...],
     prior: Distribution | None,
     problem_name: str | None = None,
-) -> GPPushforwardSurrogatePosterior:
-    """Default factory: bundle the surrogate with the math primitives."""
-    return GPPushforwardSurrogatePosterior(
+) -> SurrogatePosterior:
+    """Default factory: build the random measure induced by the fitted
+    surrogate composed with the form (a `SurrogatePosterior`)."""
+    return SurrogatePosterior(
         surrogate=surrogate,
+        log_density_form=log_density_form,
         support=support,
         input_shape=input_shape,
-        log_density_form=log_density_form,
         prior=prior,
-        name=f"gp_pushforward_{problem_name}" if problem_name else None,
+        name=f"surrogate_posterior_{problem_name}" if problem_name else None,
     )
 
 
@@ -107,24 +111,23 @@ def weighted_empirical_factory(
     input_shape: tuple[int, ...],
     prior: Distribution | None,
     problem_name: str | None = None,
-) -> WeightedEmpiricalSurrogatePosterior:
-    """No-GP baseline factory: weighted empirical at design points.
+) -> WeightedEmpiricalRandomMeasure:
+    """No-GP baseline factory: a `WeightedEmpiricalRandomMeasure` at the
+    design points.
 
     Applies `log_density_form` pointwise to `(X_i, Y_i)` to get the
-    deterministic log-density at each design point, then constructs a
-    `WeightedEmpiricalSurrogatePosterior`. The `surrogate` argument is
-    ignored.
+    deterministic log-density (used as `log_weights`) at each design point.
+    The `surrogate` argument is ignored; the form is used only here to
+    compute the weights and is NOT carried on the resulting random measure.
     """
-    Y_log_density = jax.vmap(
+    log_weights = jax.vmap(
         lambda x, y: log_density_form(x, y, prior=prior)
     )(X, Y)
-    return WeightedEmpiricalSurrogatePosterior(
+    return WeightedEmpiricalRandomMeasure(
         X=X,
-        Y=Y_log_density,
+        log_weights=log_weights,
         support=support,
         input_shape=input_shape,
-        log_density_form=log_density_form,
-        prior=prior,
         name=f"weighted_empirical_{problem_name}" if problem_name else None,
     )
 
@@ -142,7 +145,7 @@ class Algorithm:
     tempering: Tempering = field(default_factory=NoTempering)
     schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
     surrogate_posterior_factory: SurrogatePosteriorFactory = gp_pushforward_factory
-    estimator: Callable[[SurrogatePosterior], Distribution] = expected_target
+    estimator: Callable[[NumericRandomMeasure], Distribution] = expected_target
     metrics: tuple[PosteriorMetric, ...] = ()
 
 
@@ -201,7 +204,7 @@ def _build_surrogate_posterior(
     Y: Array,
     log_density_form: LogDensityForm,
     problem: Problem,
-) -> SurrogatePosterior:
+) -> NumericRandomMeasure:
     """Adapter: extract the math primitives from `Problem` and call the factory."""
     return factory(
         surrogate=surrogate,
