@@ -135,22 +135,52 @@ directly).
 
 ---
 
-## v1.3 — Reference posterior infrastructure
+## v1.3 — Reference posterior infrastructure — **landed**
 
-Smaller phase. Move analytic reference samples out of inline construction
-into versioned artifacts; add NUTS-based reference computation for problems
-that don't have analytic samples.
+NUTS-based reference computation for benchmarks without analytic
+samples; on-disk caching of expensive references via Parquet artifacts.
 
-**Deliverables**
-- Fix `blackjax` import in the shared venv (currently broken via fastprogress → IPython transitive).
-- `reference_posteriors/` directory layout with content-hashed JSON manifest + Parquet artifacts.
-- `Problem.reference_distribution` becomes a load-on-demand artifact (not computed at construction time).
-- Regeneration script that runs blackjax NUTS for a `Problem` whose posterior isn't analytic.
-- Add Neal's funnel as a Tier-A benchmark (no analytic samples, exercises the NUTS path).
+**Landed in this phase**
+- `sabi.reference` package: `io.py` (Parquet + JSON metadata read/write),
+  `nuts.py` (`_ProblemTargetDistribution` + `generate_via_nuts` driving
+  ProbPipe `condition_on` → NUTS, with ArviZ-derived diagnostics),
+  `cache.py` (`load_or_generate_reference_samples` with cache hit / regen /
+  quality-threshold gating).
+- Cache layout: `reference_posteriors/<problem>/<key>_<sampler-tag>.{parquet,json}`.
+  Filename encodes problem variant + NUTS config; different params → different
+  artifact. Tier-A artifacts (small) committed to the repo.
+- ArviZ diagnostics (R-hat, ESS bulk/tail, divergences) computed during
+  regeneration and embedded in metadata JSON. `cache._validate_diagnostics`
+  refuses to save if max R-hat / min ESS / divergence rate fail thresholds.
+- Neal's funnel benchmark (`sabi.problems.neals_funnel.neals_funnel`):
+  `input_shape=(d+1,)`, joint log-density of `v ~ N(0, σ_v²)` and
+  `x_i | v ~ N(0, exp(v))`. Reference is loaded from cache; regenerates
+  via NUTS on first call with new params. Funnel-specific quality thresholds
+  loosen R-hat and ESS gates to acknowledge vanilla-NUTS difficulty without
+  reparameterization (a v1.5+ stretch concern).
+- `scripts/regenerate_references` — Python CLI for forced regeneration.
+  `./scripts/regenerate_references --problem neals_funnel` refreshes the
+  artifact in place.
+- Runner / build wiring: `configs/problem/neals_funnel.yaml` + `build.py`
+  dispatch on `name == "neals_funnel"`. `build_algorithm(cfg, problem=...)`
+  signature now threads the problem's `input_shape` into the surrogate
+  factory so `GPSurrogate` is constructed with the right shape contract.
+- `blackjax` removed from `pyproject.toml` dependencies. We use ProbPipe's
+  `tfp_nuts` exclusively for both reference-posterior generation and the
+  v1.2 `expected_target` sampling backend.
+- Tests: `tests/test_reference.py` (Parquet roundtrip, cache hit/miss,
+  cache-key disambiguation, quality threshold raising) +
+  `tests/test_neals_funnel.py` (shape/type, log-density spot check, v
+  marginal moments, funnel-geometry signature). 80 tests total pass.
 
-**Exit criteria**
-- Tier-A benchmarks (gaussian2d, banana, Neal's funnel) all load reference distributions from artifacts.
-- Regeneration is a single CLI command.
+**Deferred to later phases**
+- Geometry-aware Neal's-funnel reference (non-centered reparameterization
+  for substantially better ESS) — v1.5 stretch concern alongside emulator
+  metrics on the funnel.
+- `predict_covariance` on `GPSurrogate` (joint-mode pushforward) — v1.5+
+  when emulator metrics need it.
+- Tier-B reference posteriors (large, expensive) — would use git-lfs;
+  schedule when first benchmark requires them.
 
 ---
 

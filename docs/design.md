@@ -253,7 +253,7 @@ Two tiers:
 - Neal's funnel
 - (Add as needed)
 
-**Tier B (cluster):** Realistic problems with long-running MCMC (blackjax). Reference computed once, stored as Parquet + JSON metadata, keyed by a content hash of `(problem_name, sampler, n_samples, sampler_seed)`. Regeneration script checked in. Reference artifacts live in `reference_posteriors/` with a versioned manifest.
+**Tier B (cluster):** Realistic problems with long-running MCMC. Same artifact infrastructure as Tier A (Parquet samples + JSON metadata under `reference_posteriors/<problem>/`); large Tier-B artifacts will use git-lfs when the first such benchmark lands. Sampler is ProbPipe's `condition_on` → `tfp_nuts` (with ArviZ diagnostics embedded in metadata); `scripts/regenerate_references` regenerates in place.
 
 ## 7. Reproducibility
 
@@ -291,7 +291,7 @@ sabi/
 
 ## 10. Dependencies
 
-- **Required:** `jax`, `jaxlib`, `numpy`, `hydra-core`, `omegaconf`, `tinygp`, `blackjax`, `optimistix`, `pyarrow`.
+- **Required:** `jax`, `jaxlib`, `numpy`, `hydra-core`, `omegaconf`, `tinygp`, `optimistix`, `pyarrow`.
 - **Optional:** `probpipe`, `wandb`, `pyvbmc`.
 - Reimplementing VBMC natively is a post-v1 goal; PyVBMC is the correctness oracle.
 
