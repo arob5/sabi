@@ -12,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import jax.numpy as jnp
-import probpipe.core.ops as pp_ops
 from jax import Array
+from probpipe import sample
 
 from sabi.problems.base import Problem
 
@@ -51,5 +51,5 @@ def sample_initial(
         raise ValueError(
             f"Problem {problem.name!r} has no prior and no explicit InitialDesign."
         )
-    samples = pp_ops.sample(problem.prior, key=key, sample_shape=(n,))
-    return jnp.asarray(samples)
+    drawn = sample(problem.prior, key=key, sample_shape=(n,))
+    return jnp.asarray(drawn)

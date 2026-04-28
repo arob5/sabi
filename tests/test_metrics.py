@@ -2,9 +2,9 @@
 
 import jax
 import jax.numpy as jnp
-import probpipe.core.ops as pp_ops
 import pytest
 from dataclasses import dataclass, replace
+from probpipe import sample
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.core.protocols import SupportsLogProb, SupportsSampling
@@ -32,7 +32,7 @@ def test_reference_mmd_low_for_samples_from_reference():
     """Posterior samples drawn from the *same* reference should yield small MMD."""
     problem = gaussian2d()
     samples = jnp.asarray(
-        pp_ops.sample(
+        sample(
             problem.reference_distribution,
             key=jax.random.key(7),
             sample_shape=(2048,),
@@ -48,7 +48,7 @@ def test_reference_mmd_low_for_samples_from_reference():
 def test_reference_mmd_detects_shifted_samples():
     problem = gaussian2d()
     samples = jnp.asarray(
-        pp_ops.sample(
+        sample(
             problem.reference_distribution, key=jax.random.key(7), sample_shape=(2048,)
         )
     ) + 3.0

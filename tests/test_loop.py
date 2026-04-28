@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-import probpipe.core.ops as pp_ops
+from probpipe import sample as pp_sample
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.core.protocols import SupportsSampling
@@ -92,7 +92,7 @@ def test_loop_with_weighted_empirical_baseline():
     # Final samples must come from design points (X) — that's what the
     # weighted-empirical baseline represents.
     samples = jnp.asarray(
-        pp_ops.sample(result.final_estimate, key=jax.random.key(0), sample_shape=(128,))
+        pp_sample(result.final_estimate, key=jax.random.key(0), sample_shape=(128,))
     )
     # Each sampled row should match some row in result.X.
     matches = jnp.any(jnp.all(samples[:, None, :] == result.X[None, :, :], axis=-1), axis=-1)

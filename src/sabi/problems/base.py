@@ -50,4 +50,4 @@ class Problem:
 
     def log_posterior(self, x: Array) -> Array:
         y = self.target_function(x)
-        return self.log_density_form(x, y, self)
+        return self.log_density_form(x, y, prior=self.prior)

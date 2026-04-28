@@ -1,15 +1,20 @@
 """Sequential-acquisition loop.
 
-v1.1 composition: initial design (sampled from `problem.prior`) → surrogate →
-acquisition → `SurrogatePosterior` → `PosteriorEstimator` (`PlugInMean`) →
-metrics. Tempering hooks present (`tempering_state` per round, `current_form`
-built each round) but v1.1 ships with `NoTempering` + `UntemperedSchedule`
-defaults, so the state is `None` every round.
+v1.2 composition: initial design (sampled from `problem.prior`) → surrogate →
+acquisition → `SurrogatePosterior` (a `NumericRandomMeasure`) → estimator
+function (`expected_target` by default) → metrics. Tempering hooks present
+(`tempering_state` per round, `current_form` built each round) but v1.2 ships
+with `NoTempering` + `UntemperedSchedule` defaults, so the state is `None`
+every round.
 
-The estimator is configurable per `Algorithm` via `surrogate_posterior_factory`
-— a callable `(surrogate, X, Y, current_form, problem) -> SurrogatePosterior`.
-v1.1 ships two factories: the GP-pushforward path (the v0 default) and the
-weighted-empirical baseline (no-GP).
+The estimator is a free function with type-dispatch on `SurrogatePosterior`
+subtype (`expected_target`, possibly `mean` for the Dirac case). Configurable
+per `Algorithm` via the `estimator` field.
+
+The `surrogate_posterior_factory` builds the round's `SurrogatePosterior` from
+math primitives — the `SurrogatePosterior` is decoupled from `Problem`, so the
+factory pulls `support` / `prior` / `input_shape` from the problem and combines
+with the (possibly tempered) `LogDensityForm` for the round.
 
 Metrics consume a `Distribution[Array]` (the estimator's output) and declare
 their required ProbPipe `Supports*` protocols via the `requires` class
@@ -23,22 +28,23 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import jax
 import jax.numpy as jnp
 from jax import Array
 from probpipe.core._distribution_base import Distribution
+from probpipe.core.constraints import Constraint
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
-from sabi.estimators.plug_in_mean import PlugInMean
-from sabi.estimators.surrogate_posterior import (
+from sabi.initial_designs.base import InitialDesign, sample_initial
+from sabi.metrics.base import MissingProtocolError, PosteriorMetric
+from sabi.posterior.estimators import expected_target
+from sabi.posterior.surrogate_posterior import (
     GPPushforwardSurrogatePosterior,
     SurrogatePosterior,
     WeightedEmpiricalSurrogatePosterior,
 )
-from sabi.initial_designs.base import InitialDesign, sample_initial
-from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
 from sabi.surrogates.base import Surrogate
@@ -46,42 +52,81 @@ from sabi.tempering.base import NoTempering, Tempering
 from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule
 
 
-# Type alias: a factory that builds the round's `SurrogatePosterior`.
-SurrogatePosteriorFactory = Callable[
-    [Surrogate, Array, Array, LogDensityForm, Problem],
-    SurrogatePosterior,
-]
+class SurrogatePosteriorFactory(Protocol):
+    """Builds a `SurrogatePosterior` from the round's surrogate state and the
+    math primitives (support, input_shape, prior, log_density_form).
+
+    `X` and `Y` are the design set; `log_density_form` is the form for the
+    round (possibly tempered). `surrogate` may be ignored by Dirac factories
+    that don't need a fitted GP.
+    """
+
+    def __call__(
+        self,
+        *,
+        surrogate: Surrogate,
+        X: Array,
+        Y: Array,
+        log_density_form: LogDensityForm,
+        support: Constraint,
+        input_shape: tuple[int, ...],
+        prior: Distribution | None,
+        problem_name: str | None = None,
+    ) -> SurrogatePosterior: ...
 
 
 def gp_pushforward_factory(
+    *,
     surrogate: Surrogate,
     X: Array,
     Y: Array,
-    current_form: LogDensityForm,
-    problem: Problem,
+    log_density_form: LogDensityForm,
+    support: Constraint,
+    input_shape: tuple[int, ...],
+    prior: Distribution | None,
+    problem_name: str | None = None,
 ) -> GPPushforwardSurrogatePosterior:
-    """Default factory: bundle the surrogate with the current form."""
+    """Default factory: bundle the surrogate with the math primitives."""
     return GPPushforwardSurrogatePosterior(
-        surrogate=surrogate, current_form=current_form, problem=problem
+        surrogate=surrogate,
+        support=support,
+        input_shape=input_shape,
+        log_density_form=log_density_form,
+        prior=prior,
+        name=f"gp_pushforward_{problem_name}" if problem_name else None,
     )
 
 
 def weighted_empirical_factory(
+    *,
     surrogate: Surrogate,
     X: Array,
     Y: Array,
-    current_form: LogDensityForm,
-    problem: Problem,
+    log_density_form: LogDensityForm,
+    support: Constraint,
+    input_shape: tuple[int, ...],
+    prior: Distribution | None,
+    problem_name: str | None = None,
 ) -> WeightedEmpiricalSurrogatePosterior:
     """No-GP baseline factory: weighted empirical at design points.
 
-    Applies `current_form` to each `(X_i, Y_i)` to get the log-density at the
-    design points; the resulting empirical is weighted by `softmax(log_density)`.
-    Naive — doesn't de-bias against the design distribution. The `surrogate`
-    argument is ignored.
+    Applies `log_density_form` pointwise to `(X_i, Y_i)` to get the
+    deterministic log-density at each design point, then constructs a
+    `WeightedEmpiricalSurrogatePosterior`. The `surrogate` argument is
+    ignored.
     """
-    log_d = jax.vmap(lambda x, y: current_form(x, y, problem))(X, Y)
-    return WeightedEmpiricalSurrogatePosterior(X=X, Y=log_d, problem=problem)
+    Y_log_density = jax.vmap(
+        lambda x, y: log_density_form(x, y, prior=prior)
+    )(X, Y)
+    return WeightedEmpiricalSurrogatePosterior(
+        X=X,
+        Y=Y_log_density,
+        support=support,
+        input_shape=input_shape,
+        log_density_form=log_density_form,
+        prior=prior,
+        name=f"weighted_empirical_{problem_name}" if problem_name else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -97,7 +142,7 @@ class Algorithm:
     tempering: Tempering = field(default_factory=NoTempering)
     schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
     surrogate_posterior_factory: SurrogatePosteriorFactory = gp_pushforward_factory
-    estimator: Callable[[SurrogatePosterior], Distribution] = PlugInMean
+    estimator: Callable[[SurrogatePosterior], Distribution] = expected_target
     metrics: tuple[PosteriorMetric, ...] = ()
 
 
@@ -137,11 +182,6 @@ def _evaluate_metrics(
 
     A separate PRNG key is split per metric so each metric gets independent
     randomness if it samples internally.
-
-    TODO (post-ProbPipe): once the broader "distributions in, distributions out"
-    rework lands (v2 with `RandomMeasure` + `PosteriorEstimator` backend dispatch),
-    materialization decisions (e.g., wrapping the estimate in an `EmpiricalDistribution`
-    for caching across multi-metric rounds) live here. v1.1 keeps it simple.
     """
     if not metrics:
         return {}
@@ -153,13 +193,40 @@ def _evaluate_metrics(
     return merged
 
 
+def _build_surrogate_posterior(
+    factory: SurrogatePosteriorFactory,
+    *,
+    surrogate: Surrogate,
+    X: Array,
+    Y: Array,
+    log_density_form: LogDensityForm,
+    problem: Problem,
+) -> SurrogatePosterior:
+    """Adapter: extract the math primitives from `Problem` and call the factory."""
+    return factory(
+        surrogate=surrogate,
+        X=X,
+        Y=Y,
+        log_density_form=log_density_form,
+        support=problem.support,
+        input_shape=problem.input_shape,
+        prior=problem.prior,
+        problem_name=problem.name,
+    )
+
+
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential surrogate-based inference loop.
 
     State is explicit and flat. The surrogate is re-fit each round on the full
-    `(X, Y)` (no incremental updates in v1.1; design doc lists `condition_on`-
+    `(X, Y)` (no incremental updates in v1.2; design doc lists `condition_on`-
     backed updates as a v2 item).
     """
+    if problem.support is None:
+        raise ValueError(
+            f"Problem {problem.name!r} requires a non-None `support` for v1.2 "
+            "SurrogatePosterior construction."
+        )
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
     X = sample_initial(problem, key_init, algorithm.n_initial, algorithm.initial_design)
@@ -193,8 +260,13 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         Y = jnp.concatenate([Y, y_new], axis=0)
         surrogate = surrogate.fit(X, Y)
 
-        sp = algorithm.surrogate_posterior_factory(
-            surrogate, X, Y, current_form, problem
+        sp = _build_surrogate_posterior(
+            algorithm.surrogate_posterior_factory,
+            surrogate=surrogate,
+            X=X,
+            Y=Y,
+            log_density_form=current_form,
+            problem=problem,
         )
         estimate = algorithm.estimator(sp)
         round_metrics = _evaluate_metrics(estimate, problem, algorithm.metrics, key_metric)
@@ -207,7 +279,14 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     # Final evaluation at the terminal target (untempered form), regardless
     # of schedule state, so downstream tooling always has a reference row.
     final_form = problem.log_density_form
-    final_sp = algorithm.surrogate_posterior_factory(surrogate, X, Y, final_form, problem)
+    final_sp = _build_surrogate_posterior(
+        algorithm.surrogate_posterior_factory,
+        surrogate=surrogate,
+        X=X,
+        Y=Y,
+        log_density_form=final_form,
+        problem=problem,
+    )
     final_estimate = algorithm.estimator(final_sp)
     final_metrics = _evaluate_metrics(
         final_estimate, problem, algorithm.metrics, key_eval

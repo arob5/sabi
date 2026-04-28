@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
-import probpipe.core.ops as pp_ops
 import pytest
+from probpipe import sample
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.core.constraints import Constraint
@@ -37,7 +37,7 @@ def test_gaussian2d_reference_distribution_samples_match_moments():
     reproduce the requested mean and cov."""
     problem = gaussian2d(mean=(1.0, -0.5), cov=((2.0, 0.3), (0.3, 1.5)))
     samples = jnp.asarray(
-        pp_ops.sample(
+        sample(
             problem.reference_distribution,
             key=jax.random.key(0),
             sample_shape=(4096,),
@@ -75,7 +75,7 @@ def test_banana_reference_samples_satisfy_constraint():
     a, b = 1.0, 4.0
     problem = banana(a=a, b=b)
     samples = jnp.asarray(
-        pp_ops.sample(
+        sample(
             problem.reference_distribution,
             key=jax.random.key(0),
             sample_shape=(4096,),

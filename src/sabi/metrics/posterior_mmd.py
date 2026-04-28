@@ -8,8 +8,8 @@ from typing import ClassVar
 
 import jax
 import jax.numpy as jnp
-import probpipe.core.ops as pp_ops
 from jax import Array
+from probpipe import sample
 from probpipe.core._distribution_base import Distribution
 from probpipe.core.protocols import SupportsSampling
 
@@ -45,10 +45,10 @@ class ReferenceMMD(PosteriorMetric):
 
         key_est, key_ref = jax.random.split(key)
         est_samples = jnp.asarray(
-            pp_ops.sample(posterior, key=key_est, sample_shape=(self.n_estimate_samples,))
+            sample(posterior, key=key_est, sample_shape=(self.n_estimate_samples,))
         )
         ref_samples = jnp.asarray(
-            pp_ops.sample(ref, key=key_ref, sample_shape=(self.n_reference_samples,))
+            sample(ref, key=key_ref, sample_shape=(self.n_reference_samples,))
         )
 
         mmd2 = mmd2_unbiased(est_samples, ref_samples, bandwidth=self.bandwidth)

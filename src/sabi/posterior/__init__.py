@@ -1,5 +1,5 @@
-from sabi.estimators.plug_in_mean import PlugInMean
-from sabi.estimators.surrogate_posterior import (
+from sabi.posterior.estimators import expected_target
+from sabi.posterior.surrogate_posterior import (
     GPPushforwardSurrogatePosterior,
     SurrogatePosterior,
     WeightedEmpiricalSurrogatePosterior,
@@ -7,7 +7,7 @@ from sabi.estimators.surrogate_posterior import (
 
 __all__ = [
     "GPPushforwardSurrogatePosterior",
-    "PlugInMean",
     "SurrogatePosterior",
     "WeightedEmpiricalSurrogatePosterior",
+    "expected_target",
 ]

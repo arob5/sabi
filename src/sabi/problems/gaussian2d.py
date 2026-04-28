@@ -14,8 +14,8 @@ random acquisition (`Uniform` over a symmetric box around the mean).
 from __future__ import annotations
 
 import jax.numpy as jnp
-import probpipe.core.ops as pp_ops
 from jax import Array
+from probpipe import log_prob
 from probpipe.core.constraints import interval
 from probpipe.distributions.continuous import Uniform
 from probpipe.distributions.multivariate import MultivariateNormal
@@ -47,9 +47,9 @@ def gaussian2d(
 
     posterior = MultivariateNormal(loc=mu, cov=Sigma, name=f"gaussian2d_{id(mu)}")
 
-    def log_prob(x: Array) -> Array:
+    def target(x: Array) -> Array:
         # Extract the scalar from ProbPipe's NumericRecord wrapper.
-        return jnp.asarray(pp_ops.log_prob(posterior, x))
+        return jnp.asarray(log_prob(posterior, x))
 
     lower = mu - bounds_radius
     upper = mu + bounds_radius
@@ -59,7 +59,7 @@ def gaussian2d(
         name="gaussian2d",
         input_shape=(2,),
         output_shape=(),
-        target_function=log_prob,  # emulator learns the log-posterior directly
+        target_function=target,  # emulator learns the log-posterior directly
         log_density_form=Identity(),
         prior=prior,
         support=interval(lower, upper),
