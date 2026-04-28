@@ -58,32 +58,68 @@ metrics rather than raw sample arrays.
 
 ---
 
-## v1.2 — `RandomMeasure` abstraction; `SurrogatePosterior` becomes a `RandomMeasure` subclass
+## v1.2 — `SurrogatePosterior` as a `NumericRandomMeasure` subclass — **landed**
 
-Bigger conceptual jump than v1.1. Implement the `RandomMeasure` base class as
-a sabi-local primitive that follows ProbPipe conventions, intended to graduate
-to ProbPipe once they add it. The user has noted this is significant enough
-to be its own phase.
+`RandomMeasure` lives in ProbPipe (PRs #150 + #151 — the latter relaxing
+MCMC dispatch to `SupportsUnnormalizedLogProb`). Sabi's `SurrogatePosterior`
+inherits from `NumericRandomMeasure` and is decoupled from `Problem` (takes
+math primitives `support`, `prior`, `log_density_form`, `input_shape`
+directly).
 
-**Deliverables**
-- `sabi.random_measure.RandomMeasure` base class. Subclass of ProbPipe `Distribution[Distribution[T]]` (a distribution whose values are themselves distributions). Declares the support of the inner distributions via a `Constraint`.
-- Optional methods (mirrored on ProbPipe protocol patterns):
-  - `_random_log_prob(...)` — returns a `RandomFunction[Array, Array]` whose evaluation at a point `x` yields the marginal `Distribution` of `log p(x)` under random draws from the random measure.
-  - `_random_unnormalized_log_prob(...)` — same but without the (potentially intractable) normalizer. Distinguished per ProbPipe conventions.
-  - `_mean()` — the *mean random measure* in the standard sense, i.e. the distribution `\bar p(x) = E[p(x)]`. In sabi's surrogate-modeling vocabulary this is the "expected posterior".
-- `SurrogatePosterior` now inherits from `RandomMeasure`. The existing GP-pushforward variant declares `SupportsRandomLogProb` (or whatever name we agree on) — its random log-density is the pushforward of the `Surrogate`'s `RandomFunction` through `LogDensityForm`. The weighted-empirical baseline is a Dirac random measure with `SupportsMean` but not `SupportsRandomLogProb`.
-- The `WeightedEmpiricalSurrogatePosterior` from v1.1 stays the same in behaviour but is re-typed as a deterministic `RandomMeasure`.
-- New estimator: `ExpectedPosterior` uses `RandomMeasure._mean()` directly when available, falls back to MC over function draws otherwise.
-- Tests for `RandomMeasure`: random log-density returns a `Distribution`, the `_mean()` of the GP-pushforward random measure matches the v0 plug-in-mean pushforward, the Dirac random measure's mean equals the underlying empirical distribution.
+**Landed in this phase**
+- `sabi.posterior.SurrogatePosterior(NumericRandomMeasure)` — abstract base.
+  Constructor takes math primitives, requires `support` to be set (raises
+  otherwise), and exposes `inner_support` / `inner_event_shape` derived from
+  those args. No protocol opt-ins on the base — subclasses choose.
+- `sabi.posterior.WeightedEmpiricalSurrogatePosterior` — Dirac random measure.
+  Stores `(X, Y_log_density)`, exposes `inner_distribution: NumericEmpiricalDistribution`
+  via cached property. Implements `SupportsMean` (returns inner empirical),
+  `SupportsSampling` (returns the inner empirical for `sample_shape == ()`,
+  `DistributionArray` of repeats otherwise), and
+  `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` via a Dirac
+  random function shim.
+- `sabi.posterior.GPPushforwardSurrogatePosterior` — proper random measure.
+  Implements `SupportsRandomUnnormalizedLogProb` for the closed-form forms
+  (`Identity`, `LogLikPlusPrior`); `ForwardModel` raises until partial-pushforward
+  primitive lands. Does NOT implement `SupportsSampling` (surrogate doesn't
+  yet expose function-trajectory sampling — v1.6), `SupportsMean` (no closed-form
+  expected posterior), or `SupportsRandomLogProb` (normalization intractable).
+- Sabi-local Dirac shims (`_DiracDistribution`, `_DiracArrayRandomFunction`)
+  in `sabi.posterior._dirac` — graduate to ProbPipe when a general `Dirac`
+  abstraction lands.
+- `sabi.posterior._pushforward._PushforwardLogDensityRandomFunction` — the
+  marginal random log-density for the GP-pushforward path. Affine pushforward
+  for closed-form forms; raises for `ForwardModel`.
+- Free-function deterministic estimators in `sabi.posterior.estimators`:
+  - `expected_target(sp)` — biased plug-in (renamed from "plug-in mean" since
+    it's the expectation of the target map under the surrogate). For Dirac SPs,
+    coincides with `mean(sp)`; for the GP path, returns an
+    `_ExpectedTargetDistribution` that satisfies `SupportsUnnormalizedLogProb`
+    + `SupportsSampling` (the latter via `condition_on(self)` → NUTS).
+- `LogDensityForm.__call__(x, y, *, prior=None)` — decoupled from `Problem`,
+  takes `prior` directly. Sabi's `LogLikPlusPrior` / `ForwardModel` sum the
+  prior's `log_prob` across all returned dims (a v1.2 pragma to handle
+  ProbPipe's element-wise `Uniform` cleanly; revisit when ProbPipe ships
+  joint multivariate distributions).
+- Loop adapter (`_build_surrogate_posterior`) extracts math primitives from
+  `Problem` and passes them to the factory; the factory + SP know nothing
+  about `Problem`.
+- Old `sabi.estimators` package removed.
+- ProbPipe op imports switched from `import probpipe.core.ops as pp_ops` to
+  top-level `from probpipe import condition_on, sample, log_prob, ...` per
+  user preference.
+- 20 new tests in `tests/test_surrogate_posterior.py`; 66 tests pass total.
 
-**Exit criteria**
-- `RandomMeasure` is a clean base class that stays syntactically identical (or near-identical) to what would land in ProbPipe. Code review with the ProbPipe author (you) before declaring this phase done.
-- All v1.1 tests still pass; new tests cover `RandomMeasure` semantics.
-
-**Open design questions for v1.2**
-1. Method naming for "random log density" vs "random unnormalized log density": follow ProbPipe's `_log_prob` / `_unnormalized_log_prob` pattern → `_random_log_prob` / `_random_unnormalized_log_prob`. Confirm.
-2. Should `RandomMeasure` declare `output_type` (the inner `Distribution[T]` type) explicitly, or is it inferred from the random log-density's return type? Probably explicit, aligned with how `ArrayRandomFunction` declares `input_shape` / `output_shape`.
-3. The `SupportsRandomLogProb` protocol: does it live in sabi during v1.2 and migrate to ProbPipe later, or do we propose it directly to ProbPipe and pull it from there as soon as it lands?
+**Deferred to later phases**
+- `mean(gp_sp)` returning the unbiased expected posterior — v2 with MC backend
+  + ProbPipe `PosteriorEstimator` backend dispatch.
+- `SupportsSampling` on `GPPushforwardSurrogatePosterior` — needs a
+  function-trajectory sampler on the surrogate (v1.6 swap to a real GP backend).
+- `_random_unnormalized_log_prob` for `ForwardModel` — needs partial-pushforward
+  primitive in ProbPipe (tracked in `docs/probpipe_issues.md`).
+- Future estimators (`expected_log_density`, `expected_density`,
+  `median_density`) — opt-in free functions, motivated by the partial-pushforward
+  primitive.
 
 ---
 

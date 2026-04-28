@@ -31,8 +31,9 @@ Primitives we expect to leverage as they mature:
 | `ArrayRandomFunction` | Shape + batch-dim conventions for `Surrogate`; v1+ `Surrogate` is an `ArrayRandomFunction` subclass |
 | `GaussianRandomFunction` | GP-backed surrogate |
 | `Constraint` + `support` | Parameter-space support in `Problem` |
-| `RandomMeasure` (Phase 5) | Base for `SurrogatePosterior` |
-| `Pushforward` (planned) | Assembly of `SurrogatePosterior` from surrogate + `LogDensityForm` |
+| `RandomMeasure` / `NumericRandomMeasure` | Base for `SurrogatePosterior` (landed via PR #150) |
+| `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` | Optional protocols on `SurrogatePosterior` for the random log-density (landed via PR #150) |
+| `Pushforward` (planned) | Assembly of `SurrogatePosterior` from surrogate + `LogDensityForm`; sabi ships a local pushforward in `LogDensityForm` until ProbPipe's primitive lands |
 | `condition_on` | Future implementation path for `Surrogate.update` |
 | `_mc_expectation` / `BootstrapDistribution` | Metric computation with MC-error tracking |
 
@@ -99,23 +100,30 @@ Covers both (a) deterministic strategies that optimize an acquisition function, 
 
 Acquisitions decouple **scoring** (the function to maximize) from **optimization** (how to maximize it). In v1 the shared optimization machinery lives in `acquisitions/optim.py` (§5): candidate-based scoring, multi-start continuous optimization, greedy multi-point batching, and support-aware reparameterization. A library of small helpers (candidate draws, top-k, local refinement, in-batch diversification) is factored out so each `Acquisition` implements only its scoring function plus a declaration of which optimizer modes it supports.
 
-### 4.5 `SurrogatePosterior` — a random measure
+### 4.5 `SurrogatePosterior` — a `RandomMeasure`
 
-Composition `(surrogate, log_density_form, prior)` behaving as a random measure (target of ProbPipe's Phase 5 `RandomMeasure`). Key methods:
+`SurrogatePosterior` is a ProbPipe `NumericRandomMeasure[Array]`: a distribution over `Distribution[Array]`s on the parameter space. It is **decoupled from `Problem`** — it carries math primitives directly (`support`, `prior`, `log_density_form`, `input_shape`). The algorithm loop pulls those primitives from a `Problem` when constructing the SP each round.
 
-- `sample(key) -> Distribution` — draw one function from the emulator, pushforward through `log_density_form` + prior, return a concrete distribution (typically a black-box `log_prob`; sampling from it needs inner MCMC).
-- `plug_in_mean_log_density(X)` — vectorized plug-in-mean log-density at a batch of inputs.
+Concrete subclasses opt into individual `Supports*` protocols:
 
-### 4.6 `PosteriorEstimator` — random-measure → deterministic
+- `WeightedEmpiricalSurrogatePosterior` — Dirac random measure at the weighted empirical of design points. Implements `SupportsMean` / `SupportsSampling` / `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` via the underlying `NumericEmpiricalDistribution` and a Dirac random-function shim.
+- `GPPushforwardSurrogatePosterior` — proper random measure: every surrogate-function realization defines a deterministic posterior. Implements `SupportsRandomUnnormalizedLogProb` for `Identity` / `LogLikPlusPrior` forms (closed-form pushforward of pointwise predictive marginals through the form's affine transform); does NOT implement `SupportsSampling` (no function-trajectory sampler on the v1.x `Surrogate` interface yet — v1.6) or `SupportsMean` (the unbiased "expected posterior" needs an MC backend, deferred to v2).
 
-Maps a `SurrogatePosterior` to a concrete `Distribution`. An algorithm can register **multiple** estimators and all get evaluated each logging round.
+### 4.6 Deterministic posterior estimators
 
-A single estimator like `PlugInMean` admits many computational backends (importance sampling, MCMC, SMC). Backend choice is resolved by **ProbPipe-style dispatch** on `(estimator_type, surrogate_posterior_type, backend)` so an algorithm can switch MCMC → SMC as a one-line config change without touching loop code. v0 ships a single IS-backed `PlugInMean`; MCMC / SMC backends land in v2 together with ProbPipe sampler integration.
+A `SurrogatePosterior` admits many deterministic posterior approximations. They are exposed as **free functions** with type-dispatch on `SurrogatePosterior` subtype, mirroring ProbPipe's op-dispatch style. Each returns a concrete `Distribution[Array]`. For `WeightedEmpiricalSurrogatePosterior` (Dirac), all estimators coincide and reduce to the underlying empirical.
 
-Initial set:
-- `PlugInMean` — deterministic posterior from the mean surrogate; cheap, biased. Backends: IS (v0), MCMC (v2), SMC (v2).
-- `ExpectedPosterior` — MC over surrogate function draws; unbiased, expensive (v2).
-- `MAPApproximation` — mode of `PlugInMean` (v2).
+Currently shipped:
+
+- `mean(sp)` — the unbiased *expected posterior* `D̄(A) = ∫ D(A) dM(D)`, exposed via ProbPipe's `mean` op via `SupportsMean`. Implemented for the Dirac case (returns the inner empirical); for the GP path no general implementation in v1.2 — `mean(gp_sp)` raises until a v2 MC backend lands.
+- `expected_target(sp)` — the *biased plug-in posterior*: plug the surrogate's predictive mean into the log-density form. Returns the inner empirical for Dirac SPs; for the GP path returns a `Distribution[Array]` whose `_unnormalized_log_prob(x)` evaluates `log_density_form(x, surrogate_mean(x), prior)` and whose `_sample` delegates to ProbPipe `condition_on(self)` (auto-dispatched MCMC, typically NUTS, post-PR-#151).
+
+Future estimators (motivated by the partial-pushforward primitive — see `docs/probpipe_issues.md`):
+
+- `expected_log_density(sp)` — pointwise mean of the random log-density. Coincides with `expected_target` for log-density emulators; differs for forward-model emulators.
+- `expected_density(sp)` — pointwise mean of the random unnormalized density (`E_f[exp(log p̃(x; f))]`).
+- `median_density(sp)` — pointwise median of the random unnormalized density.
+- `MAPApproximation` — mode of `expected_target` (or another deterministic estimator).
 - `GaussianMixtureVI` (post-v1; for VBMC-style algorithms).
 
 ### 4.7 Metrics
@@ -149,7 +157,8 @@ Algorithm:
   initial_design: InitialDesign
   surrogate_factory: Callable[[], Surrogate]
   acquisition: Acquisition
-  posterior_estimators: list[PosteriorEstimator]
+  surrogate_posterior_factory: SurrogatePosteriorFactory   # default gp_pushforward_factory
+  estimator: Callable[[SurrogatePosterior], Distribution]  # default expected_target
   tempering: Tempering                 # default NoTempering()
   schedule: TemperingSchedule          # default UntemperedSchedule()
   metrics: tuple[PosteriorMetric, ...] # default ()
@@ -268,7 +277,7 @@ sabi/
     problems/          # benchmarks (one subpackage each)
     surrogates/        # Surrogate interface + tinygp impl
     acquisitions/      # + optim.py
-    estimators/        # PosteriorEstimator implementations
+    posterior/         # SurrogatePosterior subclasses + deterministic estimators (expected_target, mean)
     metrics/           # PosteriorMetric + EmulatorMetric
     initial_designs/
     tempering/         # Tempering + TemperingSchedule + dispatch registry
