@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Force-regenerate the on-disk reference posterior artifacts.
+
+By default sabi's `Problem` factories load a cached reference if one
+exists (matching the requested NUTS configuration). This script forces a
+fresh NUTS run, validates diagnostics against the configured thresholds,
+and overwrites the artifact.
+
+Usage::
+
+    ./scripts/regenerate_references                    # all registered problems
+    ./scripts/regenerate_references --problem neals_funnel
+    ./scripts/regenerate_references --problem neals_funnel --d 5
+
+The set of registered problems is defined in ``REGISTRY`` below; add
+new entries when a new sample-based reference posterior is needed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Make sabi importable when running as a script from the repo root.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+
+def _regenerate_neals_funnel(args: argparse.Namespace) -> None:
+    import jax
+    jax.config.update("jax_enable_x64", True)
+
+    from sabi.problems.neals_funnel import neals_funnel
+    from sabi.reference.cache import load_or_generate_reference_samples
+    from sabi.problems.forms import Identity
+    from probpipe.distributions.continuous import Uniform
+    from probpipe.core.constraints import interval
+    import jax.numpy as jnp
+
+    d = args.d if args.d is not None else 2
+    sigma_v = args.sigma_v if args.sigma_v is not None else 3.0
+    v_bound = args.v_bound if args.v_bound is not None else 9.0
+    x_bound = args.x_bound if args.x_bound is not None else 30.0
+
+    # Build target_function inline (mirrors neals_funnel internals; kept
+    # synchronized with src/sabi/problems/neals_funnel.py).
+    log2pi = jnp.log(2.0 * jnp.pi)
+    sigma_v_sq = sigma_v * sigma_v
+    norm_const = -0.5 * (log2pi + jnp.log(sigma_v_sq))
+
+    def log_prob(theta):
+        v = theta[0]
+        x = theta[1:]
+        log_p_v = norm_const - 0.5 * v * v / sigma_v_sq
+        log_p_x_given_v = -0.5 * d * (log2pi + v) - 0.5 * jnp.exp(-v) * jnp.sum(x * x)
+        return log_p_v + log_p_x_given_v
+
+    lower = jnp.asarray([-v_bound] + [-x_bound] * d, dtype=jnp.float64)
+    upper = jnp.asarray([v_bound] + [x_bound] * d, dtype=jnp.float64)
+    support = interval(lower, upper)
+    prior = Uniform(low=lower, high=upper, name=f"neals_funnel_design_d{d}_sv{sigma_v}")
+
+    cache_key = f"d{d}_sv{sigma_v}_vb{v_bound}_xb{x_bound}"
+    print(f"Regenerating neals_funnel artifact: {cache_key}", flush=True)
+    print(
+        f"  NUTS config: num_results={args.num_results}, "
+        f"num_warmup={args.num_warmup}, num_chains={args.num_chains}, "
+        f"random_seed={args.random_seed}",
+        flush=True,
+    )
+
+    funnel_thresholds = {
+        "max_rhat": 1.15,
+        "min_ess": 30.0,
+        "max_divergence_rate": 0.10,
+    }
+    reference = load_or_generate_reference_samples(
+        problem_name="neals_funnel",
+        cache_key=cache_key,
+        target_function=log_prob,
+        log_density_form=Identity(),
+        prior=prior,
+        support=support,
+        input_shape=(d + 1,),
+        problem_params={
+            "d": d,
+            "sigma_v": sigma_v,
+            "v_bound": v_bound,
+            "x_bound": x_bound,
+        },
+        num_results=args.num_results,
+        num_warmup=args.num_warmup,
+        num_chains=args.num_chains,
+        random_seed=args.random_seed,
+        regenerate=True,
+        quality_thresholds=funnel_thresholds,
+        name=f"neals_funnel_d{d}_reference",
+    )
+    print(f"  Saved {reference.samples.shape[0]} samples.", flush=True)
+
+    # Echo the diagnostics that landed in the metadata.
+    artifact_dir = REPO_ROOT / "reference_posteriors" / "neals_funnel"
+    sampler_tag = f"nuts_n{args.num_results}_w{args.num_warmup}_c{args.num_chains}_s{args.random_seed}"
+    json_path = artifact_dir / f"{cache_key}_{sampler_tag}.json"
+    if json_path.exists():
+        with json_path.open() as f:
+            md = json.load(f)
+        diag = md["diagnostics"]
+        print(
+            f"  Diagnostics: max R-hat = {diag['max_rhat']:.4f}, "
+            f"min ESS = {diag['min_ess']:.1f}, "
+            f"divergences = {diag['num_divergences']}",
+            flush=True,
+        )
+
+
+REGISTRY = {
+    "neals_funnel": _regenerate_neals_funnel,
+}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--problem",
+        choices=sorted(REGISTRY.keys()) + ["all"],
+        default="all",
+        help="Which problem's reference to regenerate (default: all).",
+    )
+
+    # Per-problem overrides — only used by the matching regenerator.
+    parser.add_argument("--d", type=int, default=None, help="(neals_funnel) number of x dimensions.")
+    parser.add_argument("--sigma-v", dest="sigma_v", type=float, default=None, help="(neals_funnel) v marginal stddev.")
+    parser.add_argument("--v-bound", dest="v_bound", type=float, default=None, help="(neals_funnel) v support range.")
+    parser.add_argument("--x-bound", dest="x_bound", type=float, default=None, help="(neals_funnel) x support range.")
+    parser.add_argument("--num-results", dest="num_results", type=int, default=2000)
+    parser.add_argument("--num-warmup", dest="num_warmup", type=int, default=2000)
+    parser.add_argument("--num-chains", dest="num_chains", type=int, default=4)
+    parser.add_argument("--random-seed", dest="random_seed", type=int, default=0)
+    args = parser.parse_args()
+
+    targets = list(REGISTRY.keys()) if args.problem == "all" else [args.problem]
+    for name in targets:
+        REGISTRY[name](args)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

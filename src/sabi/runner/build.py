@@ -23,6 +23,7 @@ from sabi.metrics.posterior_mmd import ReferenceMMD
 from sabi.problems.banana import banana
 from sabi.problems.base import Problem
 from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.neals_funnel import neals_funnel
 from sabi.surrogates.gp import GPSurrogate
 
 
@@ -40,14 +41,28 @@ def build_problem(cfg: DictConfig) -> Problem:
             b=float(cfg.get("b", 4.0)),
             bounds=tuple(tuple(b) for b in cfg.get("bounds", ((-4.0, 4.0), (-10.0, 4.0)))),
         )
+    if name == "neals_funnel":
+        return neals_funnel(
+            d=int(cfg.get("d", 2)),
+            sigma_v=float(cfg.get("sigma_v", 3.0)),
+            v_bound=float(cfg.get("v_bound", 9.0)),
+            x_bound=float(cfg.get("x_bound", 30.0)),
+            num_results=int(cfg.get("num_results", 2000)),
+            num_warmup=int(cfg.get("num_warmup", 2000)),
+            num_chains=int(cfg.get("num_chains", 4)),
+            random_seed=int(cfg.get("random_seed", 0)),
+        )
     raise ValueError(f"Unknown problem.name={name!r}.")
 
 
-def _build_surrogate_factory(cfg: DictConfig):
+def _build_surrogate_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
+    """Build a no-arg factory that constructs a `Surrogate` with the
+    problem's input_shape baked in."""
     name = cfg.name
     if name == "gp":
         def factory() -> GPSurrogate:
             return GPSurrogate(
+                input_shape=input_shape,
                 ls_factor=float(cfg.get("ls_factor", 1.5)),
                 ls_floor=float(cfg.get("ls_floor", 0.05)),
                 noise=float(cfg.get("noise", 1e-4)),
@@ -93,9 +108,13 @@ def _build_surrogate_posterior_factory(name: str) -> SurrogatePosteriorFactory:
     raise ValueError(f"Unknown surrogate_posterior factory: {name!r}.")
 
 
-def build_algorithm(cfg: DictConfig) -> Algorithm:
+def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
+    """Build the `Algorithm` from config, baking in problem shape metadata
+    where downstream components need it (e.g., the surrogate factory)."""
     return Algorithm(
-        surrogate_factory=_build_surrogate_factory(cfg.surrogate),
+        surrogate_factory=_build_surrogate_factory(
+            cfg.surrogate, input_shape=problem.input_shape
+        ),
         acquisition=_build_acquisition(cfg.acquisition),
         surrogate_posterior_factory=_build_surrogate_posterior_factory(
             str(cfg.algorithm.get("surrogate_posterior", "gp_pushforward"))

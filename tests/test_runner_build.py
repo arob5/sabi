@@ -37,7 +37,8 @@ def test_build_problem_returns_problem():
 
 
 def test_build_algorithm_wires_components():
-    alg = build_algorithm(_cfg())
+    cfg = _cfg()
+    alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
     assert isinstance(alg, Algorithm)
     assert alg.n_initial == 4
     assert alg.n_rounds == 2
@@ -49,17 +50,19 @@ def test_build_algorithm_wires_components():
 
 
 def test_build_algorithm_without_metrics_yields_empty_tuple():
-    alg = build_algorithm(_cfg(with_metric=False))
+    cfg = _cfg(with_metric=False)
+    alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
     assert alg.metrics == ()
 
 
 def test_build_algorithm_default_surrogate_posterior_is_gp_pushforward():
-    alg = build_algorithm(_cfg())
+    cfg = _cfg()
+    alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
     assert alg.surrogate_posterior_factory is gp_pushforward_factory
 
 
 def test_build_algorithm_can_select_weighted_empirical_factory():
     cfg = _cfg()
     cfg.algorithm.surrogate_posterior = "weighted_empirical"
-    alg = build_algorithm(cfg)
+    alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
     assert alg.surrogate_posterior_factory is weighted_empirical_factory

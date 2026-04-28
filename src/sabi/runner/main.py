@@ -41,7 +41,7 @@ def main(cfg: DictConfig) -> None:
     out_dir = Path(HydraConfig.get().runtime.output_dir)
 
     problem = build_problem(cfg.problem)
-    algorithm = build_algorithm(cfg)
+    algorithm = build_algorithm(cfg, problem=problem)
 
     key = jax.random.key(int(cfg.get("seed", 0)))
     result = run(problem, algorithm, key)

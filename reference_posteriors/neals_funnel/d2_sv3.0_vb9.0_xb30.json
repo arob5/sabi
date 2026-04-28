@@ -1,0 +1,44 @@
+{
+  "cache_key": "d2_sv3.0_vb9.0_xb30.0",
+  "diagnostics": {
+    "ess_bulk": {
+      "dim_0": 94.01646508785464,
+      "dim_1": 3548.2661421788866,
+      "dim_2": 3616.2981500723135
+    },
+    "ess_tail": {
+      "dim_0": 47.29362059642051,
+      "dim_1": 1126.1191155001775,
+      "dim_2": 1067.4992353702708
+    },
+    "max_rhat": 1.0435942002102416,
+    "min_ess": 47.29362059642051,
+    "num_chains": 4,
+    "num_divergences": 0,
+    "num_draws_per_chain": 2000,
+    "rhat": {
+      "dim_0": 1.0435942002102416,
+      "dim_1": 1.0241316816622161,
+      "dim_2": 1.0222539144978093
+    }
+  },
+  "generated_at": "2026-04-28T17:32:03+00:00",
+  "input_shape": [
+    3
+  ],
+  "n_samples": 8000,
+  "problem_name": "neals_funnel",
+  "problem_params": {
+    "d": 2,
+    "sigma_v": 3.0,
+    "v_bound": 9.0,
+    "x_bound": 30.0
+  },
+  "sampler": {
+    "method": "tfp_nuts",
+    "num_chains": 4,
+    "num_results": 2000,
+    "num_warmup": 2000,
+    "random_seed": 0
+  }
+}
