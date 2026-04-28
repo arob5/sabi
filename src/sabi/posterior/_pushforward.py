@@ -13,11 +13,16 @@ Dispatch (in order):
 1. **Closed-form Gaussian-affine.** `(Normal | MultivariateNormal,
    Identity | LogLikPlusPrior)` — affine in the input distribution; shift
    `loc` by the form's contribution, leave scale / scale_tril unchanged.
-2. **MC fallback.** `isinstance(input_dist, SupportsSampling)` — delegate
-   to a `@workflow_function`-wrapped helper. ProbPipe's broadcasting
-   machinery samples `ys ~ input_dist`, runs the wrapped function per
-   sample (vmap when JAX-traceable, Python loop otherwise), and returns
-   a `NumericEmpiricalDistribution` of pushforward values.
+2. **MC fallback.** `isinstance(input_dist, SupportsSampling)` — call
+   the `@workflow_function`-wrapped batched form `_batch_form` with
+   `ys=input_dist`. The Monte Carlo pushforward is *what ProbPipe's
+   broadcasting does* when a workflow-wrapped function gets a Distribution
+   in a non-Distribution-typed slot: samples `ys ~ input_dist`, runs the
+   wrapped function per sample (vmap when JAX-traceable, Python loop
+   otherwise), and returns a `NumericEmpiricalDistribution` of the
+   resulting joint log-density vectors. There's no separate "MC
+   pushforward" abstraction in sabi — `_batch_form` is just a vectorized
+   form that becomes a pushforward as a side effect of being broadcast.
 3. **Otherwise raise.** Names the input-distribution type and form type;
    points to the partial-pushforward primitive in `docs/probpipe_issues.md`.
 
@@ -91,9 +96,15 @@ def pushforward_marginal(
             return _shift_gaussian_loc(input_dist, shifts)
         # Fall through to MC if it's some other form (e.g., ForwardModel).
 
-    # 2. MC fallback for any samplable input
+    # 2. MC fallback for any samplable input. `_batch_form` is the form
+    # vectorized over the n input axis, wrapped as a WorkflowFunction.
+    # Passing `ys=input_dist` triggers ProbPipe's broadcasting: samples
+    # are drawn from `input_dist`, the batched form is evaluated per
+    # sample, and the result is a NumericEmpiricalDistribution. The MC
+    # pushforward IS that broadcast — there's no sabi-defined "MC
+    # pushforward" object.
     if isinstance(input_dist, SupportsSampling):
-        return _mc_pushforward(ys=input_dist, X=X, form=form, prior=prior)
+        return _batch_form(ys=input_dist, X=X, form=form, prior=prior)
 
     # 3. Otherwise raise
     raise NotImplementedError(
@@ -126,7 +137,7 @@ def _shift_gaussian_loc(input_dist: Distribution, shifts: Array) -> Distribution
 
 
 @workflow_function(n_broadcast_samples=64)
-def _mc_pushforward(
+def _batch_form(
     *,
     ys: Array,
     X: Array,
@@ -139,25 +150,29 @@ def _mc_pushforward(
     # short-circuits in that case.
     prior: Distribution,
 ) -> Array:
-    """Apply `form` pointwise across the n axis.
+    """Vectorized log-density form: applies `form(x, y, prior=prior)`
+    pointwise across the n input axis.
 
-    When called with `ys=input_dist` (a `Distribution`), ProbPipe's
-    `WorkflowFunction` broadcasts: samples N values of `ys` from
-    `input_dist`, runs this function per sample, and returns a
-    `NumericEmpiricalDistribution` of the resulting log-density vectors.
-
-    Vectorization defaults to "auto" — JAX-traceable calls take the
-    `jax.vmap` path; non-traceable forms fall back to a Python loop.
+    The function itself just vmaps the form. The Monte Carlo pushforward
+    arises when ProbPipe's `WorkflowFunction` broadcasting calls this
+    function with `ys=input_dist` (a `Distribution` in a non-Distribution
+    slot): samples are drawn from `input_dist`, this function is run per
+    sample, and the result is a `NumericEmpiricalDistribution` of joint
+    log-density vectors. The MC behavior is incidental machinery, not a
+    property of the function.
 
     Args:
-        ys: shape `(n,) + output_shape` — the surrogate output values
-            being pushed through the form. (When broadcast, each per-sample
-            value passed to this function has this shape.)
+        ys: shape `(n,) + output_shape` — surrogate output values at the
+            n query points. (When broadcast, each per-sample value passed
+            to this function has this shape.)
         X: query points, shape `(n,) + input_shape`.
         form: the `LogDensityForm`.
-        prior: optional prior distribution.
+        prior: prior distribution forwarded to forms that touch the prior;
+            may be `None`. Annotated bare `Distribution` to keep
+            WorkflowFunction from broadcasting on this slot.
 
     Returns:
-        Shape `(n,)` — the joint log-density evaluated pointwise.
+        Shape `(n,)` — the joint log-density evaluated pointwise across
+        the n input points for the given `ys`.
     """
     return jax.vmap(lambda x, y: form(x, y, prior=prior))(X, ys)
