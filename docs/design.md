@@ -74,20 +74,13 @@ Deterministic function `φ(x, y) → log_unnorm_posterior(x)` mapping a single t
 
 ### 4.3 `Surrogate` — stochastic emulator of `target_function`
 
-Minimum interface:
+`Surrogate` IS-A ProbPipe `ArrayRandomFunction`. It inherits the full random-function shape contract (`input_shape`, `output_shape`, `batch_shape`, joint-input / joint-output flags) and the `__call__(X, joint_inputs, joint_outputs) -> Distribution` predictive interface. The only sabi-specific addition is an abstract `fit(X, Y) -> Self` that captures the algorithmic role (a fittable predictive process). Future migration: `condition_on(prior_rf, X=X_train, y=Y_train)` is the natural ProbPipe-native pattern; sabi's `fit` is a v1.x bridge that does the same conceptual work without requiring full ProbPipe conditioning machinery.
 
-```
-Surrogate:
-  fit(X: Array, Y: Array) -> Self      # X: (n,) + input_shape, Y: (n,) + output_shape
-  predict(X: Array) -> Distribution    # marginal predictive at each row of X
-  sample_function(key) -> Callable     # joint realization (for Thompson)
-```
-
-Shape- and semantics-compatible with ProbPipe's `ArrayRandomFunction` — `input_shape` / `output_shape` and batch dims come from there. In v1+, `Surrogate` is an `ArrayRandomFunction` subclass once that abstraction is available in ProbPipe; until then, sabi ships a minimal local interface with the same shape contract. `sample_function` must respect joint semantics; independent-output surrogates are a modeling choice, not an API accident.
+Concrete Gaussian surrogates inherit from both `Surrogate` and `GaussianRandomFunction` (diamond inheritance over `ArrayRandomFunction`, resolved by Python's C3 MRO). For example, `GPSurrogate(Surrogate, GaussianRandomFunction)` implements `predict_mean(X)` and `predict_variance(X)`; `predict` / `__call__` come for free from the parent and assemble `Normal` (marginal) or `MultivariateNormal` (joint) at the right shape.
 
 **The `Surrogate` is tempering-agnostic.** It emulates `target_function` — a raw function of `x` — and never sees a tempering state. Tempering is applied downstream in `LogDensityForm` (via `Tempering`, §4.11) and, if an algorithm wants to fit on tempered values instead of raw ones, through a future `EmulatorTarget` adapter that transforms `(x, y, state, prior)` into training values before `fit`. Keeping tempering out of the surrogate lets the same emulator be reused across tempering states and lets forward-model emulation work unchanged under tempering.
 
-**v0 concrete implementation:** thin tinygp wrapper with data-adaptive fixed hyperparameters. **v1+:** proper GP via ProbPipe's `GaussianRandomFunction` / a mature GP library (e.g., gpjax). No hand-rolled hyperparameter optimization code beyond v0.
+**v0/v1.2 concrete implementation:** `GPSurrogate(Surrogate, GaussianRandomFunction)` — thin tinygp wrapper with data-adaptive fixed hyperparameters; `predict_mean` / `predict_variance` only (no `predict_covariance` until v1.5 emulator metrics). **v1.6:** proper GP via gpjax or a ProbPipe-native `GaussianRandomFunction` subclass; no hand-rolled hyperparameter optimization code in sabi.
 
 ### 4.4 `Acquisition`
 
@@ -102,12 +95,16 @@ Acquisitions decouple **scoring** (the function to maximize) from **optimization
 
 ### 4.5 `SurrogatePosterior` — a `RandomMeasure`
 
-`SurrogatePosterior` is a ProbPipe `NumericRandomMeasure[Array]`: a distribution over `Distribution[Array]`s on the parameter space. It is **decoupled from `Problem`** — it carries math primitives directly (`support`, `prior`, `log_density_form`, `input_shape`). The algorithm loop pulls those primitives from a `Problem` when constructing the SP each round.
+`SurrogatePosterior` is a ProbPipe `NumericRandomMeasure[Array]`: a distribution over `Distribution[Array]`s on the parameter space. **Decoupled from `Problem`** — it carries math primitives directly (`support`, `prior`, `log_density_form`, `input_shape`). The algorithm loop pulls those primitives from a `Problem` when constructing the SP each round.
 
-Concrete subclasses opt into individual `Supports*` protocols:
+A `SurrogatePosterior` holds a `Surrogate` (a sabi-side `ArrayRandomFunction` subclass — see §4.3) and a `LogDensityForm`; its `_random_unnormalized_log_prob()` returns a `RandomFunction` whose `__call__(X)` evaluates the surrogate at `X` (yielding a `Distribution[Array]`) and pushes it through the form via the shared `pushforward_marginal` dispatch (closed-form for Gaussian × affine cases, MC empirical via ProbPipe `WorkflowFunction` broadcasting otherwise). The class itself is Gaussian-agnostic — only the dispatch knows about Gaussianness.
 
-- `WeightedEmpiricalSurrogatePosterior` — Dirac random measure at the weighted empirical of design points. Implements `SupportsMean` / `SupportsSampling` / `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` via the underlying `NumericEmpiricalDistribution` and a Dirac random-function shim.
-- `GPPushforwardSurrogatePosterior` — proper random measure: every surrogate-function realization defines a deterministic posterior. Implements `SupportsRandomUnnormalizedLogProb` for `Identity` / `LogLikPlusPrior` forms (closed-form pushforward of pointwise predictive marginals through the form's affine transform); does NOT implement `SupportsSampling` (no function-trajectory sampler on the v1.x `Surrogate` interface yet — v1.6) or `SupportsMean` (the unbiased "expected posterior" needs an MC backend, deferred to v2).
+`WeightedEmpiricalRandomMeasure` is the **sibling** no-GP-baseline random measure (NOT a `SurrogatePosterior` subclass): a Dirac at a weighted empirical of design points. Useful for testing the loop without a fitted surrogate, and as a reference for any random-measure consumer. Tracked for potential graduation to ProbPipe.
+
+Protocol opt-ins (v1.2):
+
+- **`SurrogatePosterior`**: `SupportsRandomUnnormalizedLogProb`. Does NOT implement `SupportsSampling` (no function-trajectory sampler on the v1.x `Surrogate` interface yet — v1.6), `SupportsMean` (unbiased expected posterior needs an MC backend, deferred to v2), or `SupportsRandomLogProb` (normalization intractable).
+- **`WeightedEmpiricalRandomMeasure`**: `SupportsMean` / `SupportsSampling` / `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb`, all via the underlying `NumericEmpiricalDistribution` and a Dirac random-function shim.
 
 ### 4.6 Deterministic posterior estimators
 

@@ -123,6 +123,18 @@ This forces every sabi call site to wrap with `jnp.asarray(record)` (or use `jnp
 
 ---
 
+## `WeightedEmpiricalRandomMeasure` as a ProbPipe primitive
+
+**Status:** open.
+
+**Sabi context.** Sabi defines `WeightedEmpiricalRandomMeasure` as a `NumericRandomMeasure` whose draws are degenerate: every draw is the same `NumericEmpiricalDistribution(samples=X, log_weights=Y)`. It's the simplest non-trivial random measure — a Dirac at an empirical distribution — and serves both as a no-GP baseline in sabi's loop and as a reference for any random-measure consumer.
+
+**What we'd want.** Promote `WeightedEmpiricalRandomMeasure[T](NumericRandomMeasure)` (or its non-numeric counterpart `WeightedEmpiricalRandomMeasure[T]`) into ProbPipe directly. Generally useful: it's the natural representation of an SMC particle ensemble's posterior, of any mixture-of-empirical posterior, and of "one inner distribution treated as a Dirac random measure". Would graduate alongside the broader Dirac generalization (`Dirac[T]`, `DiracRandomFunction`, `DiracRandomMeasure`) — the empirical-Dirac case is just `Dirac[Distribution[T]]` instantiated with a `NumericEmpiricalDistribution` as the value.
+
+**Why it matters for sabi.** When ProbPipe ships this, sabi's `WeightedEmpiricalRandomMeasure` becomes a thin re-export (or vanishes entirely if ProbPipe's class is the right shape).
+
+---
+
 ## No general `Dirac` distribution abstraction
 
 **Status:** open.

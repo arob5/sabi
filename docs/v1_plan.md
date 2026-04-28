@@ -60,6 +60,18 @@ metrics rather than raw sample arrays.
 
 ## v1.2 — `SurrogatePosterior` as a `NumericRandomMeasure` subclass — **landed**
 
+### v1.2 refactor (post-MCMC-relaxation)
+
+Following the pushforward-dispatch and class-hierarchy review, several of the v1.2 shapes have been refined:
+
+- **`Surrogate(ArrayRandomFunction)`** — sabi's surrogate is now a real ProbPipe `ArrayRandomFunction`. `__call__(X, joint_inputs, joint_outputs) -> Distribution` is the predictive-distribution interface (free from the parent); `fit(X, Y) -> Self` is the only sabi-specific addition. `GPSurrogate(Surrogate, GaussianRandomFunction)` is the concrete Gaussian path — diamond inheritance over `ArrayRandomFunction`, resolved cleanly by C3 MRO. `SurrogatePrediction(mean, variance)` is removed; consumers use `mean` / `variance` ops on the returned `Normal` (or `MultivariateNormal` once joint modes land).
+- **Class collapse + rename.** `SurrogatePosterior` (formerly `GPPushforwardSurrogatePosterior`) is now the only "surrogate posterior" — direct subclass of `NumericRandomMeasure`, holds `(surrogate, log_density_form, support, input_shape, prior)`. `WeightedEmpiricalRandomMeasure` (renamed from `WeightedEmpiricalSurrogatePosterior`) is a sibling class — a Dirac random measure that no longer carries `log_density_form`. The two are coordinate concepts in the loop's `surrogate_posterior_factory`, not parent/child classes.
+- **`pushforward_marginal` dispatch.** A new free function in `sabi.posterior._pushforward` does the work that was buried in `_PushforwardLogDensityRandomFunction.__call__`. Type-dispatched on `(input_dist, log_density_form)`:
+  - `(Normal | MultivariateNormal, Identity | LogLikPlusPrior)` — closed-form affine pushforward (shift `loc`; same scale / scale_tril). Handles univariate marginals AND multivariate (joint over inputs / joint over outputs) uniformly.
+  - `(samplable Distribution, anything)` — MC empirical via `@workflow_function`-wrapped helper. ProbPipe's broadcasting machinery samples from the input, runs the form pointwise (vmap when JAX-traceable), returns a `NumericEmpiricalDistribution`.
+  - Otherwise — clear `NotImplementedError` naming the types and pointing at the partial-pushforward primitive in `docs/probpipe_issues.md`.
+- **Acquisitions adopt the ProbPipe-native interface.** `ExpectedImprovement` now calls `state.surrogate(X)` to get a `Normal` and reads `mean(...)` / `variance(...)` via ProbPipe ops. No more sabi-specific `SurrogatePrediction` dataclass.
+
 `RandomMeasure` lives in ProbPipe (PRs #150 + #151 — the latter relaxing
 MCMC dispatch to `SupportsUnnormalizedLogProb`). Sabi's `SurrogatePosterior`
 inherits from `NumericRandomMeasure` and is decoupled from `Problem` (takes
