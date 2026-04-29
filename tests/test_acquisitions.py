@@ -4,6 +4,7 @@ from probpipe import mean
 
 from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.ei import ExpectedImprovement
+from sabi.acquisitions.optim import CandidateSetOptimizer
 from sabi.acquisitions.random import Random
 from sabi.initial_designs.base import sample_initial
 from sabi.problems.gaussian2d import gaussian2d
@@ -39,7 +40,7 @@ def test_random_acquisition_shape_and_bounds():
 def test_ei_acquisition_shape():
     problem = gaussian2d()
     state = _state(problem)
-    batch = ExpectedImprovement(n_candidates=512).select_batch(
+    batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)).select_batch(
         state, q=3, key=jax.random.key(11)
     )
     assert batch.shape == (3,) + problem.input_shape
@@ -51,7 +52,7 @@ def test_ei_picks_points_with_higher_surrogate_mean_than_random():
     problem = gaussian2d()
     state = _state(problem, n=60)
 
-    ei_batch = ExpectedImprovement(n_candidates=4096).select_batch(
+    ei_batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=4096)).select_batch(
         state, q=16, key=jax.random.key(2)
     )
     random_batch = Random().select_batch(state, q=16, key=jax.random.key(3))
@@ -71,7 +72,7 @@ def test_ei_average_best_beats_random_average_best_across_seeds():
     ei_bests = []
     rand_bests = []
     for seed in range(8):
-        ei_batch = ExpectedImprovement(n_candidates=2048).select_batch(
+        ei_batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=2048)).select_batch(
             state, q=8, key=jax.random.key(100 + seed)
         )
         rand_batch = Random().select_batch(state, q=8, key=jax.random.key(200 + seed))

@@ -1,0 +1,10 @@
+name: ei
+xi: 0.0
+best_from: data
+optimizer:
+  name: continuous_multistart
+  n_starts: 16
+  n_seeding_candidates: 256
+  bfgs_max_steps: 50
+  bfgs_rtol: 1.0e-5
+  bfgs_atol: 1.0e-5

@@ -1,79 +1,73 @@
-"""Expected Improvement acquisition (surrogate max).
+"""Expected Improvement acquisition.
 
-For a latent function with Gaussian predictive N(μ, σ²) at each point and a
-current best observed value f*, the expected improvement is
+For a latent function with Gaussian predictive `N(μ, σ²)` at each point
+and a current best observed value `f*`, the expected improvement is
 
     EI(x) = (μ - f*) Φ(z) + σ φ(z),   z = (μ - f*) / σ
 
-This targets regions likely to exceed the current-best surrogate value. When
-the surrogate emulates the log-posterior (`Identity` form), that corresponds
-to hunting for high-posterior-density regions, which is a reasonable v0
-heuristic. v1 replaces the candidate-set evaluation with the shared optimizer
-in `acquisitions/optim.py` (design doc §5).
+EI targets regions likely to exceed the current-best surrogate value.
+When the surrogate emulates the log-posterior (`Identity` form), this
+hunts for high-posterior-density regions — a reasonable v0+ heuristic.
 
-The surrogate is now a ProbPipe `ArrayRandomFunction` whose `__call__(X)`
-returns a `Normal` distribution (marginal mode). EI reads `mean` and
-`variance` via ProbPipe's ops on that distribution.
+`ExpectedImprovement` is a `PointwiseScoredAcquisition`; it provides the
+single-point `score(x, state)` and delegates batch selection to a
+configurable `PointwiseOptimizer`. Default is `CandidateSetOptimizer` for
+backwards compatibility with v1.x; switch to `ContinuousMultiStartOptimizer`
+for gradient-based maxima or wrap with `GreedyMultiPointOptimizer` for
+`q > 1` with in-batch diversity.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-import jax
 import jax.numpy as jnp
 from jax import Array
 from jax.scipy.stats import norm
 from probpipe import mean, variance
 
-from sabi.acquisitions.base import Acquisition, AcquisitionState
-from sabi.initial_designs.base import sample_initial
-
-
-def _ei(pred_mean: Array, pred_variance: Array, best: Array, xi: float) -> Array:
-    std = jnp.sqrt(jnp.maximum(pred_variance, 1e-30))
-    improvement = pred_mean - best - xi
-    z = improvement / std
-    ei = improvement * norm.cdf(z) + std * norm.pdf(z)
-    # Zero EI where variance collapses (already-evaluated points).
-    return jnp.where(pred_variance <= 1e-30, 0.0, ei)
+from sabi.acquisitions.base import AcquisitionState, PointwiseScoredAcquisition
+from sabi.acquisitions.optim import CandidateSetOptimizer, PointwiseOptimizer
 
 
 @dataclass(frozen=True)
-class ExpectedImprovement(Acquisition):
-    """EI over a random candidate set.
+class ExpectedImprovement(PointwiseScoredAcquisition):
+    """EI scoring function. Optimization is delegated to `optimizer`.
 
     Args:
-        n_candidates: number of random candidates evaluated per selection.
-        xi: exploration offset (larger xi ⇒ more exploration). Standard default
-            is 0.0 for noiseless GP, small positive for noisy.
-        best_from: 'data' uses max(Y); 'mean' uses surrogate mean at X (useful
-            when labels are noisy — unused in v0).
+        optimizer: pointwise optimizer that searches the score. Default is
+            `CandidateSetOptimizer()` (v1.x behavior). Use
+            `ContinuousMultiStartOptimizer()` for gradient-based maxima
+            or wrap with `GreedyMultiPointOptimizer(inner=...)` for `q > 1`.
+        xi: exploration offset (larger xi ⇒ more exploration). Default
+            0.0; small positive for noisy surrogates.
+        best_from: ``"data"`` uses `max(state.Y)`; ``"mean"`` uses the
+            surrogate's predictive-mean max at `state.X` (more robust for
+            noisy labels — unused in the v0/v1 noiseless setting).
     """
 
-    n_candidates: int = 1024
+    optimizer: PointwiseOptimizer = field(default_factory=CandidateSetOptimizer)
     xi: float = 0.0
     best_from: str = "data"
 
-    def select_batch(self, state: AcquisitionState, q: int, key: Array) -> Array:
-        key_cand, _ = jax.random.split(key)
-        candidates = sample_initial(state.problem, key_cand, self.n_candidates)
+    def score(self, x: Array, state: AcquisitionState) -> Array:
+        """Single-point EI at `x` (shape `input_shape`). Returns scalar."""
+        # surrogate.__call__ expects a leading batch axis.
+        pred = state.surrogate(x[None])
+        mu = jnp.asarray(mean(pred))[0]
+        var_ = jnp.asarray(variance(pred))[0]
+        std = jnp.sqrt(jnp.maximum(var_, 1e-30))
+        best = self._best(state)
+        improvement = mu - best - self.xi
+        z = improvement / std
+        ei = improvement * norm.cdf(z) + std * norm.pdf(z)
+        # Zero EI where variance collapses (already-evaluated points).
+        return jnp.where(var_ <= 1e-30, 0.0, ei)
 
-        pred = state.surrogate(candidates)
-        pred_mean = jnp.asarray(mean(pred))
-        pred_variance = jnp.asarray(variance(pred))
-
+    def _best(self, state: AcquisitionState) -> Array:
         if self.best_from == "data":
-            best = jnp.max(state.Y)
-        elif self.best_from == "mean":
+            return jnp.max(state.Y)
+        if self.best_from == "mean":
             train_pred = state.surrogate(state.X)
-            best = jnp.max(jnp.asarray(mean(train_pred)))
-        else:
-            raise ValueError(f"Unknown best_from={self.best_from!r}.")
-
-        scores = _ei(pred_mean, pred_variance, best, self.xi)
-
-        # Greedy top-q (no in-batch diversification for v0; repeats unlikely
-        # because the candidate set is random each call).
-        top_idx = jnp.argsort(-scores)[:q]
-        return candidates[top_idx]
+            return jnp.max(jnp.asarray(mean(train_pred)))
+        raise ValueError(f"Unknown best_from={self.best_from!r}.")

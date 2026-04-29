@@ -11,6 +11,12 @@ from omegaconf import DictConfig
 
 from sabi.acquisitions.base import Acquisition
 from sabi.acquisitions.ei import ExpectedImprovement
+from sabi.acquisitions.optim import (
+    CandidateSetOptimizer,
+    ContinuousMultiStartOptimizer,
+    GreedyMultiPointOptimizer,
+    PointwiseOptimizer,
+)
 from sabi.acquisitions.random import Random
 from sabi.algorithms.loop import (
     Algorithm,
@@ -72,13 +78,38 @@ def _build_surrogate_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
     raise ValueError(f"Unknown surrogate.name={name!r}.")
 
 
+def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
+    """Build a `PointwiseOptimizer` from a config subsection. None →
+    `CandidateSetOptimizer()` for backwards compatibility."""
+    if cfg is None:
+        return CandidateSetOptimizer()
+    name = cfg.get("name", "candidate_set")
+    if name == "candidate_set":
+        return CandidateSetOptimizer(n_candidates=int(cfg.get("n_candidates", 1024)))
+    if name == "continuous_multistart":
+        return ContinuousMultiStartOptimizer(
+            n_starts=int(cfg.get("n_starts", 16)),
+            n_seeding_candidates=int(cfg.get("n_seeding_candidates", 256)),
+            bfgs_max_steps=int(cfg.get("bfgs_max_steps", 50)),
+            bfgs_rtol=float(cfg.get("bfgs_rtol", 1e-5)),
+            bfgs_atol=float(cfg.get("bfgs_atol", 1e-5)),
+        )
+    if name == "greedy":
+        # Greedy wraps an inner optimizer. Inner config under `cfg.inner`.
+        inner = _build_optimizer(cfg.get("inner", None))
+        # Imputer wiring is left minimal in v1.4: kriging_believer is the
+        # default; richer config support lands when v1.5 needs it.
+        return GreedyMultiPointOptimizer(inner=inner)
+    raise ValueError(f"Unknown acquisition.optimizer.name={name!r}.")
+
+
 def _build_acquisition(cfg: DictConfig) -> Acquisition:
     name = cfg.name
     if name == "random":
         return Random()
     if name == "ei":
         return ExpectedImprovement(
-            n_candidates=int(cfg.get("n_candidates", 1024)),
+            optimizer=_build_optimizer(cfg.get("optimizer", None)),
             xi=float(cfg.get("xi", 0.0)),
             best_from=str(cfg.get("best_from", "data")),
         )

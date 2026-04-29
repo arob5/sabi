@@ -6,6 +6,10 @@ from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.core.protocols import SupportsSampling
 
 from sabi.acquisitions.ei import ExpectedImprovement
+from sabi.acquisitions.optim import (
+    CandidateSetOptimizer,
+    ContinuousMultiStartOptimizer,
+)
 from sabi.acquisitions.random import Random
 from sabi.algorithms.loop import (
     Algorithm,
@@ -50,7 +54,7 @@ def test_loop_runs_on_gaussian2d_with_random_acq():
 
 def test_loop_runs_on_banana_with_ei_acq():
     problem = banana()
-    alg = _algorithm(ExpectedImprovement(n_candidates=512), n_rounds=4)
+    alg = _algorithm(ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)), n_rounds=4)
     result = run(problem, alg, jax.random.key(1))
     assert result.X.shape == (16 + 4,) + problem.input_shape
     assert "mmd2" in result.final_metrics
@@ -58,7 +62,7 @@ def test_loop_runs_on_banana_with_ei_acq():
 
 def test_loop_grows_dataset_and_records_metrics():
     problem = gaussian2d()
-    alg = _algorithm(ExpectedImprovement(n_candidates=512), n_rounds=3)
+    alg = _algorithm(ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)), n_rounds=3)
     result = run(problem, alg, jax.random.key(3))
     assert result.X.shape == (19, 2)
     assert result.Y.shape == (19,)
@@ -97,3 +101,38 @@ def test_loop_with_weighted_empirical_baseline():
     # Each sampled row should match some row in result.X.
     matches = jnp.any(jnp.all(samples[:, None, :] == result.X[None, :, :], axis=-1), axis=-1)
     assert bool(jnp.all(matches))
+
+
+def test_loop_continuous_ei_beats_candidate_set_ei_on_gaussian2d():
+    """v1.4 exit criterion: ContinuousMultiStartOptimizer-backed EI should
+    yield at-or-below MMD compared to CandidateSetOptimizer-backed EI at
+    matched evaluation budgets, on gaussian2d.
+
+    Tolerance: continuous EI must be no worse than candidate-set EI by
+    more than 5 % of the candidate-set MMD². This is loose enough to
+    survive seed-dependent variance with 4 acquisition rounds, but tight
+    enough that a regression in the continuous optimizer would surface.
+    """
+    problem = gaussian2d()
+
+    cs_acq = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512))
+    cm_acq = ExpectedImprovement(
+        optimizer=ContinuousMultiStartOptimizer(
+            n_starts=8,
+            n_seeding_candidates=128,
+            bfgs_max_steps=40,
+        )
+    )
+
+    cs_alg = _algorithm(cs_acq, n_rounds=4)
+    cm_alg = _algorithm(cm_acq, n_rounds=4)
+
+    cs_result = run(problem, cs_alg, jax.random.key(0))
+    cm_result = run(problem, cm_alg, jax.random.key(0))
+
+    cs_mmd2 = float(cs_result.final_metrics["mmd2"])
+    cm_mmd2 = float(cm_result.final_metrics["mmd2"])
+    assert cm_mmd2 <= cs_mmd2 * 1.05, (
+        f"Continuous EI MMD² ({cm_mmd2:.4f}) > CandidateSet EI MMD² "
+        f"({cs_mmd2:.4f}) × 1.05; continuous optimization regressed."
+    )
