@@ -67,12 +67,14 @@ class KrigingBeliever(FantasyImputer):
     """
 
     def impute(self, x_pending: Array, state: AcquisitionState) -> Array:
-        if state.surrogate_posterior is None:
+        surrogate = state.surrogate_posterior.surrogate
+        if surrogate is None:
             raise ValueError(
-                "KrigingBeliever requires AcquisitionState.surrogate_posterior "
-                "to be non-None."
+                "KrigingBeliever requires a non-degenerate surrogate; got "
+                "`state.surrogate_posterior.surrogate=None` (the "
+                "weighted-empirical baseline)."
             )
-        pred = state.surrogate_posterior.surrogate(x_pending)
+        pred = surrogate(x_pending)
         return jnp.asarray(mean(pred))
 
 

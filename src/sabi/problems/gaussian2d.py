@@ -57,7 +57,7 @@ def gaussian2d(
 
     posterior = MultivariateNormal(loc=mu, cov=Sigma, name=f"gaussian2d_{id(mu)}")
 
-    def target(x: Array) -> Array:
+    def target_single(x: Array) -> Array:
         # Extract the scalar from ProbPipe's NumericRecord wrapper.
         return jnp.asarray(log_prob(posterior, x))
 
@@ -65,11 +65,11 @@ def gaussian2d(
     upper = mu + bounds_radius
     prior = Uniform(low=lower, high=upper, name=f"gaussian2d_design_{id(mu)}")
 
-    return Problem(
+    return Problem.from_target_single(
+        target_single=target_single,
         name="gaussian2d",
         input_shape=(2,),
         output_shape=(),
-        target_function=target,  # emulator learns the log-posterior directly
         log_density_form=Identity(),
         prior=prior,
         support=interval(lower, upper),

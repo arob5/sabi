@@ -2,8 +2,8 @@
 
 Coverage:
 - Inheritance: SurrogatePosterior is a NumericRandomMeasure;
-  WeightedEmpiricalRandomMeasure is a NumericRandomMeasure (NOT a
-  SurrogatePosterior — they're sibling concepts).
+  WeightedEmpiricalRandomMeasure is a SurrogatePosterior subclass with
+  ``surrogate=None`` (the degenerate / no-emulator case).
 - Inner-support / inner-event-shape derived from constructor args.
 - Decoupling from Problem (constructed from math primitives only).
 - Protocol opt-in matrix per class.
@@ -95,12 +95,14 @@ def _sp(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
 # -------------------------------------------------------------------------
 
 
-def test_werm_is_numeric_random_measure():
+def test_werm_is_surrogate_posterior_subclass():
     werm = _werm()
     assert isinstance(werm, NumericRandomMeasure)
     assert isinstance(werm, RandomMeasure)
-    # WERM is NOT a SurrogatePosterior — sibling concept.
-    assert not isinstance(werm, SurrogatePosterior)
+    # WERM is a SurrogatePosterior subclass with degenerate surrogate.
+    assert isinstance(werm, SurrogatePosterior)
+    assert werm.surrogate is None
+    assert werm.log_density_form is None
 
 
 def test_sp_is_numeric_random_measure():

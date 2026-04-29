@@ -248,11 +248,12 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                 # Refit the surrogate on the augmented design. Mutate
                 # the surrogate_posterior copy so downstream score calls
                 # see the new surrogate.
-                assert state.surrogate_posterior is not None, (
-                    "GreedyMultiPointOptimizer requires "
-                    "AcquisitionState.surrogate_posterior to be non-None."
-                )
                 old_sp = state.surrogate_posterior
+                if old_sp.surrogate is None:
+                    raise ValueError(
+                        "GreedyMultiPointOptimizer requires a non-degenerate "
+                        "surrogate; got `surrogate_posterior.surrogate=None`."
+                    )
                 new_surrogate = old_sp.surrogate.fit(new_X, new_Y)
                 new_sp = type(old_sp)(
                     surrogate=new_surrogate,

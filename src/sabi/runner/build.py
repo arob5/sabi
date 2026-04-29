@@ -21,7 +21,7 @@ from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms.loop import (
     Algorithm,
     SurrogatePosteriorFactory,
-    gp_pushforward_factory,
+    surrogate_pushforward_factory,
     weighted_empirical_factory,
 )
 from sabi.metrics.base import PosteriorMetric
@@ -132,8 +132,8 @@ def _build_metrics(cfg: DictConfig) -> tuple[PosteriorMetric, ...]:
 
 
 def _build_surrogate_posterior_factory(name: str) -> SurrogatePosteriorFactory:
-    if name == "gp_pushforward":
-        return gp_pushforward_factory
+    if name == "surrogate_pushforward":
+        return surrogate_pushforward_factory
     if name == "weighted_empirical":
         return weighted_empirical_factory
     raise ValueError(f"Unknown surrogate_posterior factory: {name!r}.")
@@ -148,7 +148,7 @@ def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
         ),
         acquisition=_build_acquisition(cfg.acquisition),
         surrogate_posterior_factory=_build_surrogate_posterior_factory(
-            str(cfg.algorithm.get("surrogate_posterior", "gp_pushforward"))
+            str(cfg.algorithm.get("surrogate_posterior", "surrogate_pushforward"))
         ),
         n_initial=int(cfg.algorithm.n_initial),
         n_rounds=int(cfg.algorithm.n_rounds),

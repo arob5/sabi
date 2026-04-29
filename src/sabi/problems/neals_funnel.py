@@ -98,7 +98,7 @@ def neals_funnel(
     sigma_v_sq = sigma_v * sigma_v
     norm_const = -0.5 * (log2pi + jnp.log(sigma_v_sq))  # log p(v) normalizer
 
-    def log_prob(theta: Array) -> Array:
+    def log_prob_single(theta: Array) -> Array:
         v = theta[0]
         x = theta[1:]
         log_p_v = norm_const - 0.5 * v * v / sigma_v_sq
@@ -137,7 +137,7 @@ def neals_funnel(
     reference = load_or_generate_reference_samples(
         problem_name="neals_funnel",
         cache_key=cache_key,
-        target_function=log_prob,
+        target_function=log_prob_single,
         log_density_form=Identity(),
         prior=prior,
         support=support,
@@ -156,11 +156,11 @@ def neals_funnel(
         name=f"neals_funnel_d{d}_reference",
     )
 
-    return Problem(
+    return Problem.from_target_single(
+        target_single=log_prob_single,
         name="neals_funnel",
         input_shape=(p,),
         output_shape=(),
-        target_function=log_prob,
         log_density_form=Identity(),
         prior=prior,
         support=support,

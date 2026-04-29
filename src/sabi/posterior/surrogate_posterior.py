@@ -10,10 +10,15 @@ Decoupled from `Problem`: takes math primitives directly (`support`,
 `prior`, `log_density_form`, `input_shape`). The algorithm loop pulls
 those from a `Problem` when constructing the SP each round.
 
-For the no-surrogate / Dirac baseline, see
-`sabi.posterior.weighted_empirical.WeightedEmpiricalRandomMeasure` —
-not a subclass of this class, but plays the same algorithmic role in
-the loop (the round's posterior estimate / random measure).
+**Degenerate / no-surrogate case.** `surrogate=None` is allowed and
+denotes a Dirac surrogate posterior — the design points carry the
+posterior structure directly, with no underlying emulator of the target
+map. The Dirac case is concretely realized by
+`sabi.posterior.weighted_empirical.WeightedEmpiricalRandomMeasure`,
+which is a `SurrogatePosterior` subclass with `surrogate=None`. Code
+that hits this base class with a None surrogate but no override raises
+`NotImplementedError`; subclasses opt into degeneracy by overriding
+the relevant protocol methods.
 
 Protocol opt-ins (v1.2):
 
@@ -21,11 +26,17 @@ Protocol opt-ins (v1.2):
   whose `__call__(X)` gets the surrogate's predictive at `X` and pushes
   it through the form via `pushforward_marginal` (closed-form for
   Gaussian-affine cases, MC empirical via ProbPipe broadcasting otherwise).
-- `SupportsSampling`: NOT implemented in v1.2 (sabi's `Surrogate` doesn't
-  yet expose function-trajectory sampling — v1.6).
-- `SupportsMean` (the unbiased "expected posterior"): NOT implemented
-  (no closed-form expected posterior; MC backend is a v2 item).
-- `SupportsRandomLogProb`: NOT implemented (normalization intractable).
+  Requires a non-None `surrogate`.
+- `SupportsSampling`: NOT implemented on the base class in v1.2 (sabi's
+  `Surrogate` doesn't yet expose function-trajectory sampling — v1.6).
+  Subclasses with degenerate surrogate (e.g. `WeightedEmpiricalRandomMeasure`)
+  may implement it.
+- `SupportsMean` (the unbiased "expected posterior"): NOT implemented on
+  the base class (no closed-form expected posterior; MC backend is a v2
+  item). Degenerate subclasses may implement it (the inner empirical IS
+  the mean for the Dirac case).
+- `SupportsRandomLogProb`: NOT implemented on the base class
+  (normalization intractable). Degenerate subclasses may implement it.
 """
 
 from __future__ import annotations
@@ -51,11 +62,16 @@ class SurrogatePosterior(NumericRandomMeasure):
         surrogate: a fittable `Surrogate` (an `ArrayRandomFunction` over
             the parameter space). Provides the predictive distribution at
             query points via `__call__(X, joint_inputs, joint_outputs)`.
+            ``None`` denotes a degenerate surrogate posterior — see the
+            module docstring; subclasses must override the relevant
+            protocol methods for this to work.
         log_density_form: composes the surrogate's outputs with the prior
-            into an unnormalized log-posterior.
+            into an unnormalized log-posterior. ``None`` is allowed for
+            degenerate subclasses where the form is consumed at
+            construction time (e.g. `WeightedEmpiricalRandomMeasure`).
         support: `Constraint` over the parameter space.
         input_shape: shape of one parameter-space point. Must equal
-            `surrogate.input_shape`.
+            `surrogate.input_shape` when ``surrogate is not None``.
         prior: optional `Distribution`; required by forms that access it
             (`LogLikPlusPrior`, `ForwardModel`).
         name: optional ProbPipe distribution name.
@@ -63,8 +79,8 @@ class SurrogatePosterior(NumericRandomMeasure):
 
     def __init__(
         self,
-        surrogate: Surrogate,
-        log_density_form: LogDensityForm,
+        surrogate: Surrogate | None,
+        log_density_form: LogDensityForm | None,
         *,
         support: Constraint,
         input_shape: tuple[int, ...],
@@ -73,7 +89,7 @@ class SurrogatePosterior(NumericRandomMeasure):
     ):
         if support is None:
             raise ValueError("SurrogatePosterior requires a non-None `support`.")
-        if tuple(input_shape) != tuple(surrogate.input_shape):
+        if surrogate is not None and tuple(input_shape) != tuple(surrogate.input_shape):
             raise ValueError(
                 f"input_shape={tuple(input_shape)} must match "
                 f"surrogate.input_shape={tuple(surrogate.input_shape)}."
@@ -96,11 +112,11 @@ class SurrogatePosterior(NumericRandomMeasure):
         return self._input_shape
 
     @property
-    def surrogate(self) -> Surrogate:
+    def surrogate(self) -> Surrogate | None:
         return self._surrogate
 
     @property
-    def log_density_form(self) -> LogDensityForm:
+    def log_density_form(self) -> LogDensityForm | None:
         return self._log_density_form
 
     @property
@@ -110,6 +126,12 @@ class SurrogatePosterior(NumericRandomMeasure):
     # Protocol implementation -------------------------------------------------
 
     def _random_unnormalized_log_prob(self) -> RandomFunction:
+        if self._surrogate is None:
+            raise NotImplementedError(
+                f"{type(self).__name__}._random_unnormalized_log_prob: "
+                "surrogate is None (degenerate SurrogatePosterior); "
+                "subclass must override this method."
+            )
         return _SurrogatePosteriorPushforward(self)
 
 

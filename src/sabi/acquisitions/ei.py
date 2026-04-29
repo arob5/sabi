@@ -67,12 +67,14 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
     def _score_single(self, x: Array, state: AcquisitionState) -> Array:
         """Single-point EI at `x` (shape `state.problem.input_shape`).
         Returns scalar."""
-        if state.surrogate_posterior is None:
-            raise ValueError(
-                "ExpectedImprovement requires a SurrogatePosterior on "
-                "AcquisitionState; got `surrogate_posterior=None`."
-            )
         surrogate = state.surrogate_posterior.surrogate
+        if surrogate is None:
+            raise ValueError(
+                "ExpectedImprovement requires a non-degenerate surrogate; "
+                "got `state.surrogate_posterior.surrogate=None` (this happens "
+                "with the weighted-empirical baseline). Switch to a real "
+                "surrogate or use a sampling acquisition like PriorSampling."
+            )
         # surrogate.__call__ expects a leading batch axis.
         pred = surrogate(x[None])
         mu = jnp.asarray(mean(pred))[0]
@@ -89,8 +91,12 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
         if self.best_from == "data":
             return jnp.max(state.Y)
         if self.best_from == "mean":
-            assert state.surrogate_posterior is not None
             surrogate = state.surrogate_posterior.surrogate
+            if surrogate is None:
+                raise ValueError(
+                    "ExpectedImprovement(best_from='mean') requires a "
+                    "non-degenerate surrogate."
+                )
             train_pred = surrogate(state.X)
             return jnp.max(jnp.asarray(mean(train_pred)))
         raise ValueError(f"Unknown best_from={self.best_from!r}.")

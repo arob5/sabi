@@ -33,11 +33,11 @@ def test_neals_funnel_shapes_and_types():
 def test_neals_funnel_target_log_density_known_values():
     """Spot-check the joint log-density at a few exact points."""
     problem = neals_funnel(d=2, sigma_v=3.0)
-    log_p = problem.target_function
+    log_p_single = problem.target_single
 
     # At (v=0, x=0): log_p_v = -0.5*log(2π·9), log_p_x|v = 2 * (-0.5*log(2π·1)) = -log(2π)
     # Total = -0.5*log(2π·9) - log(2π) = -0.5 log(2π·9) - log(2π)
-    out00 = float(log_p(jnp.asarray([0.0, 0.0, 0.0])))
+    out00 = float(log_p_single(jnp.asarray([0.0, 0.0, 0.0])))
     expected = (
         -0.5 * float(jnp.log(2 * jnp.pi * 9.0))
         + 2 * (-0.5 * float(jnp.log(2 * jnp.pi)) - 0.5 * 0.0)  # v=0 → log p(x|v)
@@ -81,10 +81,10 @@ def test_neals_funnel_reference_funnel_geometry():
 
 
 def test_neals_funnel_log_posterior_method():
-    """`Problem.log_posterior` (which composes target_function + Identity form)
-    matches `target_function` directly for this benchmark."""
+    """`Problem.log_posterior` (which composes target_single + Identity form)
+    matches `target_single` directly for this benchmark."""
     problem = neals_funnel(d=2)
     x = jnp.asarray([0.5, 1.0, -1.0])
     assert float(problem.log_posterior(x)) == pytest.approx(
-        float(problem.target_function(x)), abs=1e-6
+        float(problem.target_single(x)), abs=1e-6
     )

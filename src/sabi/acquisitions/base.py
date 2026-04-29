@@ -50,18 +50,19 @@ class AcquisitionState:
     """Per-round bundle passed to acquisitions. All fields are read-only.
 
     The round's `SurrogatePosterior` carries the surrogate fit on the
-    current design data plus the log-density form for the round. Sampling
-    acquisitions that don't need surrogate access ignore
-    `surrogate_posterior` (which is `None` for loop paths whose round
-    posterior is a sibling random-measure type, e.g. a
-    `WeightedEmpiricalRandomMeasure`).
+    current design data plus the log-density form for the round.
+    Acquisitions that need a real (non-degenerate) surrogate should check
+    ``state.surrogate_posterior.surrogate is None`` — this is the case
+    when the loop is running the weighted-empirical baseline (a
+    `WeightedEmpiricalRandomMeasure`, which is a `SurrogatePosterior`
+    subclass with ``surrogate=None``).
 
     Attributes:
         problem: the inference problem (provides `prior`, `support`,
             `input_shape`, etc.).
-        surrogate_posterior: round's surrogate-posterior random measure,
-            or `None` for loop paths that produce a non-`SurrogatePosterior`
-            random measure (e.g. weighted-empirical baseline).
+        surrogate_posterior: round's surrogate-posterior random measure
+            (always set; ``surrogate_posterior.surrogate`` may be
+            ``None`` for the weighted-empirical baseline).
         X: design inputs, shape `(n,) + problem.input_shape`.
         Y: design outputs, shape `(n,) + problem.output_shape`.
         tempering_state: opaque PyTree from the `TemperingSchedule`;
@@ -71,7 +72,7 @@ class AcquisitionState:
     """
 
     problem: Problem
-    surrogate_posterior: SurrogatePosterior | None
+    surrogate_posterior: SurrogatePosterior
     X: Array
     Y: Array
     tempering_state: Any

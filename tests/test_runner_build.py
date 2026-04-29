@@ -2,7 +2,7 @@ from omegaconf import OmegaConf
 
 from sabi.algorithms.loop import (
     Algorithm,
-    gp_pushforward_factory,
+    surrogate_pushforward_factory,
     weighted_empirical_factory,
 )
 from sabi.metrics.posterior_mmd import ReferenceMMD
@@ -55,10 +55,10 @@ def test_build_algorithm_without_metrics_yields_empty_tuple():
     assert alg.metrics == ()
 
 
-def test_build_algorithm_default_surrogate_posterior_is_gp_pushforward():
+def test_build_algorithm_default_surrogate_posterior_is_surrogate_pushforward():
     cfg = _cfg()
     alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
-    assert alg.surrogate_posterior_factory is gp_pushforward_factory
+    assert alg.surrogate_posterior_factory is surrogate_pushforward_factory
 
 
 def test_build_algorithm_can_select_weighted_empirical_factory():

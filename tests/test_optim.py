@@ -44,7 +44,7 @@ def _state(n: int = 30, seed: int = 0):
     X = lower + (upper - lower) * jax.random.uniform(
         key, shape=(n,) + problem.input_shape
     )
-    Y = jax.vmap(problem.target_function)(X)
+    Y = problem.target_function(X)
     surrogate = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(
         surrogate=surrogate,

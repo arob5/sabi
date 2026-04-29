@@ -13,7 +13,7 @@ from sabi.acquisitions.optim import (
 from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms.loop import (
     Algorithm,
-    gp_pushforward_factory,
+    surrogate_pushforward_factory,
     run,
     weighted_empirical_factory,
 )
@@ -27,7 +27,7 @@ def _algorithm(
     acquisition,
     n_rounds: int = 4,
     metrics=(ReferenceMMD(n_estimate_samples=512, n_reference_samples=512),),
-    surrogate_posterior_factory=gp_pushforward_factory,
+    surrogate_posterior_factory=surrogate_pushforward_factory,
 ):
     return Algorithm(
         surrogate_factory=lambda: GPSurrogate(),

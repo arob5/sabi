@@ -176,7 +176,7 @@ Algorithm:
   initial_sampler: BatchSampler
   surrogate_factory: Callable[[], Surrogate]
   acquisition: Acquisition
-  surrogate_posterior_factory: SurrogatePosteriorFactory   # default gp_pushforward_factory
+  surrogate_posterior_factory: SurrogatePosteriorFactory   # default surrogate_pushforward_factory
   estimator: Callable[[SurrogatePosterior], Distribution]  # default expected_target
   tempering: Tempering                 # default NoTempering()
   schedule: TemperingSchedule          # default UntemperedSchedule()

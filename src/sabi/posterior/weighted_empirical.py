@@ -4,10 +4,17 @@ The simplest non-trivial random measure: zero variance over inner-distribution
 draws, with the inner distribution being a `NumericEmpiricalDistribution`
 weighted by `softmax(log_weights)`.
 
-In sabi this serves as a no-GP baseline for the loop — the loop's factory
-applies a `LogDensityForm` to `(X, Y)` to compute `log_weights`, then hands
-the resulting `(X, log_weights)` to this class. The class itself does NOT
-carry the form (the form's role ends once weights are computed).
+Conceptually this is a `SurrogatePosterior` whose underlying surrogate is
+degenerate — there's no random function, the design points carry the
+posterior structure directly. Implemented as a `SurrogatePosterior`
+subclass with `surrogate=None`, so the algorithm loop and acquisitions
+see one unified type.
+
+In sabi this serves as a no-emulator baseline for the loop — the loop's
+factory applies a `LogDensityForm` to `(X, Y)` to compute `log_weights`,
+then hands the resulting `(X, log_weights)` to this class. The class
+itself does NOT carry the form (the form's role ends once weights are
+computed; `log_density_form` is `None` on the resulting SP).
 
 Tracked for promotion to ProbPipe — see `docs/probpipe_issues.md`:
 "`WeightedEmpiricalRandomMeasure` as a ProbPipe primitive".
@@ -25,24 +32,27 @@ from probpipe._weights import Weights
 from probpipe.core._distribution_array import DistributionArray
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
-from probpipe.core._random_measures import NumericRandomMeasure
 from probpipe.core.constraints import Constraint
 
 from sabi.posterior._dirac import _DiracArrayRandomFunction
+from sabi.posterior.surrogate_posterior import SurrogatePosterior
 
 
-class WeightedEmpiricalRandomMeasure(NumericRandomMeasure):
-    """Dirac random measure at a weighted empirical of design points.
+class WeightedEmpiricalRandomMeasure(SurrogatePosterior):
+    """Dirac surrogate posterior at a weighted empirical of design points.
 
-    A draw from this random measure is always the same `NumericEmpiricalDistribution`
-    over `(X, log_weights)`. Implements the full `NumericRandomMeasure`
-    protocol surface via the underlying empirical and Dirac shims.
+    A draw from this random measure is always the same
+    `NumericEmpiricalDistribution` over `(X, log_weights)`. Implements
+    the full `NumericRandomMeasure` protocol surface via the underlying
+    empirical and Dirac shims. As a `SurrogatePosterior` subclass, it
+    reports `surrogate=None` and `log_density_form=None` (the form was
+    consumed at construction time to compute the weights).
 
     Args:
         X: design points, shape `(n,) + input_shape`.
         log_weights: shape `(n,)` — unnormalized log-weights at each
-            design point. Typically the deterministic log-posterior at `X[i]`
-            under the loop's current `LogDensityForm`.
+            design point. Typically the deterministic log-posterior at
+            `X[i]` under the loop's current `LogDensityForm`.
         support: `Constraint` over the inner samples (parameter space).
         input_shape: shape of one parameter-space point.
         name: optional ProbPipe distribution name.
@@ -60,10 +70,6 @@ class WeightedEmpiricalRandomMeasure(NumericRandomMeasure):
         input_shape: tuple[int, ...],
         name: str | None = None,
     ):
-        if support is None:
-            raise ValueError(
-                "WeightedEmpiricalRandomMeasure requires a non-None `support`."
-            )
         X = jnp.asarray(X)
         log_weights = jnp.asarray(log_weights)
         if X.shape[1:] != tuple(input_shape):
@@ -78,9 +84,16 @@ class WeightedEmpiricalRandomMeasure(NumericRandomMeasure):
             )
         self._X = X
         self._log_weights = log_weights
-        self._support = support
-        self._input_shape = tuple(input_shape)
-        super().__init__(name=name or type(self).__name__)
+        # Initialize the SurrogatePosterior base with a degenerate
+        # surrogate (None) and no form (consumed into log_weights).
+        super().__init__(
+            surrogate=None,
+            log_density_form=None,
+            support=support,
+            input_shape=input_shape,
+            prior=None,
+            name=name or type(self).__name__,
+        )
 
     @property
     def X(self) -> Array:
@@ -90,14 +103,6 @@ class WeightedEmpiricalRandomMeasure(NumericRandomMeasure):
     def log_weights(self) -> Array:
         return self._log_weights
 
-    @property
-    def inner_support(self) -> Constraint:
-        return self._support
-
-    @property
-    def inner_event_shape(self) -> tuple[int, ...]:
-        return self._input_shape
-
     @cached_property
     def inner_distribution(self) -> NumericEmpiricalDistribution:
         return NumericEmpiricalDistribution(
@@ -106,7 +111,7 @@ class WeightedEmpiricalRandomMeasure(NumericRandomMeasure):
             name=f"{self.name}_empirical",
         )
 
-    # Protocol implementations ------------------------------------------------
+    # Protocol implementations (overrides of SurrogatePosterior defaults) -----
 
     def _mean(self) -> Distribution:
         return self.inner_distribution

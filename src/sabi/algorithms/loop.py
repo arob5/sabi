@@ -1,25 +1,30 @@
 """Sequential-acquisition loop.
 
-v1.2 composition: initial design (sampled from `problem.prior`) → surrogate →
-acquisition → `SurrogatePosterior` (a `NumericRandomMeasure`) → estimator
-function (`expected_target` by default) → metrics. Tempering hooks present
-(`tempering_state` per round, `current_form` built each round) but v1.2 ships
-with `NoTempering` + `UntemperedSchedule` defaults, so the state is `None`
-every round.
+Composition: initial design (drawn via `Algorithm.initial_sampler`) →
+surrogate → acquisition → `SurrogatePosterior` → estimator function
+(`expected_target` by default) → metrics. Tempering hooks present
+(`tempering_state` per round, `current_form` built each round) but
+v1.4.x ships with `NoTempering` + `UntemperedSchedule` defaults, so the
+state is `None` every round.
 
-The estimator is a free function with type-dispatch on `SurrogatePosterior`
-subtype (`expected_target`, possibly `mean` for the Dirac case). Configurable
-per `Algorithm` via the `estimator` field.
+The estimator is a free function with type-dispatch on
+`SurrogatePosterior` subtype (`expected_target`, possibly `mean` for the
+Dirac case). Configurable per `Algorithm` via the `estimator` field.
 
-The `surrogate_posterior_factory` builds the round's `SurrogatePosterior` from
-math primitives — the `SurrogatePosterior` is decoupled from `Problem`, so the
-factory pulls `support` / `prior` / `input_shape` from the problem and combines
-with the (possibly tempered) `LogDensityForm` for the round.
+The `surrogate_posterior_factory` builds the round's `SurrogatePosterior`
+from math primitives — `SurrogatePosterior` is decoupled from `Problem`,
+so the factory pulls `support` / `prior` / `input_shape` from the
+problem and combines with the (possibly tempered) `LogDensityForm` for
+the round. The default `surrogate_pushforward_factory` builds an SP that
+pushes the fitted surrogate's predictive through the form;
+`weighted_empirical_factory` builds the no-emulator baseline (a
+`WeightedEmpiricalRandomMeasure` — a `SurrogatePosterior` subclass with
+``surrogate=None``).
 
-Metrics consume a `Distribution[Array]` (the estimator's output) and declare
-their required ProbPipe `Supports*` protocols via the `requires` class
-attribute. The loop checks each metric's `requires` against the estimator
-distribution and raises `MissingProtocolError` on a mismatch.
+Metrics consume a `Distribution[Array]` (the estimator's output) and
+declare their required ProbPipe `Supports*` protocols via the `requires`
+class attribute. The loop checks each metric's `requires` against the
+estimator distribution and raises `MissingProtocolError` on a mismatch.
 
 Shape / symbol conventions: see `docs/notation.md`.
 """
@@ -36,8 +41,6 @@ from jax import Array
 from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
-from probpipe.core._random_measures import NumericRandomMeasure
-
 from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.posterior.estimators import expected_target
@@ -52,16 +55,20 @@ from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule
 
 
 class SurrogatePosteriorFactory(Protocol):
-    """Builds the round's posterior random measure from the surrogate state
-    and the math primitives (support, input_shape, prior, log_density_form).
+    """Builds the round's `SurrogatePosterior` from the surrogate state and
+    the math primitives (support, input_shape, prior, log_density_form).
 
-    Returns a `NumericRandomMeasure` — concretely either a `SurrogatePosterior`
-    or a `WeightedEmpiricalRandomMeasure` (or any other random-measure
-    subclass a future factory might produce).
+    Returns a `SurrogatePosterior`. The default factory
+    (`surrogate_pushforward_factory`) builds an SP that pushes the
+    fitted surrogate's predictive through the form. The
+    `weighted_empirical_factory` builds the no-emulator baseline
+    (`WeightedEmpiricalRandomMeasure`, a `SurrogatePosterior` subclass
+    with ``surrogate=None``).
 
-    `X` and `Y` are the design set; `log_density_form` is the form for the
-    round (possibly tempered). `surrogate` may be ignored by factories
-    that don't need a fitted surrogate (e.g., the weighted-empirical baseline).
+    `X` and `Y` are the design set; `log_density_form` is the form for
+    the round (possibly tempered). `surrogate` may be ignored by
+    factories that don't need a fitted surrogate (the weighted-empirical
+    baseline).
     """
 
     def __call__(
@@ -75,10 +82,10 @@ class SurrogatePosteriorFactory(Protocol):
         input_shape: tuple[int, ...],
         prior: Distribution | None,
         problem_name: str | None = None,
-    ) -> NumericRandomMeasure: ...
+    ) -> SurrogatePosterior: ...
 
 
-def gp_pushforward_factory(
+def surrogate_pushforward_factory(
     *,
     surrogate: Surrogate,
     X: Array,
@@ -89,8 +96,18 @@ def gp_pushforward_factory(
     prior: Distribution | None,
     problem_name: str | None = None,
 ) -> SurrogatePosterior:
-    """Default factory: build the random measure induced by the fitted
-    surrogate composed with the form (a `SurrogatePosterior`)."""
+    """Default factory: build the `SurrogatePosterior` that pushes the
+    fitted surrogate's predictive distribution through ``log_density_form``.
+
+    The pushforward itself lives inside `SurrogatePosterior`
+    (`_random_unnormalized_log_prob` / `pushforward_marginal`); this
+    factory just wires the round's surrogate, form, and problem-side
+    primitives into a fresh `SurrogatePosterior` instance.
+
+    Surrogate-agnostic — works for any `Surrogate` subclass, not just GPs.
+    The original ``gp_pushforward_factory`` name was a v1.x leftover from
+    when the GP was the only surrogate.
+    """
     return SurrogatePosterior(
         surrogate=surrogate,
         log_density_form=log_density_form,
@@ -144,8 +161,8 @@ class Algorithm:
     initial_sampler: BatchSampler = field(default_factory=PriorSampler)
     tempering: Tempering = field(default_factory=NoTempering)
     schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
-    surrogate_posterior_factory: SurrogatePosteriorFactory = gp_pushforward_factory
-    estimator: Callable[[NumericRandomMeasure], Distribution] = expected_target
+    surrogate_posterior_factory: SurrogatePosteriorFactory = surrogate_pushforward_factory
+    estimator: Callable[[SurrogatePosterior], Distribution] = expected_target
     metrics: tuple[PosteriorMetric, ...] = ()
 
 
@@ -204,7 +221,7 @@ def _build_surrogate_posterior(
     Y: Array,
     log_density_form: LogDensityForm,
     problem: Problem,
-) -> NumericRandomMeasure:
+) -> SurrogatePosterior:
     """Adapter: extract the math primitives from `Problem` and call the factory."""
     return factory(
         surrogate=surrogate,
@@ -233,7 +250,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
-    Y = jax.vmap(problem.target_function)(X)
+    Y = problem.target_function(X)
 
     tempering_states: list[Any] = []
     per_round_metrics: list[dict[str, Any]] = []
@@ -248,10 +265,10 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         )
 
         key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
-        # Pre-acquisition SP wraps the current surrogate + form. For
-        # WeightedEmpiricalRandomMeasure factories this isn't a
-        # SurrogatePosterior; we set `surrogate_posterior=None` in that
-        # case, and acquisitions that need a surrogate raise.
+        # Pre-acquisition SP wraps the current surrogate + form. The
+        # weighted-empirical factory produces a SurrogatePosterior with
+        # ``surrogate=None``; acquisitions that need a real surrogate
+        # check ``state.surrogate_posterior.surrogate is None`` and raise.
         pre_round_posterior = _build_surrogate_posterior(
             algorithm.surrogate_posterior_factory,
             surrogate=surrogate,
@@ -262,17 +279,13 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         )
         acq_state = AcquisitionState(
             problem=problem,
-            surrogate_posterior=(
-                pre_round_posterior
-                if isinstance(pre_round_posterior, SurrogatePosterior)
-                else None
-            ),
+            surrogate_posterior=pre_round_posterior,
             X=X,
             Y=Y,
             tempering_state=tempering_state,
         )
         x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key_acq)
-        y_new = jax.vmap(problem.target_function)(x_new)
+        y_new = problem.target_function(x_new)
 
         X = jnp.concatenate([X, x_new], axis=0)
         Y = jnp.concatenate([Y, y_new], axis=0)

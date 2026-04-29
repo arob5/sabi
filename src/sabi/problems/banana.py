@@ -66,7 +66,7 @@ def banana(
 
     log_norm = -jnp.log(2 * jnp.pi) - jnp.log(a) + 0.5 * jnp.log(b)
 
-    def log_prob(x: Array) -> Array:
+    def log_prob_single(x: Array) -> Array:
         x1, x2 = x[0], x[1]
         z = x2 + x1 * x1 - a * a
         return log_norm - 0.5 * (x1 * x1 / (a * a) + b * z * z)
@@ -86,11 +86,11 @@ def banana(
     upper = jnp.asarray([bounds[0][1], bounds[1][1]], dtype=jnp.float64)
     prior = Uniform(low=lower, high=upper, name=f"banana_design_a{a}_b{b}")
 
-    return Problem(
+    return Problem.from_target_single(
+        target_single=log_prob_single,
         name="banana",
         input_shape=(2,),
         output_shape=(),
-        target_function=log_prob,
         log_density_form=Identity(),
         prior=prior,
         support=interval(lower, upper),
