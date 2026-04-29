@@ -6,9 +6,9 @@ from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.optim import CandidateSetOptimizer
 from sabi.acquisitions.random import PriorSampling
-from sabi.initial_designs.base import sample_initial
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
+from sabi.sampling import PriorSampler
 from sabi.surrogates.gp import GPSurrogate
 
 
@@ -16,7 +16,7 @@ def _state(problem, key_seed=0, n=20):
     """Build an AcquisitionState seeded by samples from problem.prior — that's
     where acquisition candidates will also be drawn from, so the GP gets
     trained on the same support."""
-    X = sample_initial(problem, jax.random.key(key_seed), n)
+    X = PriorSampler().sample(problem, jax.random.key(key_seed), n)
     Y = jax.vmap(problem.target_function)(X)
     gp = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(

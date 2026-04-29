@@ -39,13 +39,13 @@ from probpipe.core.constraints import Constraint
 from probpipe.core._random_measures import NumericRandomMeasure
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
-from sabi.initial_designs.base import InitialDesign, sample_initial
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.posterior.estimators import expected_target
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
+from sabi.sampling import BatchSampler, PriorSampler
 from sabi.surrogates.base import Surrogate
 from sabi.tempering.base import NoTempering, Tempering
 from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule
@@ -141,7 +141,7 @@ class Algorithm:
     n_initial: int = 16
     n_rounds: int = 10
     q: int = 1
-    initial_design: InitialDesign | None = None
+    initial_sampler: BatchSampler = field(default_factory=PriorSampler)
     tempering: Tempering = field(default_factory=NoTempering)
     schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
     surrogate_posterior_factory: SurrogatePosteriorFactory = gp_pushforward_factory
@@ -232,7 +232,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         )
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
-    X = sample_initial(problem, key_init, algorithm.n_initial, algorithm.initial_design)
+    X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
     Y = jax.vmap(problem.target_function)(X)
 
     tempering_states: list[Any] = []

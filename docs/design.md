@@ -153,9 +153,19 @@ The metric list is a field on `Algorithm`; the loop evaluates every metric each 
 
 **v0 limitation (tracked for post-ProbPipe):** the loop currently passes metrics a sample batch from the estimator, which assumes a sample-based posterior representation. Once ProbPipe's `Distribution` is available (v2, when `PosteriorEstimator` backend dispatch lands), the loop should ask the estimator for a `Distribution` and each metric should declare which representation it consumes — samples, density, or both. VI / Laplace / mixture estimators, and metrics like log-score or TV on 1-D marginals, are the motivating cases.
 
-### 4.8 `InitialDesign`
+### 4.8 `BatchSampler`
 
-Sobol, LHS, prior samples, uniform-in-bounds. Tiny.
+Single abstraction for "draw `n` parameter-space points": Sobol, LHS,
+prior samples, uniform-in-bounds. Lives in `sabi/sampling.py`. Used by
+
+- the loop's initial-design step (`Algorithm.initial_sampler`),
+- `PriorSampling.select_batch` (the prior-sampling acquisition),
+- pointwise optimizers' candidate / seed sets
+  (`CandidateSetOptimizer.candidate_sampler`,
+  `ContinuousMultiStartOptimizer.seed_sampler`).
+
+v1.4.1 ships `PriorSampler` (i.i.d. samples from `problem.prior`); Sobol /
+LHS land alongside the first benchmark that needs them.
 
 ### 4.9 `Algorithm` — composition
 
@@ -163,7 +173,7 @@ A dataclass bundling the above. Swapping any field is an ablation.
 
 ```
 Algorithm:
-  initial_design: InitialDesign
+  initial_sampler: BatchSampler
   surrogate_factory: Callable[[], Surrogate]
   acquisition: Acquisition
   surrogate_posterior_factory: SurrogatePosteriorFactory   # default gp_pushforward_factory
@@ -288,7 +298,7 @@ sabi/
     acquisitions/      # + optim.py
     posterior/         # SurrogatePosterior subclasses + deterministic estimators (expected_target, mean)
     metrics/           # PosteriorMetric + EmulatorMetric
-    initial_designs/
+    sampling.py        # BatchSampler + PriorSampler
     tempering/         # Tempering + TemperingSchedule + dispatch registry
     algorithms/        # composed dataclasses
     runner/            # Hydra entry, seeding, logging

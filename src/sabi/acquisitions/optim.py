@@ -42,7 +42,7 @@ from tensorflow_probability.substrates.jax.bijectors import Bijector, Sigmoid
 
 from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.fantasize import FantasyImputer, KrigingBeliever
-from sabi.initial_designs.base import sample_initial
+from sabi.sampling import BatchSampler, PriorSampler
 
 if TYPE_CHECKING:
     from sabi.acquisitions.base import PointwiseScoredAcquisition
@@ -74,20 +74,29 @@ class PointwiseOptimizer(ABC):
 
 @dataclass(frozen=True)
 class CandidateSetOptimizer(PointwiseOptimizer):
-    r"""Random candidates from ``problem.prior``, score each, return top-q.
+    r"""Random candidates from a `BatchSampler`, score each, return top-q.
 
     Cheap; gradient-free; matches v1.x EI behavior. Quality is governed
-    by ``n_candidates`` and the prior's coverage of the high-score regions.
-    Concretely: draw :math:`X \sim \text{prior}^{n_{\text{candidates}}}`,
-    evaluate :math:`s = \text{acq.score}(X, \text{state})`, return the
-    rows of :math:`X` corresponding to the top-q entries of :math:`s`.
+    by ``n_candidates`` and the sampler's coverage of the high-score
+    regions. Concretely: draw
+    :math:`X \sim \text{sampler}^{n_{\text{candidates}}}`, evaluate
+    :math:`s = \text{acq.score}(X, \text{state})`, return the rows of
+    :math:`X` corresponding to the top-q entries of :math:`s`.
+
+    Args:
+        n_candidates: number of candidates scored each call.
+        candidate_sampler: `BatchSampler` for the candidate set. Default
+            is `PriorSampler` (samples from ``problem.prior``).
     """
 
     n_candidates: int = 1024
+    candidate_sampler: BatchSampler = field(default_factory=PriorSampler)
 
     def optimize(self, acq, state, q, key):
         key_cand, _ = jax.random.split(key)
-        candidates = sample_initial(state.problem, key_cand, self.n_candidates)
+        candidates = self.candidate_sampler.sample(
+            state.problem, key_cand, self.n_candidates
+        )
         scores = acq.score(candidates, state)
         top_idx = jnp.argsort(-scores)[:q]
         return candidates[top_idx]
@@ -104,7 +113,7 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
 
     Pipeline:
 
-    1. Sample ``n_seeding_candidates`` from ``problem.prior``.
+    1. Sample ``n_seeding_candidates`` from ``seed_sampler``.
     2. Score each via ``acq.score``; take top-``n_starts`` as BFGS init points.
     3. Reparameterize each start to unconstrained space via the bijector
        :math:`b: \mathbb{R}^d \to \text{support}` (sigmoid for
@@ -120,6 +129,8 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
             seeds. Must be :math:`\ge` ``n_starts``.
         bfgs_max_steps: max steps per BFGS solve.
         bfgs_rtol / bfgs_atol: convergence tolerances.
+        seed_sampler: `BatchSampler` for the seeding candidate set.
+            Default is `PriorSampler` (samples from ``problem.prior``).
     """
 
     n_starts: int = 16
@@ -127,6 +138,7 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
     bfgs_max_steps: int = 50
     bfgs_rtol: float = 1e-5
     bfgs_atol: float = 1e-5
+    seed_sampler: BatchSampler = field(default_factory=PriorSampler)
 
     def optimize(self, acq, state, q, key):
         if self.n_seeding_candidates < self.n_starts:
@@ -138,7 +150,7 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
 
         # 1-2: seed selection
         key_seed, _ = jax.random.split(key)
-        seed_candidates = sample_initial(
+        seed_candidates = self.seed_sampler.sample(
             state.problem, key_seed, self.n_seeding_candidates
         )
         seed_scores = acq.score(seed_candidates, state)

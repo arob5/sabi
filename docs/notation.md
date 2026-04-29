@@ -59,7 +59,7 @@ reserve `θ` for prose where it aids intuition.
 def f(x: Array) -> Array:    # x.shape == (2,), returns scalar
     return -0.5 * x @ Sigma_inv @ x
 
-X = sample_initial(problem, key, n=16)     # X.shape == (16, 2)
+X = PriorSampler().sample(problem, key, n=16)  # X.shape == (16, 2)
 Y = jax.vmap(f)(X)                         # Y.shape == (16,)
 ```
 
