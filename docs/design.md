@@ -91,7 +91,19 @@ Acquisition:
 
 Covers both (a) deterministic strategies that optimize an acquisition function, and (b) stochastic strategies such as Thompson sampling from `SurrogatePosterior`. Batch `q = 1` is pure sequential.
 
-Acquisitions decouple **scoring** (the function to maximize) from **optimization** (how to maximize it). In v1 the shared optimization machinery lives in `acquisitions/optim.py` (§5): candidate-based scoring, multi-start continuous optimization, greedy multi-point batching, and support-aware reparameterization. A library of small helpers (candidate draws, top-k, local refinement, in-batch diversification) is factored out so each `Acquisition` implements only its scoring function plus a declaration of which optimizer modes it supports.
+Acquisitions decouple **scoring** (the function to maximize) from **optimization** (how to maximize it). The hierarchy:
+
+- `Acquisition` (ABC) — the top-level `select_batch(state, q, key)` interface. Sampling-style acquisitions (`PriorSampling` today; `PosteriorThompsonSampling` / `MixtureSampling` v1.5+) implement this directly.
+- `PointwiseScoredAcquisition(Acquisition)` — provides `score(x, state) -> scalar`; `select_batch` delegates to a `PointwiseOptimizer`. `ExpectedImprovement` inherits from this.
+- `BatchScoredAcquisition(Acquisition)` (v1.5+) — provides `score_batch(X, state) -> scalar` over a joint q-batch; uses a parallel `BatchOptimizer` hierarchy. q-EI, max-min entropy, etc.
+
+`PointwiseOptimizer` ships three implementations in `acquisitions/optim.py`:
+
+- `CandidateSetOptimizer` — random candidates from `problem.prior` → top-q. Cheap; gradient-free; default.
+- `ContinuousMultiStartOptimizer` — score-filter top-`n_starts` BFGS init points → optimistix BFGS in unconstrained reparameterization space → top-q. Sigmoid bijector for `interval(low, high)` supports; other supports raise.
+- `GreedyMultiPointOptimizer` — for `q > 1`. Picks one point at a time via an inner optimizer; hallucinates a pending observation via a pluggable `FantasyImputer` (`KrigingBeliever`, `ConstantLiar`); refits the surrogate; iterates. Pluggable imputer makes the strategy interchangeable.
+
+Acquisitions implement only their scoring function (and pick an optimizer per their needs). Helpers like reparameterization, top-k, candidate sampling are reused inside the optimizer module.
 
 ### 4.5 `SurrogatePosterior` — a `RandomMeasure`
 

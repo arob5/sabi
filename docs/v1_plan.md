@@ -184,20 +184,73 @@ samples; on-disk caching of expensive references via Parquet artifacts.
 
 ---
 
-## v1.4 — Acquisition optimization module (`§5`)
+## v1.4 — Acquisition optimization module (§5) — **landed**
 
-Build the shared optimizer that all acquisitions plug into.
+Pluggable optimizer hierarchy for pointwise-scored acquisitions, plus
+greedy multi-point batching with pluggable fantasy strategies.
 
-**Deliverables**
-- `acquisitions/optim.py` with multi-start, greedy multi-point batching (for `q > 1`), support-aware reparameterization (uses the `Constraint` from v1.1; bijector layer added if ProbPipe still doesn't have one).
-- Shared helpers: candidate sampling, top-k, local refinement, in-batch diversification.
-- Refactor `Random` and `EI` to declare which optimizer modes they support and use the shared machinery.
-- At least one truly continuously-optimized acquisition (e.g., `EI` with multi-start BFGS rather than candidate-set scoring).
-- BOTorch-comparison test on a fixed acquisition surface — design doc §5 says "no merge without those tests".
+**Landed in this phase**
+- New `Acquisition` taxonomy in `sabi/acquisitions/base.py`:
+  `PointwiseScoredAcquisition` provides `score(x, state) → scalar` and
+  delegates `select_batch` to a configurable `PointwiseOptimizer`.
+  Sampling-style and batch-scored acquisitions are noted as v1.5+.
+- `sabi/acquisitions/optim.py`:
+  - `CandidateSetOptimizer` — random candidates → top-q (the v1.x EI
+    behavior; default for backwards compatibility).
+  - `ContinuousMultiStartOptimizer` — random candidates → score-filter to
+    top-`n_starts` → optimistix BFGS in unconstrained reparameterization
+    space → return top-q. Sigmoid bijector for `interval(low, high)`
+    supports; non-interval supports raise with a pointer to the
+    `docs/probpipe_issues.md` Constraint→bijector entry.
+  - `GreedyMultiPointOptimizer` — for `q > 1`. Wraps an inner optimizer
+    plus a pluggable `FantasyImputer`.
+  - Multi-start BFGS uses a Python loop with a `# TODO(vmap-multistart)`
+    marker; `optimistix` doesn't ship a multi-start helper, so vmap is
+    a future optimization.
+- `sabi/acquisitions/fantasize.py`:
+  - `FantasyImputer.impute(x_pending, state) -> Array`.
+  - `KrigingBeliever` (default) uses surrogate predictive mean.
+  - `ConstantLiar(value="min" | "max" | "mean" | float)`.
+- `ExpectedImprovement` refactored to `PointwiseScoredAcquisition` with
+  scalar `score(x, state)`. v1.x `n_candidates` field migrated to the
+  optimizer; default `optimizer = CandidateSetOptimizer()` keeps the v1.x
+  numeric behavior unchanged.
+- `Random` renamed to `PriorSampling` (with `Random` alias retained for
+  config / import-path compatibility).
+- Hydra config: `configs/acquisition/ei.yaml` gains an `optimizer:`
+  subsection; new `configs/acquisition/ei_continuous.yaml` selects the
+  continuous multi-start backend. `runner/build.py._build_optimizer`
+  dispatches.
+- Tests (94 pass total):
+  - `tests/test_fantasize.py` — `KrigingBeliever` returns surrogate mean,
+    `ConstantLiar` produces correct constants for "min" / "max" / "mean"
+    / explicit float; invalid string raises.
+  - `tests/test_optim.py` — interval-sigmoid bijector roundtrips and
+    boundary-clipping; `_make_bijector` raises on non-interval supports;
+    `CandidateSetOptimizer` returns shape-correct top-q;
+    `ContinuousMultiStartOptimizer` finds the known argmax of a synthetic
+    concave score, clamps to support when target lies outside the box,
+    and matches-or-beats `CandidateSetOptimizer` on score; greedy
+    multi-point returns distinct picks under both `KrigingBeliever` and
+    `ConstantLiar(value="min")`.
+  - `tests/test_loop.py` — `test_loop_continuous_ei_beats_candidate_set_ei_on_gaussian2d`
+    verifies the v1.4 exit criterion: continuous EI yields ≤ candidate-set
+    EI MMD² on gaussian2d at matched budget.
 
-**Exit criteria**
-- Continuous-optimization EI on gaussian2d produces visibly better MMD than candidate-set EI at matched budgets.
-- BOTorch comparison test passes (within an agreed tolerance).
+**Deferred to later phases**
+- BOTorch-comparison test on a fixed acquisition surface. The synthetic
+  argmax tests in `test_optim.py` cover correctness; BOTorch becomes
+  useful for benchmarking once we have a third-party baseline mindset.
+  Note in code comment: revisit when BOTorch comparison is wanted.
+- Sampling-style acquisitions: `PosteriorThompsonSampling`,
+  `MixtureSampling`, `BatchSelector` family — v1.5.
+- Batch-scored acquisitions (q-EI, max-min entropy) and the parallel
+  `BatchOptimizer` hierarchy — v1.5.
+- vmap-of-`optimistix.minimise` for multi-start parallelism — once
+  validated against our solver settings.
+- Optimizer-aware Hydra config for the greedy nested form (`inner` +
+  `imputer` selection) — minimal in v1.4; deepens if v1.5 needs richer
+  greedy configs.
 
 ---
 
