@@ -1,22 +1,41 @@
-"""Neal's funnel posterior — a stress benchmark with no analytic posterior.
+r"""Neal's funnel posterior — a stress benchmark with no analytic posterior.
 
 Standard form (Radford Neal, 2003):
 
-    v ~ N(0, σ_v²)
-    x_i | v ~ N(0, exp(v))   for i = 1, ..., d
+.. math::
 
-The joint posterior over (v, x_1, ..., x_d) is highly anisotropic — the
-"funnel" geometry: tight neck at low v (variance ≈ exp(-9) ≈ 0.0001 for
-v = -9) opening to a fat bulb at high v (variance ≈ exp(9) ≈ 8100 for
-v = +9). MCMC diagnostics struggle without proper geometry-aware
-sampling; we run NUTS and accept what comes out within reason.
+    v &\sim \mathcal{N}(0, \sigma_v^2), \\
+    x_i \mid v &\sim \mathcal{N}(0, e^{v}), \quad i = 1, \dots, d.
 
-The reference distribution is generated via NUTS (`condition_on(target)`)
-and cached on disk. First call to `neals_funnel(...)` with a new
-parameter combination triggers regeneration (slow, ~minutes); subsequent
-calls load from the parquet artifact (fast).
+The joint log-density is
 
-Shapes: `input_shape=(d+1,)`, `output_shape=()`.
+.. math::
+
+    \log p(v, x) =
+        -\tfrac{1}{2} \frac{v^2}{\sigma_v^2}
+        - \tfrac{d v}{2}
+        - \tfrac{e^{-v}}{2} \sum_{i=1}^{d} x_i^2
+        + C,
+
+with constant :math:`C = -\tfrac{1}{2} \log(2\pi \sigma_v^2)
+- \tfrac{d}{2} \log(2\pi)`.
+
+The joint posterior over :math:`(v, x_1, \dots, x_d)` is highly
+anisotropic — the "funnel" geometry: tight neck at low :math:`v`
+(:math:`\mathrm{Var}(x_i \mid v=-9) = e^{-9} \approx 10^{-4}`) opening
+to a fat bulb at high :math:`v` (:math:`\mathrm{Var}(x_i \mid v=+9)
+= e^{9} \approx 8100`). MCMC diagnostics struggle without
+geometry-aware sampling; we run NUTS and accept what comes out within
+reason.
+
+The reference distribution is generated via NUTS
+(``condition_on(target)``) and cached on disk. First call to
+``neals_funnel(...)`` with a new parameter combination triggers
+regeneration (slow, minutes); subsequent calls load from the parquet
+artifact (fast).
+
+Shapes: ``input_shape=(d+1,)``, ``output_shape=()``. See
+``docs/notation.md`` for sabi's shape conventions.
 """
 
 from __future__ import annotations

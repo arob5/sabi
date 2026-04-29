@@ -1,17 +1,23 @@
-"""Maximum Mean Discrepancy (MMD) with an RBF kernel.
+r"""Maximum Mean Discrepancy (MMD) with an RBF kernel.
 
-We implement the unbiased U-statistic estimator of MMD² (Gretton et al., 2012):
+For samples :math:`X = \{x_1, \dots, x_m\}` and :math:`Y = \{y_1, \dots, y_n\}`
+with kernel :math:`k(x, y) = \exp\!\left(-\|x - y\|^2 / (2 h^2)\right)`,
+the unbiased U-statistic estimator of squared MMD (Gretton et al., 2012) is
 
-    MMD²_u = (1/(m(m-1))) Σ_{i≠j} k(xᵢ, xⱼ)
-           + (1/(n(n-1))) Σ_{i≠j} k(yᵢ, yⱼ)
-           - (2/(m n))    Σ_{i,j} k(xᵢ, yⱼ)
+.. math::
 
-Bandwidth defaults to the median heuristic on the pooled sample, which is the
-standard off-the-shelf choice for posterior-comparison MMD.
+    \widehat{\mathrm{MMD}}_u^2 =
+        \frac{1}{m(m-1)} \sum_{i \ne j} k(x_i, x_j)
+      + \frac{1}{n(n-1)} \sum_{i \ne j} k(y_i, y_j)
+      - \frac{2}{m n} \sum_{i, j} k(x_i, y_j).
 
-Note: the unbiased estimator can be slightly negative for finite samples. We
-return the raw value; callers that want a non-negative distance should take
-`sqrt(max(mmd2, 0))` explicitly.
+Bandwidth :math:`h` defaults to the median heuristic on the pooled sample
+:math:`X \cup Y` — the standard off-the-shelf choice for
+posterior-comparison MMD.
+
+Note: the unbiased estimator can be slightly negative for finite samples.
+We return the raw value; callers that want a non-negative distance should
+take ``sqrt(max(mmd2, 0))`` explicitly (or use :func:`mmd_rbf`).
 """
 
 from __future__ import annotations
@@ -28,10 +34,15 @@ def _pairwise_sq_dists(X: Array, Y: Array) -> Array:
 
 
 def median_heuristic_bandwidth(X: Array, Y: Array) -> Array:
-    """Median of pairwise distances across the pooled sample.
+    r"""Median of pairwise distances across the pooled sample.
 
-    Returns a scalar lengthscale `h` such that `k(x, y) = exp(-||x-y||² / (2 h²))`
-    uses the median pairwise Euclidean distance as its bandwidth.
+    .. math::
+
+        h = \mathrm{median}\big( \{ \|z_i - z_j\| : i \ne j \} \big),
+        \quad Z = X \cup Y.
+
+    Returns a scalar lengthscale :math:`h` for use in
+    :math:`k(x, y) = \exp\!\left(-\|x - y\|^2 / (2 h^2)\right)`.
     """
     Z = jnp.concatenate([X, Y], axis=0)
     sq = _pairwise_sq_dists(Z, Z)
@@ -44,12 +55,16 @@ def median_heuristic_bandwidth(X: Array, Y: Array) -> Array:
 
 
 def mmd2_unbiased(X: Array, Y: Array, bandwidth: float | Array | None = None) -> Array:
-    """Unbiased MMD² estimator with RBF kernel.
+    r"""Unbiased MMD² estimator with RBF kernel.
+
+    Computes :math:`\widehat{\mathrm{MMD}}_u^2(X, Y)` per the formula in
+    the module docstring, with :math:`k(x, y) = \exp(-\|x-y\|^2 / (2 h^2))`.
 
     Args:
-        X, Y: (m, d) and (n, d) sample arrays.
-        bandwidth: kernel bandwidth `h` (RBF: k(x,y) = exp(-||x-y||²/(2 h²))).
-            If None, uses the median heuristic.
+        X: shape ``(m, d)`` sample array.
+        Y: shape ``(n, d)`` sample array.
+        bandwidth: kernel bandwidth :math:`h`. If ``None``, uses the
+            median heuristic (:func:`median_heuristic_bandwidth`).
 
     Returns:
         Scalar MMD² estimate (may be slightly negative for finite samples).
@@ -78,5 +93,5 @@ def mmd2_unbiased(X: Array, Y: Array, bandwidth: float | Array | None = None) ->
 
 
 def mmd_rbf(X: Array, Y: Array, bandwidth: float | Array | None = None) -> Array:
-    """Non-negative MMD distance = sqrt(max(mmd², 0))."""
+    r"""Non-negative MMD distance: :math:`\sqrt{\max(\widehat{\mathrm{MMD}}_u^2, 0)}`."""
     return jnp.sqrt(jnp.maximum(mmd2_unbiased(X, Y, bandwidth=bandwidth), 0.0))

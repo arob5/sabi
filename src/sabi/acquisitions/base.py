@@ -23,6 +23,9 @@ The acquisition sees the current `SurrogatePosterior` (carrying the
 round's surrogate and log-density form) plus an `AcquisitionState`
 bundling the design data and tempering state. See the
 `PointwiseScoredAcquisition` docstring for the scoring contract.
+
+Shape and symbol conventions (`x`, `X`, `Y`, `q`, `n`, etc.) follow
+``docs/notation.md``.
 """
 
 from __future__ import annotations

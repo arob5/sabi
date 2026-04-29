@@ -1,37 +1,59 @@
-"""Pushforward dispatch on `(input_dist, log_density_form)`.
+r"""Pushforward dispatch on ``(input_dist, log_density_form)``.
 
-`pushforward_marginal(input_dist, form, X=X, prior=prior)` is the central
-entry point: given a `Distribution[Array]` describing a surrogate's
-predictive at a batch of query points (univariate marginals, joint over
-inputs, joint over outputs, or any combination per ProbPipe's
-`ArrayRandomFunction` shape table), and a `LogDensityForm`, return a new
-`Distribution[Array]` representing the marginal random log-density at
-those query points.
+``pushforward_marginal(input_dist, form, X=X, prior=prior)`` is the
+central entry point: given a ``Distribution[Array]`` describing a
+surrogate's predictive at a batch of query points (univariate marginals,
+joint over inputs, joint over outputs, or any combination per ProbPipe's
+``ArrayRandomFunction`` shape table), and a ``LogDensityForm``, return a
+new ``Distribution[Array]`` representing the marginal random log-density
+at those query points.
+
+For an input distribution :math:`F(x)` (the surrogate's predictive at
+:math:`x`) and a form :math:`\Phi`, the marginal random log-density at
+:math:`x` is
+
+.. math::
+
+    \tilde{p}(x) = \Phi(x, F(x); \text{prior}).
+
+Closed-form Gaussian-affine case. For
+:math:`F(x) \sim \mathcal{N}(\mu(x), \sigma^2(x))` and an affine form
+:math:`\Phi(x, y; \cdot) = y + s(x)`, the pushforward is again Gaussian:
+
+.. math::
+
+    \tilde{p}(x) \sim \mathcal{N}\!\big(\mu(x) + s(x), \sigma^2(x)\big).
+
+The two affine forms supported are :math:`\Phi = \mathrm{Identity}`
+(with :math:`s(x) = 0`) and :math:`\Phi = \mathrm{LogLikPlusPrior}`
+(with :math:`s(x) = \log p(x)`).
 
 Dispatch (in order):
 
-1. **Closed-form Gaussian-affine.** `(Normal | MultivariateNormal,
-   Identity | LogLikPlusPrior)` — affine in the input distribution; shift
-   `loc` by the form's contribution, leave scale / scale_tril unchanged.
-2. **MC fallback.** `isinstance(input_dist, SupportsSampling)` — call
-   the `@workflow_function`-wrapped batched form `_batch_form` with
-   `ys=input_dist`. The Monte Carlo pushforward is *what ProbPipe's
-   broadcasting does* when a workflow-wrapped function gets a Distribution
-   in a non-Distribution-typed slot: samples `ys ~ input_dist`, runs the
-   wrapped function per sample (vmap when JAX-traceable, Python loop
-   otherwise), and returns a `NumericEmpiricalDistribution` of the
-   resulting joint log-density vectors. There's no separate "MC
-   pushforward" abstraction in sabi — `_batch_form` is just a vectorized
-   form that becomes a pushforward as a side effect of being broadcast.
-3. **Otherwise raise.** Names the input-distribution type and form type;
-   points to the partial-pushforward primitive in `docs/probpipe_issues.md`.
+1. **Closed-form Gaussian-affine.** ``(Normal | MultivariateNormal,
+   Identity | LogLikPlusPrior)`` — shift ``loc`` by :math:`s(X)`, leave
+   ``scale`` / ``scale_tril`` unchanged.
+2. **MC fallback.** ``isinstance(input_dist, SupportsSampling)`` — call
+   the ``@workflow_function``-wrapped batched form ``_batch_form`` with
+   ``ys=input_dist``. The Monte Carlo pushforward is *what ProbPipe's
+   broadcasting does* when a workflow-wrapped function gets a
+   Distribution in a non-Distribution-typed slot: samples
+   ``ys ~ input_dist``, runs the wrapped function per sample (vmap when
+   JAX-traceable, Python loop otherwise), and returns a
+   ``NumericEmpiricalDistribution`` of the resulting joint log-density
+   vectors. There's no separate "MC pushforward" abstraction in sabi —
+   ``_batch_form`` is just a vectorized form that becomes a pushforward
+   as a side effect of being broadcast.
+3. **Otherwise raise.** Names the input-distribution type and form
+   type; points to the partial-pushforward primitive in
+   ``docs/probpipe_issues.md``.
 
 The function is agnostic to whether the input distribution's
-multivariate-ness comes from joint-inputs (`event_shape` is the n axis),
-joint-outputs (`event_shape` is the output axis), or just batched
-marginals (`batch_shape` is the n axis). The closed-form case adds the
-shift to `loc` regardless; the MC case lets ProbPipe broadcasting handle
-the shape semantics natively.
+multivariate-ness comes from joint-inputs (``event_shape`` is the n
+axis), joint-outputs (``event_shape`` is the output axis), or just
+batched marginals (``batch_shape`` is the n axis). The closed-form case
+adds the shift to ``loc`` regardless; the MC case lets ProbPipe
+broadcasting handle the shape semantics natively.
 """
 
 from __future__ import annotations

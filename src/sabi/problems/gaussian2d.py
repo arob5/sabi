@@ -1,14 +1,24 @@
-"""2-D Gaussian posterior — analytic reference.
+r"""2-D Gaussian posterior — analytic reference.
 
-Target is a 2-D Gaussian with user-specified mean and covariance.
-`target_function` routes through the ProbPipe `MultivariateNormal`'s
-`log_prob`, so the analytic posterior IS the `reference_distribution`
+Target is a 2-D Gaussian :math:`\mathcal{N}(\mu, \Sigma)` with user-specified
+mean and covariance:
+
+.. math::
+
+    \log p(x) = -\tfrac{1}{2} (x - \mu)^\top \Sigma^{-1} (x - \mu)
+                - \tfrac{1}{2} \log\!\big((2\pi)^2 |\Sigma|\big),
+    \quad x \in \mathbb{R}^2.
+
+``target_function`` routes through the ProbPipe ``MultivariateNormal``'s
+``log_prob``, so the analytic posterior IS the ``reference_distribution``
 (the same ProbPipe object), exercising the abstractions end-to-end.
 
-Shapes: `input_shape=(2,)`, `output_shape=()` (scalar log-density).
+Shapes: ``input_shape=(2,)``, ``output_shape=()`` (scalar log-density). See
+``docs/notation.md`` for sabi's shape conventions.
 
-The `prior` field doubles as the design distribution for initial-design /
-random acquisition (`Uniform` over a symmetric box around the mean).
+The ``prior`` field doubles as the design distribution for initial-design /
+random acquisition: ``Uniform`` over a symmetric box
+:math:`[\mu - r, \mu + r]^2` for ``bounds_radius`` :math:`r`.
 """
 
 from __future__ import annotations

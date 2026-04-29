@@ -78,10 +78,21 @@ class KrigingBeliever(FantasyImputer):
 
 @dataclass(frozen=True)
 class ConstantLiar(FantasyImputer):
-    """Use a constant value (per pending point) as the imputed y.
+    r"""Use a constant value (per pending point) as the imputed y.
+
+    .. math::
+
+        y_{\text{pending}} = c,
+        \quad c \in \{ \min Y, \max Y, \overline{Y}, \text{user-supplied} \}.
+
+    The constant is broadcast across all pending points (no spatial
+    dependence). After refitting the surrogate on
+    :math:`(X \cup x_{\text{pending}}, Y \cup c\mathbf{1})`, the next
+    score call sees a posterior that has been "informed" of pending picks
+    via the lie.
 
     Args:
-        value: ``"min"`` / ``"max"`` / ``"mean"`` of `state.Y`, or a fixed
+        value: ``"min"`` / ``"max"`` / ``"mean"`` of ``state.Y``, or a fixed
             float. ``"min"`` (pessimistic) discourages re-picking nearby
             points (drives exploration); ``"max"`` (optimistic) encourages
             it (drives exploitation).

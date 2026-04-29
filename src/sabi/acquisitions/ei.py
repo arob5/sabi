@@ -25,6 +25,9 @@ predictive at each query point. Concretely the score requires
 `MultivariateNormal` do this by construction). See the
 `PointwiseScoredAcquisition` base docstring for the full contract on
 moment availability and JAX-traceability.
+
+Symbols (:math:`x`, :math:`f^*`, :math:`\mu`, :math:`\sigma`) follow
+``docs/notation.md``.
 """
 
 from __future__ import annotations

@@ -1,18 +1,33 @@
-"""Rosenbrock "banana" posterior — analytic marginals via change-of-variables.
+r"""Rosenbrock "banana" posterior — analytic marginals via change-of-variables.
 
 Standard 2-D benchmark:
-    log p(x) ∝ -0.5 * (x₁² / a² + b * (x₂ + x₁² - a²)²)
 
-With z = x₂ + x₁² - a², the posterior factors as
-(x₁, z) ~ N(0, a²) × N(0, 1/b), so exact reference samples come for free.
-We pre-compute a sample bank and wrap it in a ProbPipe
-`NumericEmpiricalDistribution` as the reference.
+.. math::
 
-`target_function` keeps the inline analytic log-density — no clean ProbPipe
-distribution describes a banana directly. Expressing the banana posterior
-as a `TransformedDistribution(Normal(...), Bijector)` is a v1.5+ exercise.
+    \log p(x) = -\tfrac{1}{2}\!\left(\frac{x_1^2}{a^2}
+                + b \,(x_2 + x_1^2 - a^2)^2\right) + C,
 
-Shapes: `input_shape=(2,)`, `output_shape=()` (scalar log-density).
+with normalizer :math:`C = -\log(2\pi) - \log a + \tfrac{1}{2} \log b`.
+
+Under the change of variables :math:`z = x_2 + x_1^2 - a^2`, the joint
+factors as
+
+.. math::
+
+    (x_1, z) \sim \mathcal{N}(0, a^2) \times \mathcal{N}(0, 1/b),
+
+so exact reference samples come for free: draw
+:math:`(x_1, z)` from the factored Gaussian and recover
+:math:`x_2 = z - x_1^2 + a^2`. We pre-compute a sample bank and wrap it
+in a ProbPipe ``NumericEmpiricalDistribution`` as the reference.
+
+``target_function`` keeps the inline analytic log-density — no clean
+ProbPipe distribution describes a banana directly. Expressing the banana
+posterior as a ``TransformedDistribution(Normal(...), Bijector)`` is a
+v1.5+ exercise.
+
+Shapes: ``input_shape=(2,)``, ``output_shape=()`` (scalar log-density). See
+``docs/notation.md`` for sabi's shape conventions.
 """
 
 from __future__ import annotations
