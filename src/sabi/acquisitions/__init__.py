@@ -15,7 +15,7 @@ from sabi.acquisitions.optim import (
     GreedyMultiPointOptimizer,
     PointwiseOptimizer,
 )
-from sabi.acquisitions.random import PriorSampling, Random
+from sabi.acquisitions.random import PriorSampling
 
 __all__ = [
     "Acquisition",
@@ -30,5 +30,4 @@ __all__ = [
     "PointwiseOptimizer",
     "PointwiseScoredAcquisition",
     "PriorSampling",
-    "Random",
 ]

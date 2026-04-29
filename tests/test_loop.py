@@ -10,7 +10,7 @@ from sabi.acquisitions.optim import (
     CandidateSetOptimizer,
     ContinuousMultiStartOptimizer,
 )
-from sabi.acquisitions.random import Random
+from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms.loop import (
     Algorithm,
     gp_pushforward_factory,
@@ -40,9 +40,9 @@ def _algorithm(
     )
 
 
-def test_loop_runs_on_gaussian2d_with_random_acq():
+def test_loop_runs_on_gaussian2d_with_prior_sampling_acq():
     problem = gaussian2d()
-    alg = _algorithm(Random(), n_rounds=4)
+    alg = _algorithm(PriorSampling(), n_rounds=4)
     result = run(problem, alg, jax.random.key(0))
     assert result.X.shape == (16 + 4,) + problem.input_shape
     assert len(result.per_round_metrics) == 4
@@ -72,7 +72,7 @@ def test_loop_grows_dataset_and_records_metrics():
 
 def test_loop_with_no_metrics_skips_estimator():
     problem = gaussian2d()
-    alg = _algorithm(Random(), n_rounds=2, metrics=())
+    alg = _algorithm(PriorSampling(), n_rounds=2, metrics=())
     result = run(problem, alg, jax.random.key(4))
     assert result.final_metrics == {}
     for row in result.per_round_metrics:
@@ -85,7 +85,7 @@ def test_loop_with_weighted_empirical_baseline():
     SupportsSampling, so ReferenceMMD runs end-to-end."""
     problem = gaussian2d()
     alg = _algorithm(
-        Random(),
+        PriorSampling(),
         n_rounds=3,
         surrogate_posterior_factory=weighted_empirical_factory,
     )

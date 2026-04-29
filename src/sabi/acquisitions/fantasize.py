@@ -43,14 +43,36 @@ class FantasyImputer(ABC):
 
 @dataclass(frozen=True)
 class KrigingBeliever(FantasyImputer):
-    """Use the surrogate's predictive mean at `x_pending` as the imputed y.
+    r"""Use the surrogate's predictive mean at `x_pending` as the imputed y.
+
+    .. math::
+
+        y_{\text{pending}} = \mathbb{E}_f[f(x_{\text{pending}})] = \mu(x_{\text{pending}})
 
     Conservative: the optimizer "believes" the surrogate is right at the
     pending points. Standard default for greedy multi-point BO.
+
+    **Caveat for non-GP / hyperparameter-refit surrogates.** For a GP
+    with **fixed** hyperparameters, kriging-believer imputation has a
+    special property: refitting the GP on data points whose `y` values
+    match the predictive mean leaves the predictive mean unchanged —
+    only the predictive variance shrinks. So the next pick's score
+    sees the same `mu` but tighter `sigma`, and greedy diversity comes
+    entirely from variance reduction. **This property does not hold**
+    for GPs with hyperparameters re-estimated between picks (sabi's
+    GreedyMultiPointOptimizer triggers this via ``surrogate.fit``)
+    nor for non-Gaussian surrogates. The implementation here is general:
+    it refits the surrogate each greedy step and the predictive mean may
+    shift between picks.
     """
 
     def impute(self, x_pending: Array, state: AcquisitionState) -> Array:
-        pred = state.surrogate(x_pending)
+        if state.surrogate_posterior is None:
+            raise ValueError(
+                "KrigingBeliever requires AcquisitionState.surrogate_posterior "
+                "to be non-None."
+            )
+        pred = state.surrogate_posterior.surrogate(x_pending)
         return jnp.asarray(mean(pred))
 
 

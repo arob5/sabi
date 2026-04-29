@@ -12,6 +12,7 @@ from sabi.acquisitions.fantasize import (
     ConstantLiar,
     KrigingBeliever,
 )
+from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.surrogates.gp import GPSurrogate
 
@@ -25,12 +26,18 @@ def _state(n: int = 20, seed: int = 0):
     )
     Y = jax.vmap(problem.target_function)(X)
     surrogate = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
+    sp = SurrogatePosterior(
+        surrogate=surrogate,
+        log_density_form=problem.log_density_form,
+        support=problem.support,
+        input_shape=problem.input_shape,
+        prior=problem.prior,
+    )
     return AcquisitionState(
         problem=problem,
-        surrogate=surrogate,
+        surrogate_posterior=sp,
         X=X,
         Y=Y,
-        current_form=problem.log_density_form,
         tempering_state=None,
     )
 
@@ -41,7 +48,7 @@ def test_kriging_believer_returns_predictive_mean():
 
     imputer = KrigingBeliever()
     y = imputer.impute(x_pending, state)
-    expected = jnp.asarray(mean(state.surrogate(x_pending)))
+    expected = jnp.asarray(mean(state.surrogate_posterior.surrogate(x_pending)))
     assert jnp.allclose(y, expected, atol=1e-5)
     assert y.shape == (2,) + state.problem.output_shape
 

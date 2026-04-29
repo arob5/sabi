@@ -1,5 +1,5 @@
 name: ei
-xi: 0.0
+offset: 0.0
 best_from: data
 optimizer:
   name: candidate_set

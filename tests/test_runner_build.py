@@ -19,7 +19,7 @@ def _cfg(with_metric=True):
             "bounds_radius": 5.0,
         },
         "surrogate": {"name": "gp"},
-        "acquisition": {"name": "random"},
+        "acquisition": {"name": "prior_sampling"},
         "algorithm": {"n_initial": 4, "n_rounds": 2, "q": 1},
         "seed": 0,
     }

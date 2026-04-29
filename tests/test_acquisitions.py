@@ -5,8 +5,9 @@ from probpipe import mean
 from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.optim import CandidateSetOptimizer
-from sabi.acquisitions.random import Random
+from sabi.acquisitions.random import PriorSampling
 from sabi.initial_designs.base import sample_initial
+from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.surrogates.gp import GPSurrogate
 
@@ -18,20 +19,26 @@ def _state(problem, key_seed=0, n=20):
     X = sample_initial(problem, jax.random.key(key_seed), n)
     Y = jax.vmap(problem.target_function)(X)
     gp = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
+    sp = SurrogatePosterior(
+        surrogate=gp,
+        log_density_form=problem.log_density_form,
+        support=problem.support,
+        input_shape=problem.input_shape,
+        prior=problem.prior,
+    )
     return AcquisitionState(
         problem=problem,
-        surrogate=gp,
+        surrogate_posterior=sp,
         X=X,
         Y=Y,
-        current_form=problem.log_density_form,
         tempering_state=None,
     )
 
 
-def test_random_acquisition_shape_and_bounds():
+def test_prior_sampling_acquisition_shape_and_bounds():
     problem = gaussian2d()
     state = _state(problem)
-    batch = Random().select_batch(state, q=4, key=jax.random.key(7))
+    batch = PriorSampling().select_batch(state, q=4, key=jax.random.key(7))
     assert batch.shape == (4,) + problem.input_shape
     # support is interval(low, high) per element; check membership
     assert jnp.all(jnp.asarray(problem.support.check(batch)))
@@ -55,10 +62,11 @@ def test_ei_picks_points_with_higher_surrogate_mean_than_random():
     ei_batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=4096)).select_batch(
         state, q=16, key=jax.random.key(2)
     )
-    random_batch = Random().select_batch(state, q=16, key=jax.random.key(3))
+    random_batch = PriorSampling().select_batch(state, q=16, key=jax.random.key(3))
 
-    ei_pred = state.surrogate(ei_batch)
-    rand_pred = state.surrogate(random_batch)
+    surrogate = state.surrogate_posterior.surrogate
+    ei_pred = surrogate(ei_batch)
+    rand_pred = surrogate(random_batch)
 
     ei_mean = jnp.asarray(mean(ei_pred))
     rand_mean = jnp.asarray(mean(rand_pred))
@@ -75,7 +83,7 @@ def test_ei_average_best_beats_random_average_best_across_seeds():
         ei_batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=2048)).select_batch(
             state, q=8, key=jax.random.key(100 + seed)
         )
-        rand_batch = Random().select_batch(state, q=8, key=jax.random.key(200 + seed))
+        rand_batch = PriorSampling().select_batch(state, q=8, key=jax.random.key(200 + seed))
         ei_bests.append(float(jnp.max(jax.vmap(problem.target_function)(ei_batch))))
         rand_bests.append(float(jnp.max(jax.vmap(problem.target_function)(rand_batch))))
     assert sum(ei_bests) / len(ei_bests) > sum(rand_bests) / len(rand_bests)

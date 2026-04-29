@@ -16,8 +16,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import pytest
-from probpipe import mean
-from probpipe.core.constraints import positive
+from probpipe.core.constraints import interval, positive
 
 from sabi.acquisitions.base import AcquisitionState, PointwiseScoredAcquisition
 from sabi.acquisitions.ei import ExpectedImprovement
@@ -26,9 +25,9 @@ from sabi.acquisitions.optim import (
     CandidateSetOptimizer,
     ContinuousMultiStartOptimizer,
     GreedyMultiPointOptimizer,
-    _IntervalSigmoidBijector,
     _make_bijector,
 )
+from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.surrogates.gp import GPSurrogate
 
@@ -47,28 +46,35 @@ def _state(n: int = 30, seed: int = 0):
     )
     Y = jax.vmap(problem.target_function)(X)
     surrogate = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
+    sp = SurrogatePosterior(
+        surrogate=surrogate,
+        log_density_form=problem.log_density_form,
+        support=problem.support,
+        input_shape=problem.input_shape,
+        prior=problem.prior,
+    )
     return AcquisitionState(
         problem=problem,
-        surrogate=surrogate,
+        surrogate_posterior=sp,
         X=X,
         Y=Y,
-        current_form=problem.log_density_form,
         tempering_state=None,
     )
 
 
 class _ConcaveScore(PointwiseScoredAcquisition):
-    """Test acquisition: score(x) = -‖x - target‖² + offset.
+    """Test acquisition: score(x) = -‖x - target‖².
 
     Known argmax at `target`; a global concave bowl. Used to verify that
-    `ContinuousMultiStartOptimizer` actually finds the argmax.
+    `ContinuousMultiStartOptimizer` actually finds the argmax. Uses
+    `_score_single` so the default vmapped `score` handles batching.
     """
 
     def __init__(self, target: jax.Array, optimizer):
         object.__setattr__(self, "target", jnp.asarray(target))
         object.__setattr__(self, "optimizer", optimizer)
 
-    def score(self, x, state):
+    def _score_single(self, x, state):
         return -jnp.sum((x - self.target) ** 2)
 
 
@@ -77,20 +83,20 @@ class _ConcaveScore(PointwiseScoredAcquisition):
 # -------------------------------------------------------------------------
 
 
-def test_interval_sigmoid_bijector_roundtrips():
+def test_make_bijector_interval_roundtrips():
     low = jnp.asarray([-3.0, -2.0])
     high = jnp.asarray([5.0, 4.0])
-    bij = _IntervalSigmoidBijector(low=low, high=high)
+    bij = _make_bijector(interval(low, high))
     x = jnp.asarray([1.0, 0.5])
     u = bij.inverse(x)
     x_back = bij.forward(u)
     assert jnp.allclose(x_back, x, atol=1e-5)
 
 
-def test_interval_sigmoid_bijector_forward_lands_in_bounds():
+def test_make_bijector_interval_forward_lands_in_bounds():
     low = jnp.asarray([-1.0, -1.0])
     high = jnp.asarray([1.0, 1.0])
-    bij = _IntervalSigmoidBijector(low=low, high=high)
+    bij = _make_bijector(interval(low, high))
     # Extreme unconstrained values map into the interior of the box.
     extreme = jnp.asarray([100.0, -100.0])
     x = bij.forward(extreme)
@@ -192,7 +198,7 @@ def test_continuous_multistart_finds_higher_score_than_candidate_set():
     cs_pick = cs.optimize(acq_cs, state, q=1, key=jax.random.key(20))[0]
     cm_pick = cm.optimize(acq_cm, state, q=1, key=jax.random.key(20))[0]
 
-    cs_score = float(acq_cs.score(cs_pick, state))
-    cm_score = float(acq_cm.score(cm_pick, state))
+    cs_score = float(acq_cs.score(cs_pick[None], state)[0])
+    cm_score = float(acq_cm.score(cm_pick[None], state)[0])
     # Continuous refinement should push closer to the target.
     assert cm_score >= cs_score - 1e-6

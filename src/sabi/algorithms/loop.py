@@ -248,12 +248,27 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         )
 
         key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
-        acq_state = AcquisitionState(
-            problem=problem,
+        # Pre-acquisition SP wraps the current surrogate + form. For
+        # WeightedEmpiricalRandomMeasure factories this isn't a
+        # SurrogatePosterior; we set `surrogate_posterior=None` in that
+        # case, and acquisitions that need a surrogate raise.
+        pre_round_posterior = _build_surrogate_posterior(
+            algorithm.surrogate_posterior_factory,
             surrogate=surrogate,
             X=X,
             Y=Y,
-            current_form=current_form,
+            log_density_form=current_form,
+            problem=problem,
+        )
+        acq_state = AcquisitionState(
+            problem=problem,
+            surrogate_posterior=(
+                pre_round_posterior
+                if isinstance(pre_round_posterior, SurrogatePosterior)
+                else None
+            ),
+            X=X,
+            Y=Y,
             tempering_state=tempering_state,
         )
         x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key_acq)

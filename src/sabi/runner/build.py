@@ -17,7 +17,7 @@ from sabi.acquisitions.optim import (
     GreedyMultiPointOptimizer,
     PointwiseOptimizer,
 )
-from sabi.acquisitions.random import Random
+from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms.loop import (
     Algorithm,
     SurrogatePosteriorFactory,
@@ -105,12 +105,12 @@ def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
 
 def _build_acquisition(cfg: DictConfig) -> Acquisition:
     name = cfg.name
-    if name == "random":
-        return Random()
+    if name == "prior_sampling":
+        return PriorSampling()
     if name == "ei":
         return ExpectedImprovement(
             optimizer=_build_optimizer(cfg.get("optimizer", None)),
-            xi=float(cfg.get("xi", 0.0)),
+            offset=float(cfg.get("offset", cfg.get("xi", 0.0))),
             best_from=str(cfg.get("best_from", "data")),
         )
     raise ValueError(f"Unknown acquisition.name={name!r}.")

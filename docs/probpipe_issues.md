@@ -85,15 +85,42 @@ This forces every sabi call site to wrap with `jnp.asarray(record)` (or use `jnp
 
 ## No `Constraint` → TFP bijector registry
 
-**Status:** open (low-priority; not a v1.1 blocker).
+**Status:** open. Sabi v1.4 hits this directly in
+`ContinuousMultiStartOptimizer`'s reparameterization step.
 
-**Sabi context.** sabi v1.3+ benchmarks may have non-trivial supports (positive parameters, simplex). Ideally one writes `support = positive` and gets uniform-in-support sampling for free.
+**Sabi context.** sabi v1.4 adds `ContinuousMultiStartOptimizer`, which runs
+BFGS in unconstrained ℝ^d coordinates and forward-maps back to the support
+via a TFP bijector. The bijector itself comes from TFP — what's missing in
+ProbPipe is the dispatch from a `Constraint` (the support) to the canonical
+bijector for that constraint. v1.3+ benchmarks may also pick up non-box
+supports (positive parameters, simplex) which the same mapping would unlock.
 
-**What we observed.** ProbPipe ships `TransformedDistribution(base, bijector)` and a small `_BIJECTOR_SUPPORT_MAP` that goes the other direction (bijector class → output `Constraint`). There's no inverse mapping — given a `Constraint`, you have to manually pick the bijector and base distribution.
+**What we observed.** ProbPipe ships `TransformedDistribution(base, bijector)`
+and a small `_BIJECTOR_SUPPORT_MAP` that goes the other direction (bijector
+class → output `Constraint`). There's no inverse mapping — given a
+`Constraint`, callers have to manually pick the bijector. Sabi v1.4
+hard-codes the dispatch in `sabi/acquisitions/optim.py::_make_bijector`:
+`_Interval(low, high) → tfb.Sigmoid(low, high)`, with `NotImplementedError`
+for everything else. That dispatch is the gap — there's no good place for
+it inside ProbPipe today, so each consumer reinvents it.
 
-**Why it matters for sabi.** v1.1's benchmarks (`gaussian2d`, `banana`) have bounded-box supports that are sampled trivially via `Uniform(low, high)`, so this isn't a current blocker. Becomes relevant when we add benchmarks with non-product / non-box constraints.
+**Why it matters for sabi.** v1.4's benchmarks (`gaussian2d`, `banana`,
+`neals_funnel`) all have bounded-box supports, so today's `_make_bijector`
+covers them. The moment we add a benchmark with `positive` /
+`simplex` / `unit_interval` / etc., we have to extend sabi's local table.
+A ProbPipe-side `bijector_for(constraint) -> Bijector` op (or a
+`Constraint.default_bijector()` method) would absorb this growth.
 
-**What we'd want.** A `Constraint.bijector()` method or a `bijector_for(constraint) -> Bijector` op that returns a canonical bijector mapping ℝ^d → support, mirroring the registry that already exists in the reverse direction.
+**What we'd want.** A `bijector_for(constraint) -> tfb.Bijector` op (or
+equivalent `Constraint.default_bijector()` method) that returns a canonical
+bijector mapping ℝ^d → support, mirroring the existing reverse registry.
+Initial coverage: `_Interval` → `Sigmoid(low, high)`, `_Positive` →
+`Exp` (or `Softplus`), `_Simplex` → `SoftmaxCentered`, `_Real` → `Identity`.
+Custom constraints register via the same mechanism.
+
+**Workaround for v1.4.** `sabi/acquisitions/optim.py::_make_bijector`
+holds the dispatch locally; non-interval constraints raise with a pointer
+to this entry.
 
 ---
 
