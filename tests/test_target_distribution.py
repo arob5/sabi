@@ -1,7 +1,7 @@
 """Tests for `TargetDistribution`.
 
 Coverage:
-- Construction via `from_target_single` and the explicit constructor.
+- Construction (single-point callable; batched view derived via `jax.vmap`).
 - `_unnormalized_log_prob` accepts both single-point and batched input.
 - Distribution-protocol satisfaction (`SupportsUnnormalizedLogProb`).
 - `condition_on(target)` dispatches to NUTS (smoke).
@@ -35,7 +35,7 @@ def _box_prior():
 
 
 def _gaussian_target() -> TargetDistribution:
-    return TargetDistribution.from_target_single(
+    return TargetDistribution(
         target_single=_gaussian_target_single,
         name="quadratic_test",
         input_shape=(2,),
@@ -45,7 +45,7 @@ def _gaussian_target() -> TargetDistribution:
     )
 
 
-def test_from_target_single_constructs_batched_via_vmap():
+def test_target_function_derived_via_vmap():
     td = _gaussian_target()
     X = jnp.asarray([[0.0, 0.0], [1.0, -1.0], [2.0, 0.5]])
     Y_batched = td.target_function(X)
@@ -95,7 +95,7 @@ def test_log_lik_plus_prior_form_uses_prior():
     """With LogLikPlusPrior + multivariate-event Uniform prior on a
     box, log p = -0.5*x^2 + log_prior(x)."""
     prior = _box_prior()
-    td = TargetDistribution.from_target_single(
+    td = TargetDistribution(
         target_single=_gaussian_target_single,
         name="quadratic_with_prior",
         input_shape=(2,),

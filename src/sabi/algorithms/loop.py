@@ -130,22 +130,26 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     # support raise where they need it, not here).
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
+    # Round 0: initial-design round. Draw n_initial points, evaluate
+    # target, fit emulator at the schedule's round-0 state.
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
     Y_raw = problem.target_function(X)
 
-    # Build the round-0 intermediate to derive the initial Y_train.
-    state_0, _ = algorithm.schedule.next(0, None)
+    state_0, _ = algorithm.schedule.at(0)
     target_0 = algorithm.tempering_scheme.intermediate_target(target, state_0)
     Y_train = target_0.output_transform(state_0, X, Y_raw)
 
-    tempering_states: list[Any] = []
+    tempering_states: list[Any] = [state_0]
     per_round_metrics: list[dict[str, Any]] = []
 
     emulator = algorithm.emulator_factory()
     emulator = emulator.fit(X, Y_train)
 
-    for round_idx in range(algorithm.n_rounds):
-        current_state, _final = algorithm.schedule.next(round_idx, None)
+    # Loop body: rounds 1 through n_rounds-1 inclusive — the
+    # acquisition rounds. Each round adds q evaluations chosen by the
+    # acquisition.
+    for round_idx in range(1, algorithm.n_rounds):
+        current_state, _is_terminal_state = algorithm.schedule.at(round_idx)
         target_state = resolve_state(
             algorithm.acquisition_target,
             algorithm.schedule,
@@ -155,18 +159,15 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         current_intermediate = algorithm.tempering_scheme.intermediate_target(
             target, current_state
         )
-        # Acquisition's intermediate may live at a different state.
-        # Reuse current_intermediate when target_state == current_state
-        # (both invariance flags trivially hold).
-        target_invariant = (
-            algorithm.tempering_scheme.is_invariant_target_function(
-                current_state, target_state
-            )
-            and algorithm.tempering_scheme.is_invariant_form(
-                current_state, target_state
-            )
+        # Per-axis invariance between the round's state and the
+        # acquisition's target state.
+        invariance = algorithm.tempering_scheme.invariance(
+            current_state, target_state
         )
-        if target_invariant:
+
+        # Acquisition's intermediate may live at a different state.
+        # Reuse current_intermediate when both axes are invariant.
+        if invariance.both:
             target_intermediate = current_intermediate
         else:
             target_intermediate = algorithm.tempering_scheme.intermediate_target(
@@ -175,12 +176,9 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
         # Y_train and emulator the acquisition sees: derived at
         # target_state. If target_state's training data differs from
-        # current's (or the emulator hasn't been fit at this state
-        # yet), refit. Step 5 (issue #4) will replace this with a
+        # current's, refit. Step 5 (issue #4) will replace this with a
         # cheap-update dispatch.
-        if algorithm.tempering_scheme.is_invariant_target_function(
-            current_state, target_state
-        ):
+        if invariance.target_function:
             Y_train_for_acq = Y_train
             emulator_for_acq = emulator
         else:

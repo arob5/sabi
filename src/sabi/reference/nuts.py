@@ -157,8 +157,8 @@ def generate_via_nuts(
     `target_function` is the **single-point** target callable (shape
     ``input_shape -> output_shape``) — that's what NUTS evaluates
     pointwise. The function builds a `TargetDistribution` from this
-    via `from_target_single` (which `jax.vmap`s for the batched view)
-    and feeds it directly to `condition_on`. Default
+    (the constructor `jax.vmap`s the single-point callable for the
+    batched view) and feeds it directly to `condition_on`. Default
     ``output_shape=()`` corresponds to the log-density-emulation case;
     set explicitly for forward-model targets.
 
@@ -171,7 +171,7 @@ def generate_via_nuts(
         post-warmup draws, and `diagnostics` carries R-hat / ESS /
         divergence counts.
     """
-    target = TargetDistribution.from_target_single(
+    target = TargetDistribution(
         target_single=target_function,
         name=name or "reference_target",
         input_shape=input_shape,

@@ -91,7 +91,7 @@ def resolve_state(
     acquisition's `SurrogatePosterior` should be built at:
 
     - `CURRENT`: returns `current_state` (the round's state).
-    - `NEXT`: returns `schedule.next(round_idx + 1, None)[0]`. Built-in
+    - `NEXT`: returns `schedule.at(round_idx + 1)[0]`. Built-in
       schedules clamp at the terminal state past the end.
     - `TERMINAL`: returns `schedule.terminal_state()`.
 
@@ -102,7 +102,7 @@ def resolve_state(
     if acquisition_target == AcquisitionTarget.CURRENT:
         return current_state
     if acquisition_target == AcquisitionTarget.NEXT:
-        next_state, _ = schedule.next(round_idx + 1, None)
+        next_state, _ = schedule.at(round_idx + 1)
         return next_state
     if acquisition_target == AcquisitionTarget.TERMINAL:
         return schedule.terminal_state()

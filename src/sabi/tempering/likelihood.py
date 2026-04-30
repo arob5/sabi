@@ -168,8 +168,7 @@ class LikelihoodTemperingViaForm(TemperingScheme):
             name=base.name,
             input_shape=base.input_shape,
             output_shape=base.output_shape,
-            target_function=base.target_function,  # f unchanged
-            target_single=base.target_single,
+            target_single=base.target_single,  # f unchanged
             log_density_form=tempered_form,
             state=state,
             output_transform=_identity_output_transform,
@@ -232,9 +231,6 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
         base_target_function = base.target_function
         base_target_single = base.target_single
 
-        def tempered_target_function(X):
-            return beta * base_target_function(X)
-
         def tempered_target_single(x):
             return beta * base_target_single(x)
 
@@ -242,7 +238,6 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
             name=base.name,
             input_shape=base.input_shape,
             output_shape=base.output_shape,
-            target_function=tempered_target_function,
             target_single=tempered_target_single,
             log_density_form=base.log_density_form,  # unchanged
             state=state,

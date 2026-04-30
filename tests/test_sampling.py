@@ -49,7 +49,7 @@ def test_target_distribution_requires_prior():
     the full role description.
     """
     with pytest.raises(ValueError, match="prior"):
-        TargetDistribution.from_target_single(
+        TargetDistribution(
             name="no_prior_target",
             input_shape=(2,),
             output_shape=(),

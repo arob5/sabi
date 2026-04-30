@@ -38,9 +38,26 @@ Concrete schemes:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, NamedTuple
 
 from sabi.target_distribution import IntermediateTarget, TargetDistribution
+
+
+class InvarianceFlags(NamedTuple):
+    """Per-axis invariance flags returned by `TemperingScheme.invariance`.
+
+    Attributes:
+        target_function: True iff `f_state_a == f_state_b` (so the
+            emulator's training data is unchanged).
+        form: True iff `phi_state_a == phi_state_b` (so the round's
+            log-density form is unchanged).
+        both: True iff both axes are invariant. Convenience for the
+            common "is anything different at all?" check.
+    """
+
+    target_function: bool
+    form: bool
+    both: bool
 
 
 class TemperingScheme(ABC):
@@ -57,6 +74,9 @@ class TemperingScheme(ABC):
     (``state_a == state_b``) work for any scheme; subclasses can
     override with stronger guarantees (e.g., the no-op scheme returns
     True regardless of state).
+
+    :meth:`invariance` is a convenience that bundles both per-axis
+    flags plus a combined ``both`` flag.
     """
 
     @abstractmethod
@@ -81,6 +101,20 @@ class TemperingScheme(ABC):
         """True iff ``phi_state_a == phi_state_b``."""
         return state_a == state_b
 
+    def invariance(self, state_a: Any, state_b: Any) -> InvarianceFlags:
+        """Return per-axis invariance flags between two states.
+
+        Combines the two `is_invariant_*` checks plus a ``both`` flag
+        for the common "nothing changed" branch in the loop.
+        """
+        target_function = self.is_invariant_target_function(state_a, state_b)
+        form = self.is_invariant_form(state_a, state_b)
+        return InvarianceFlags(
+            target_function=target_function,
+            form=form,
+            both=target_function and form,
+        )
+
 
 class NoTempering(TemperingScheme):
     """Identity tempering: the intermediate target equals the base.
@@ -102,7 +136,6 @@ class NoTempering(TemperingScheme):
             name=base.name,
             input_shape=base.input_shape,
             output_shape=base.output_shape,
-            target_function=base.target_function,
             target_single=base.target_single,
             log_density_form=base.log_density_form,
             state=state,

@@ -25,7 +25,7 @@ def _box_prior():
 
 def _target() -> TargetDistribution:
     """Quadratic log-density on R^2."""
-    return TargetDistribution.from_target_single(
+    return TargetDistribution(
         target_single=lambda x: -0.5 * jnp.sum(x * x),
         name="quadratic",
         input_shape=(2,),
@@ -50,9 +50,11 @@ def test_no_tempering_returns_intermediate_target_subclass():
 def test_no_tempering_preserves_target_function_and_form():
     target = _target()
     intermediate = NoTempering().intermediate_target(target, state=0.5)
-    # Same callables, same form, same prior, same support.
-    assert intermediate.target_function is target.target_function
+    # target_single is reused by reference; target_function is re-vmapped
+    # in the constructor (same outputs, distinct closure).
     assert intermediate.target_single is target.target_single
+    X = jnp.asarray([[0.5, -0.3], [1.0, 1.0]])
+    assert jnp.allclose(intermediate.target_function(X), target.target_function(X))
     assert intermediate.log_density_form is target.log_density_form
     assert intermediate.prior is target.prior
     assert intermediate.support is target.support
@@ -122,28 +124,28 @@ def test_tempering_scheme_default_invariance_uses_equality():
 # -------------------------------------------------------------------------
 
 
-def test_untempered_schedule_returns_none_state_and_final():
+def test_untempered_schedule_returns_none_state_and_terminal():
     sched = UntemperedSchedule()
-    state, final = sched.next(0, None)
+    state, is_terminal_state = sched.at(0)
     assert state is None
-    assert final is True
+    assert is_terminal_state is True
 
 
-def test_fixed_schedule_iterates_and_marks_final():
+def test_fixed_schedule_iterates_and_marks_terminal():
     sched = FixedSchedule(states=(0.1, 0.5, 1.0))
-    assert sched.next(0, None) == (0.1, False)
-    assert sched.next(1, None) == (0.5, False)
-    assert sched.next(2, None) == (1.0, True)
-    # Past the end clamps to the last entry and stays final.
-    assert sched.next(42, None) == (1.0, True)
+    assert sched.at(0) == (0.1, False)
+    assert sched.at(1) == (0.5, False)
+    assert sched.at(2) == (1.0, True)
+    # Past the end clamps to the last entry and stays terminal.
+    assert sched.at(42) == (1.0, True)
 
 
 def test_fixed_schedule_accepts_non_scalar_states():
     """States are opaque PyTrees — e.g. subset indices for data tempering."""
     sched = FixedSchedule(states=((0, 1), (0, 1, 2), (0, 1, 2, 3)))
-    state, final = sched.next(1, None)
+    state, is_terminal_state = sched.at(1)
     assert state == (0, 1, 2)
-    assert final is False
+    assert is_terminal_state is False
 
 
 def test_fixed_schedule_rejects_empty():
@@ -160,7 +162,7 @@ def test_problem_target_distribution_round_trips_via_no_tempering():
     """Constructing an intermediate via NoTempering on a Problem's
     target_distribution should produce a distribution whose log-density
     matches `Problem.log_posterior` at the same input."""
-    target = TargetDistribution.from_target_single(
+    target = TargetDistribution(
         target_single=lambda x: -0.5 * jnp.sum(x * x),
         name="quad_problem_target",
         input_shape=(2,),

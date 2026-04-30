@@ -158,7 +158,7 @@ def neals_funnel(
         name=f"neals_funnel_d{d}_reference",
     )
 
-    target = TargetDistribution.from_target_single(
+    target = TargetDistribution(
         target_single=log_prob_single,
         name=f"neals_funnel_d{d}_target",
         input_shape=(p,),

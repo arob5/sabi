@@ -45,9 +45,9 @@ def test_fixed_schedule_terminal_state_is_last_entry():
 
 def test_default_terminal_state_probes_via_large_round_idx():
     """The base `TemperingSchedule.terminal_state()` default probes
-    `next(round_idx, None)` at a very large index. Built-in schedules
-    override with closed-form returns; this test bypasses the override
-    by calling the base method directly."""
+    `at(round_idx)` at a very large index. Built-in schedules override
+    with closed-form returns; this test bypasses the override by
+    calling the base method directly."""
     from sabi.tempering.schedule import TemperingSchedule
 
     sched = FixedSchedule(states=(0.1, 0.5, 1.0))
@@ -83,7 +83,7 @@ def _algorithm(acquisition_target: AcquisitionTarget, **kwargs):
         emulator_factory=lambda: GPEmulator(input_shape=(2,)),
         acquisition=_RecordingAcquisition(),
         n_initial=8,
-        n_rounds=2,
+        n_rounds=3,  # round 0 (initial) + rounds 1, 2 (acquisition).
         q=1,
         acquisition_target=acquisition_target,
         **kwargs,
@@ -97,11 +97,13 @@ def _algorithm(acquisition_target: AcquisitionTarget, **kwargs):
 
 def test_current_default_target_state_equals_current():
     """Untempered loop with default acquisition_target=CURRENT:
-    target_tempering_state == tempering_state == None for every round."""
+    target_tempering_state == tempering_state == None for every
+    acquisition round."""
     problem = gaussian2d()
     alg = _algorithm(AcquisitionTarget.CURRENT)
     run(problem, alg, jax.random.key(0))
 
+    # n_rounds=3 → round 0 (initial) + rounds 1, 2 (acquisition).
     acq = alg.acquisition
     assert len(acq.calls) == 2
     for current, target in acq.calls:
@@ -116,15 +118,16 @@ def test_current_default_target_state_equals_current():
 
 def test_next_with_fixed_schedule_advances_one_step():
     """With `FixedSchedule((0.1, 0.5, 1.0))` and `acquisition_target=NEXT`:
-    round 0 sees current=0.1, target=0.5; round 1 sees current=0.5,
-    target=1.0; round 2 sees current=1.0, target=1.0 (clamped)."""
+    round 0 (initial design, no acquisition call) is at state 0.1.
+    Round 1 acquisition: current=0.5, target=1.0.
+    Round 2 acquisition: current=1.0, target=1.0 (clamped)."""
     problem = gaussian2d()
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
         emulator_factory=lambda: GPEmulator(input_shape=(2,)),
         acquisition=_RecordingAcquisition(),
         n_initial=8,
-        n_rounds=3,
+        n_rounds=3,  # round 0 + acquisition rounds 1, 2.
         q=1,
         tempering_scheme=LikelihoodTemperingViaForm(),
         schedule=schedule,
@@ -133,11 +136,9 @@ def test_next_with_fixed_schedule_advances_one_step():
     run(problem, alg, jax.random.key(1))
 
     calls = alg.acquisition.calls
-    assert len(calls) == 3
-    assert calls[0] == (0.1, 0.5)
-    assert calls[1] == (0.5, 1.0)
-    # Round 2 is at the terminal state; "next" clamps to terminal.
-    assert calls[2] == (1.0, 1.0)
+    assert len(calls) == 2  # only acquisition rounds 1, 2.
+    assert calls[0] == (0.5, 1.0)
+    assert calls[1] == (1.0, 1.0)
 
 
 # -------------------------------------------------------------------------
@@ -147,14 +148,16 @@ def test_next_with_fixed_schedule_advances_one_step():
 
 def test_terminal_target_state_is_terminal_for_every_round():
     """With `FixedSchedule((0.1, 0.5, 1.0))` and
-    `acquisition_target=TERMINAL`: every round sees target=1.0."""
+    `acquisition_target=TERMINAL`: every acquisition round sees
+    target=1.0; currents walk through the schedule (skipping
+    round 0's state, which is the initial-design round)."""
     problem = gaussian2d()
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
         emulator_factory=lambda: GPEmulator(input_shape=(2,)),
         acquisition=_RecordingAcquisition(),
         n_initial=8,
-        n_rounds=3,
+        n_rounds=3,  # round 0 + acquisition rounds 1, 2.
         q=1,
         tempering_scheme=LikelihoodTemperingViaForm(),
         schedule=schedule,
@@ -163,11 +166,10 @@ def test_terminal_target_state_is_terminal_for_every_round():
     run(problem, alg, jax.random.key(2))
 
     calls = alg.acquisition.calls
-    assert len(calls) == 3
+    assert len(calls) == 2
     for _, target in calls:
         assert target == 1.0
-    # Currents still walk through the schedule.
-    assert [current for current, _ in calls] == [0.1, 0.5, 1.0]
+    assert [current for current, _ in calls] == [0.5, 1.0]
 
 
 # -------------------------------------------------------------------------
@@ -187,7 +189,7 @@ def test_default_acquisition_target_preserves_untempered_metrics():
         emulator_factory=lambda: GPEmulator(input_shape=(2,)),
         acquisition=PriorSampling(),
         n_initial=8,
-        n_rounds=2,
+        n_rounds=3,  # round 0 + acquisition rounds 1, 2 → 8 + 2 = 10 evals.
         q=1,
     )  # acquisition_target defaults to CURRENT
     result = run(problem, alg, jax.random.key(0))
@@ -216,7 +218,7 @@ def test_via_target_with_next_lookahead_runs_to_completion():
     prior = independent_uniform(
         low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0), name="p"
     )
-    target = TargetDistribution.from_target_single(
+    target = TargetDistribution(
         target_single=lambda x: -0.5 * jnp.sum(x * x),  # log-likelihood
         name="quad_loglik_target",
         input_shape=(2,),
@@ -229,14 +231,14 @@ def test_via_target_with_next_lookahead_runs_to_completion():
         emulator_factory=lambda: GPEmulator(input_shape=(2,)),
         acquisition=PriorSampling(),
         n_initial=8,
-        n_rounds=2,
+        n_rounds=3,  # round 0 (initial) + acquisition rounds 1, 2.
         q=1,
         tempering_scheme=LikelihoodTemperingViaTarget(),
         schedule=FixedSchedule(states=(0.5, 1.0)),
         acquisition_target=AcquisitionTarget.NEXT,
     )
     result = run(problem, alg, jax.random.key(3))
-    # n_initial + 2 rounds with q=1.
+    # 8 initial + 2 acquisition rounds * q=1 = 10.
     assert result.X.shape == (10, 2)
     # target_tempering_state per round is recorded in metrics.
     assert result.per_round_metrics[0]["target_tempering_state"] == 1.0

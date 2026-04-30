@@ -49,7 +49,7 @@ def _log_lik_plus_prior_target() -> TargetDistribution:
     """f = log_lik; phi = LogLikPlusPrior. The standard log-likelihood
     emulation setup."""
     prior = _flat_prior()
-    return TargetDistribution.from_target_single(
+    return TargetDistribution(
         target_single=_quadratic_log_lik,
         name="log_lik_target",
         input_shape=(2,),
@@ -66,7 +66,7 @@ def _identity_target() -> TargetDistribution:
     def full_log_posterior(x):
         return _quadratic_log_lik(x) + jnp.asarray(log_prob(prior, x))
 
-    return TargetDistribution.from_target_single(
+    return TargetDistribution(
         target_single=full_log_posterior,
         name="identity_target",
         input_shape=(2,),
@@ -90,9 +90,11 @@ def test_via_form_returns_intermediate_target():
 def test_via_form_target_function_unchanged():
     target = _log_lik_plus_prior_target()
     intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=0.4)
-    # f_state == f for the via-form scheme.
-    assert intermediate.target_function is target.target_function
+    # f_state == f for the via-form scheme. target_single is reused by
+    # reference; target_function is re-vmapped (same outputs).
     assert intermediate.target_single is target.target_single
+    X = jnp.asarray([[0.5, -0.3], [1.0, 1.0]])
+    assert jnp.allclose(intermediate.target_function(X), target.target_function(X))
 
 
 def test_via_form_log_lik_plus_prior_scales_likelihood():
@@ -115,7 +117,7 @@ def test_via_form_forward_model_scales_likelihood():
     def log_lik(x, y):
         return -0.5 * jnp.sum((y - 1.0) ** 2)
 
-    target = TargetDistribution.from_target_single(
+    target = TargetDistribution(
         target_single=lambda x: x,  # forward model = identity
         name="fm_target",
         input_shape=(2,),

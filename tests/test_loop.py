@@ -25,7 +25,7 @@ from sabi.emulators.gp import GPEmulator
 
 def _algorithm(
     acquisition,
-    n_rounds: int = 4,
+    n_rounds: int = 5,  # 1 initial-design round + 4 acquisition rounds
     metrics=(ReferenceMMD(n_estimate_samples=512, n_reference_samples=512),),
     surrogate_posterior_factory=emulator_pushforward_factory,
 ):
@@ -42,9 +42,12 @@ def _algorithm(
 
 def test_loop_runs_on_gaussian2d_with_prior_sampling_acq():
     problem = gaussian2d()
-    alg = _algorithm(PriorSampling(), n_rounds=4)
+    # n_rounds=5 = round 0 (initial design) + rounds 1..4 (acquisition).
+    alg = _algorithm(PriorSampling(), n_rounds=5)
     result = run(problem, alg, jax.random.key(0))
+    # 16 initial + 4 acquisition rounds * q=1 = 20.
     assert result.X.shape == (16 + 4,) + problem.input_shape
+    # 4 acquisition rounds → 4 per-round metric rows.
     assert len(result.per_round_metrics) == 4
     assert all(m["tempering_state"] is None for m in result.per_round_metrics)
     assert "mmd2" in result.final_metrics
@@ -54,7 +57,10 @@ def test_loop_runs_on_gaussian2d_with_prior_sampling_acq():
 
 def test_loop_runs_on_banana_with_ei_acq():
     problem = banana()
-    alg = _algorithm(ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)), n_rounds=4)
+    alg = _algorithm(
+        ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)),
+        n_rounds=5,
+    )
     result = run(problem, alg, jax.random.key(1))
     assert result.X.shape == (16 + 4,) + problem.input_shape
     assert "mmd2" in result.final_metrics
@@ -62,18 +68,24 @@ def test_loop_runs_on_banana_with_ei_acq():
 
 def test_loop_grows_dataset_and_records_metrics():
     problem = gaussian2d()
-    alg = _algorithm(ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)), n_rounds=3)
+    # n_rounds=4 = round 0 (initial) + rounds 1, 2, 3 (acquisition).
+    alg = _algorithm(
+        ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)),
+        n_rounds=4,
+    )
     result = run(problem, alg, jax.random.key(3))
+    # 16 initial + 3 acquisition rounds * q=1 = 19.
     assert result.X.shape == (19, 2)
     assert result.Y_raw.shape == (19,)
     assert result.Y_train.shape == (19,)
-    assert [m["round"] for m in result.per_round_metrics] == [0, 1, 2]
+    # Acquisition rounds are 1, 2, 3 (round 0 has no per-round metric row).
+    assert [m["round"] for m in result.per_round_metrics] == [1, 2, 3]
     assert [m["n_evals"] for m in result.per_round_metrics] == [17, 18, 19]
 
 
 def test_loop_with_no_metrics_skips_estimator():
     problem = gaussian2d()
-    alg = _algorithm(PriorSampling(), n_rounds=2, metrics=())
+    alg = _algorithm(PriorSampling(), n_rounds=3, metrics=())
     result = run(problem, alg, jax.random.key(4))
     assert result.final_metrics == {}
     for row in result.per_round_metrics:
@@ -125,8 +137,8 @@ def test_loop_continuous_ei_beats_candidate_set_ei_on_gaussian2d():
         )
     )
 
-    cs_alg = _algorithm(cs_acq, n_rounds=4)
-    cm_alg = _algorithm(cm_acq, n_rounds=4)
+    cs_alg = _algorithm(cs_acq, n_rounds=5)
+    cm_alg = _algorithm(cm_acq, n_rounds=5)
 
     cs_result = run(problem, cs_alg, jax.random.key(0))
     cm_result = run(problem, cm_alg, jax.random.key(0))

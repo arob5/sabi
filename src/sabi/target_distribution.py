@@ -87,8 +87,12 @@ class TargetDistribution(NumericRecordDistribution):
         name: ProbPipe distribution name.
         input_shape: shape of one parameter-space point.
         output_shape: shape of one target-function output.
-        target_function: batched target ``(n,) + input_shape -> (n,) + output_shape``.
-        target_single: single-point target ``input_shape -> output_shape``.
+        target_single: single-point target callable
+            ``input_shape -> output_shape``. The constructor
+            auto-derives the batched ``target_function`` via
+            ``jax.vmap`` (subclasses can override `target_function`
+            for a vectorized implementation if vmap is suboptimal —
+            but for v1 nothing requires that).
         log_density_form: composes ``(x, y, prior)`` into a scalar
             unnormalized log-density.
         prior: required `Distribution` over the parameter space. Must
@@ -108,7 +112,6 @@ class TargetDistribution(NumericRecordDistribution):
         name: str,
         input_shape: tuple[int, ...],
         output_shape: tuple[int, ...],
-        target_function: Callable[[Array], Array],
         target_single: Callable[[Array], Array],
         log_density_form: LogDensityForm,
         prior: Distribution,
@@ -123,35 +126,14 @@ class TargetDistribution(NumericRecordDistribution):
             )
         self._input_shape = tuple(input_shape)
         self._output_shape = tuple(output_shape)
-        self._target_function = target_function
         self._target_single = target_single
+        # Derive the batched target_function via jax.vmap. The Python
+        # call to vmap happens once at construction time; the resulting
+        # callable is the public batched API.
+        self._target_function = jax.vmap(target_single)
         self._log_density_form = log_density_form
         self._prior = prior
         super().__init__(name=name)
-
-    # ------------------------------------------------------------------------
-    # Constructors
-    # ------------------------------------------------------------------------
-
-    @classmethod
-    def from_target_single(
-        cls,
-        *,
-        target_single: Callable[[Array], Array],
-        **kwargs: Any,
-    ) -> TargetDistribution:
-        """Build a `TargetDistribution` from a single-point ``target_single``.
-
-        Wraps the input with `jax.vmap` to produce ``target_function``;
-        most benchmarks have a natural single-point implementation and
-        this helper avoids requiring callers to write the vmap by hand.
-        """
-        target_function = jax.vmap(target_single)
-        return cls(
-            target_function=target_function,
-            target_single=target_single,
-            **kwargs,
-        )
 
     # ------------------------------------------------------------------------
     # Public accessors (read-only views of the underlying state)
@@ -257,7 +239,6 @@ class IntermediateTarget(TargetDistribution):
         name: str,
         input_shape: tuple[int, ...],
         output_shape: tuple[int, ...],
-        target_function: Callable[[Array], Array],
         target_single: Callable[[Array], Array],
         log_density_form: LogDensityForm,
         state: Any,
@@ -272,7 +253,6 @@ class IntermediateTarget(TargetDistribution):
             name=name,
             input_shape=input_shape,
             output_shape=output_shape,
-            target_function=target_function,
             target_single=target_single,
             log_density_form=log_density_form,
             prior=prior,

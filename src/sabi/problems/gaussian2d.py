@@ -70,7 +70,7 @@ def gaussian2d(
         low=lower, high=upper, name=f"gaussian2d_design_{id(mu)}"
     )
 
-    target = TargetDistribution.from_target_single(
+    target = TargetDistribution(
         target_single=target_single,
         name=f"gaussian2d_target_{id(mu)}",
         input_shape=(2,),

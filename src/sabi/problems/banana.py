@@ -90,7 +90,7 @@ def banana(
         low=lower, high=upper, name=f"banana_design_a{a}_b{b}"
     )
 
-    target = TargetDistribution.from_target_single(
+    target = TargetDistribution(
         target_single=log_prob_single,
         name="banana_target",
         input_shape=(2,),
