@@ -19,7 +19,7 @@ from sabi.problems.forms import (
     Identity,
     LogLikPlusPrior,
 )
-from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
+from sabi.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.likelihood import (
     LikelihoodTemperingViaForm,
     LikelihoodTemperingViaTarget,

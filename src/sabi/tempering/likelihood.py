@@ -46,7 +46,7 @@ from sabi.problems.forms import (
     LogDensityForm,
     LogLikPlusPrior,
 )
-from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
+from sabi.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import TemperingScheme
 
 

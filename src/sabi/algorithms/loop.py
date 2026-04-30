@@ -1,181 +1,47 @@
-"""Sequential-acquisition loop.
+"""Sequential-acquisition loop body.
+
+The `run` function executes one full algorithm run end-to-end given a
+`Problem`, an `Algorithm`, and a PRNG key. The `Algorithm` and
+`RunResult` dataclasses live in :mod:`sabi.algorithms.algorithm`;
+factories that build per-round `SurrogatePosterior` instances live in
+:mod:`sabi.algorithms.surrogate_posterior_factory`.
 
 Composition: initial design (drawn via `Algorithm.initial_sampler`) →
-surrogate → acquisition → `SurrogatePosterior` → estimator function
+emulator → acquisition → `SurrogatePosterior` → estimator function
 (`expected_target` by default) → metrics. Tempering hooks present
-(`tempering_state` per round, `current_form` built each round) but
-v1.4.x ships with `NoTempering` + `UntemperedSchedule` defaults, so the
-state is `None` every round.
-
-The estimator is a free function with type-dispatch on
-`SurrogatePosterior` subtype (`expected_target`, possibly `mean` for the
-Dirac case). Configurable per `Algorithm` via the `estimator` field.
-
-The `surrogate_posterior_factory` builds the round's `SurrogatePosterior`
-from math primitives — `SurrogatePosterior` is decoupled from `Problem`,
-so the factory pulls `support` / `prior` / `input_shape` from the
-problem and combines with the (possibly tempered) `LogDensityForm` for
-the round. The default `emulator_pushforward_factory` builds an SP that
-pushes the fitted surrogate's predictive through the form;
-`weighted_empirical_factory` builds the no-emulator baseline (a
-`WeightedEmpiricalRandomMeasure` — a `SurrogatePosterior` subclass with
-``surrogate=None``).
+(`tempering_state` per round, `current_form` built each round); the
+default `NoTempering` + `UntemperedSchedule` make the state `None`
+every round.
 
 Metrics consume a `Distribution[Array]` (the estimator's output) and
-declare their required ProbPipe `Supports*` protocols via the `requires`
-class attribute. The loop checks each metric's `requires` against the
-estimator distribution and raises `MissingProtocolError` on a mismatch.
+declare their required ProbPipe `Supports*` protocols via the
+`requires` class attribute. The loop checks each metric's `requires`
+against the estimator distribution and raises `MissingProtocolError`
+on a mismatch.
 
-Shape / symbol conventions: see `docs/notation.md`.
+Shape / symbol conventions: see ``docs/notation.md``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 from jax import Array
 from probpipe.core._distribution_base import Distribution
-from probpipe.core.constraints import Constraint
 
-from sabi.acquisitions.base import Acquisition, AcquisitionState, AcquisitionTarget
+from sabi.acquisitions.base import (
+    AcquisitionState,
+    resolve_state,
+)
+from sabi.algorithms.algorithm import Algorithm, RunResult
+from sabi.algorithms.surrogate_posterior_factory import SurrogatePosteriorFactory
+from sabi.emulators.base import Emulator
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
-from sabi.posterior.estimators import expected_target
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
-from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
-from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
-from sabi.sampling import BatchSampler, PriorSampler
-from sabi.emulators.base import Emulator
-from sabi.tempering.base import NoTempering, TemperingScheme
-from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule
-
-
-class SurrogatePosteriorFactory(Protocol):
-    """Builds the round's `SurrogatePosterior` from the emulator state and
-    the math primitives (support, input_shape, prior, log_density_form).
-
-    Returns a `SurrogatePosterior`. The default factory
-    (`emulator_pushforward_factory`) builds an SP that pushes the
-    fitted emulator's predictive through the form. The
-    `weighted_empirical_factory` builds the no-emulator baseline
-    (`WeightedEmpiricalRandomMeasure`, a `SurrogatePosterior` subclass
-    with ``emulator=None``).
-
-    `X` and `Y` are the design set; `log_density_form` is the form for
-    the round (possibly tempered). `emulator` may be ignored by
-    factories that don't need a fitted emulator (the weighted-empirical
-    baseline).
-    """
-
-    def __call__(
-        self,
-        *,
-        emulator: Emulator,
-        X: Array,
-        Y: Array,
-        log_density_form: LogDensityForm,
-        support: Constraint,
-        input_shape: tuple[int, ...],
-        prior: Distribution | None,
-        problem_name: str | None = None,
-    ) -> SurrogatePosterior: ...
-
-
-def emulator_pushforward_factory(
-    *,
-    emulator: Emulator,
-    X: Array,
-    Y: Array,
-    log_density_form: LogDensityForm,
-    support: Constraint,
-    input_shape: tuple[int, ...],
-    prior: Distribution | None,
-    problem_name: str | None = None,
-) -> SurrogatePosterior:
-    """Default factory: build the `SurrogatePosterior` that pushes the
-    fitted emulator's predictive distribution through ``log_density_form``.
-
-    The pushforward itself lives inside `SurrogatePosterior`
-    (`_random_unnormalized_log_prob` / `pushforward_marginal`); this
-    factory just wires the round's emulator, form, and problem-side
-    primitives into a fresh `SurrogatePosterior` instance.
-
-    Emulator-agnostic — works for any `Emulator` subclass, not just GPs.
-    """
-    return SurrogatePosterior(
-        emulator=emulator,
-        log_density_form=log_density_form,
-        support=support,
-        input_shape=input_shape,
-        prior=prior,
-        name=f"surrogate_posterior_{problem_name}" if problem_name else None,
-    )
-
-
-def weighted_empirical_factory(
-    *,
-    emulator: Emulator,
-    X: Array,
-    Y: Array,
-    log_density_form: LogDensityForm,
-    support: Constraint,
-    input_shape: tuple[int, ...],
-    prior: Distribution | None,
-    problem_name: str | None = None,
-) -> WeightedEmpiricalRandomMeasure:
-    """No-emulator baseline factory: a `WeightedEmpiricalRandomMeasure`
-    at the design points.
-
-    Applies `log_density_form` pointwise to `(X_i, Y_i)` to get the
-    deterministic log-density (used as `log_weights`) at each design
-    point. The `emulator` argument is ignored; the form is used only
-    here to compute the weights and is NOT carried on the resulting
-    random measure.
-    """
-    # log_density_form is batched: takes (X, Y) and returns shape (n,).
-    log_weights = log_density_form(X, Y, prior=prior)
-    return WeightedEmpiricalRandomMeasure(
-        X=X,
-        log_weights=log_weights,
-        support=support,
-        input_shape=input_shape,
-        name=f"weighted_empirical_{problem_name}" if problem_name else None,
-    )
-
-
-@dataclass(frozen=True)
-class Algorithm:
-    """Composition of the components needed to run the loop."""
-
-    emulator_factory: Callable[[], Emulator]
-    acquisition: Acquisition
-    n_initial: int = 16
-    n_rounds: int = 10
-    q: int = 1
-    initial_sampler: BatchSampler = field(default_factory=PriorSampler)
-    tempering_scheme: TemperingScheme = field(default_factory=NoTempering)
-    schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
-    acquisition_target: AcquisitionTarget = AcquisitionTarget.CURRENT
-    surrogate_posterior_factory: SurrogatePosteriorFactory = emulator_pushforward_factory
-    estimator: Callable[[SurrogatePosterior], Distribution] = expected_target
-    metrics: tuple[PosteriorMetric, ...] = ()
-
-
-@dataclass
-class RunResult:
-    X: Array
-    Y_raw: Array
-    Y_train: Array
-    emulator: Emulator
-    tempering_states: list[Any]
-    per_round_metrics: list[dict[str, Any]]
-    final_estimate: Distribution | None
-    final_metrics: dict[str, float]
 
 
 def _check_protocols(metric: PosteriorMetric, estimate: Distribution) -> None:
@@ -236,24 +102,6 @@ def _build_surrogate_posterior(
     )
 
 
-def _resolve_target_state(
-    acquisition_target: AcquisitionTarget,
-    schedule: TemperingSchedule,
-    round_idx: int,
-    current_state: Any,
-) -> Any:
-    """Map ``AcquisitionTarget`` to a concrete tempering state."""
-    if acquisition_target == AcquisitionTarget.CURRENT:
-        return current_state
-    if acquisition_target == AcquisitionTarget.NEXT:
-        # Probe the next round; built-in schedules clamp at terminal.
-        next_state, _ = schedule.next(round_idx + 1, None)
-        return next_state
-    if acquisition_target == AcquisitionTarget.TERMINAL:
-        return schedule.terminal_state()
-    raise ValueError(f"Unknown AcquisitionTarget: {acquisition_target!r}")
-
-
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential emulator-based inference loop.
 
@@ -298,7 +146,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
     for round_idx in range(algorithm.n_rounds):
         current_state, _final = algorithm.schedule.next(round_idx, None)
-        target_state = _resolve_target_state(
+        target_state = resolve_state(
             algorithm.acquisition_target,
             algorithm.schedule,
             round_idx,

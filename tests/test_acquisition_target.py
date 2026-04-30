@@ -19,7 +19,7 @@ import pytest
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.acquisitions.base import AcquisitionTarget
-from sabi.algorithms.loop import Algorithm, run
+from sabi.algorithms import Algorithm, run
 from sabi.emulators.gp import GPEmulator
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.tempering.likelihood import LikelihoodTemperingViaForm
@@ -208,7 +208,7 @@ def test_via_target_with_next_lookahead_runs_to_completion():
     from sabi._probpipe_compat import independent_uniform
     from sabi.problems.base import Problem
     from sabi.problems.forms import LogLikPlusPrior
-    from sabi.problems.target_distribution import TargetDistribution
+    from sabi.target_distribution import TargetDistribution
     from sabi.tempering.likelihood import LikelihoodTemperingViaTarget
 
     # Build a custom problem with LogLikPlusPrior so

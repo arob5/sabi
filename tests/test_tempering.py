@@ -12,7 +12,7 @@ import pytest
 from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
-from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
+from sabi.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import FixedSchedule, UntemperedSchedule
 

@@ -16,7 +16,7 @@ import pytest
 
 from sabi.problems.forms import Identity
 from sabi.problems.gaussian2d import gaussian2d
-from sabi.problems.target_distribution import TargetDistribution
+from sabi.target_distribution import TargetDistribution
 from sabi.sampling import PriorSampler
 
 

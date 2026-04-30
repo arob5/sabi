@@ -11,7 +11,7 @@ from sabi.acquisitions.optim import (
     ContinuousMultiStartOptimizer,
 )
 from sabi.acquisitions.random import PriorSampling
-from sabi.algorithms.loop import (
+from sabi.algorithms import (
     Algorithm,
     emulator_pushforward_factory,
     run,

@@ -18,7 +18,7 @@ from sabi.acquisitions.optim import (
     PointwiseOptimizer,
 )
 from sabi.acquisitions.random import PriorSampling
-from sabi.algorithms.loop import (
+from sabi.algorithms import (
     Algorithm,
     SurrogatePosteriorFactory,
     emulator_pushforward_factory,

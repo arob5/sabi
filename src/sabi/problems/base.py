@@ -37,7 +37,7 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
 from sabi.problems.forms import LogDensityForm
-from sabi.problems.target_distribution import TargetDistribution
+from sabi.target_distribution import TargetDistribution
 
 
 @dataclass(frozen=True)

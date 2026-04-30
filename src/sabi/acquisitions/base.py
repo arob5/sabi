@@ -44,6 +44,7 @@ from sabi.problems.base import Problem
 
 if TYPE_CHECKING:
     from sabi.acquisitions.optim import PointwiseOptimizer
+    from sabi.tempering.schedule import TemperingSchedule
 
 
 class AcquisitionTarget(Enum):
@@ -76,6 +77,36 @@ class AcquisitionTarget(Enum):
     CURRENT = "current"
     NEXT = "next"
     TERMINAL = "terminal"
+
+
+def resolve_state(
+    acquisition_target: AcquisitionTarget,
+    schedule: "TemperingSchedule",
+    round_idx: int,
+    current_state: Any,
+) -> Any:
+    """Map an `AcquisitionTarget` value to a concrete tempering state.
+
+    Used by the algorithm loop to determine which tempering state the
+    acquisition's `SurrogatePosterior` should be built at:
+
+    - `CURRENT`: returns `current_state` (the round's state).
+    - `NEXT`: returns `schedule.next(round_idx + 1, None)[0]`. Built-in
+      schedules clamp at the terminal state past the end.
+    - `TERMINAL`: returns `schedule.terminal_state()`.
+
+    Lives next to `AcquisitionTarget` because it's the canonical
+    consumer of the enum — `target_tempering_state` on
+    `AcquisitionState` is what acquisitions actually see.
+    """
+    if acquisition_target == AcquisitionTarget.CURRENT:
+        return current_state
+    if acquisition_target == AcquisitionTarget.NEXT:
+        next_state, _ = schedule.next(round_idx + 1, None)
+        return next_state
+    if acquisition_target == AcquisitionTarget.TERMINAL:
+        return schedule.terminal_state()
+    raise ValueError(f"Unknown AcquisitionTarget: {acquisition_target!r}")
 
 
 @dataclass(frozen=True)

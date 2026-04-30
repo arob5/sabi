@@ -40,7 +40,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
+from sabi.target_distribution import IntermediateTarget, TargetDistribution
 
 
 class TemperingScheme(ABC):

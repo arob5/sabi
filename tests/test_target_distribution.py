@@ -20,7 +20,7 @@ from probpipe.core.protocols import SupportsUnnormalizedLogProb
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.problems.forms import Identity, LogLikPlusPrior
-from sabi.problems.target_distribution import TargetDistribution
+from sabi.target_distribution import TargetDistribution
 
 
 def _gaussian_target_single(x):

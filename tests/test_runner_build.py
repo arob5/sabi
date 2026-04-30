@@ -1,6 +1,6 @@
 from omegaconf import OmegaConf
 
-from sabi.algorithms.loop import (
+from sabi.algorithms import (
     Algorithm,
     emulator_pushforward_factory,
     weighted_empirical_factory,

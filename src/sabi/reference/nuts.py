@@ -30,7 +30,7 @@ from probpipe import condition_on
 from probpipe.core._distribution_base import Distribution
 
 from sabi.problems.forms import LogDensityForm
-from sabi.problems.target_distribution import TargetDistribution
+from sabi.target_distribution import TargetDistribution
 
 
 # ---------------------------------------------------------------------------

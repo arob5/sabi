@@ -46,7 +46,7 @@ from jax import Array
 from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
-from sabi.problems.target_distribution import TargetDistribution
+from sabi.target_distribution import TargetDistribution
 from sabi.reference.cache import load_or_generate_reference_samples
 
 
