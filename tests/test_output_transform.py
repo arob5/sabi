@@ -14,11 +14,6 @@ from __future__ import annotations
 import jax.numpy as jnp
 import pytest
 
-# `sabi.problems` imported first to fully load `sabi.target_distribution`
-# (and its `sabi.problems.forms` chain) before `sabi.tempering.*` triggers
-# its own import path — avoids a pre-existing circular when entering via
-# `sabi.tempering` first.
-import sabi.problems  # noqa: F401
 from sabi.emulators.updates import EmulatorUpdate, RescaleOutputs
 from sabi.tempering.output_transform import (
     Generic,
