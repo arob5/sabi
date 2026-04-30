@@ -1,4 +1,8 @@
 from sabi.tempering.base import NoTempering, TemperingScheme
+from sabi.tempering.likelihood import (
+    LikelihoodTemperingViaForm,
+    LikelihoodTemperingViaTarget,
+)
 from sabi.tempering.schedule import (
     FixedSchedule,
     TemperingSchedule,
@@ -7,6 +11,8 @@ from sabi.tempering.schedule import (
 
 __all__ = [
     "FixedSchedule",
+    "LikelihoodTemperingViaForm",
+    "LikelihoodTemperingViaTarget",
     "NoTempering",
     "TemperingScheme",
     "TemperingSchedule",
