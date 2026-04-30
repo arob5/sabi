@@ -38,8 +38,8 @@ class BatchSampler(ABC):
 
     Implementers return shape ``(n,) + problem.input_shape``. The sampler
     sees the full `Problem` so subclasses can read whichever fields they
-    need (`prior` for prior-based sampling, `support` for low-discrepancy
-    sequences, `input_shape` for shape, etc.).
+    need (`prior` for prior-based sampling, `prior.support` for
+    low-discrepancy sequences, `input_shape` for shape, etc.).
     """
 
     @abstractmethod
@@ -51,16 +51,11 @@ class BatchSampler(ABC):
 class PriorSampler(BatchSampler):
     """Draw `n` i.i.d. samples from ``problem.prior``.
 
-    Requires ``problem.prior is not None``; raises ``ValueError`` otherwise.
     The default sampler everywhere a `BatchSampler` is needed.
+    `problem.prior` is always set (the `TargetDistribution` requires
+    it), so this sampler always works.
     """
 
     def sample(self, problem: Problem, key: Array, n: int) -> Array:
-        if problem.prior is None:
-            raise ValueError(
-                f"PriorSampler requires problem.prior, but problem "
-                f"{problem.name!r} has prior=None. Provide an explicit "
-                "BatchSampler."
-            )
         drawn = pp_sample(problem.prior, key=key, sample_shape=(n,))
         return jnp.asarray(drawn)

@@ -37,6 +37,7 @@ from typing import Any
 
 import jax.numpy as jnp
 from jax import Array
+from probpipe import log_prob
 from probpipe.core._distribution_base import Distribution
 
 from sabi.problems.forms import (
@@ -44,7 +45,6 @@ from sabi.problems.forms import (
     Identity,
     LogDensityForm,
     LogLikPlusPrior,
-    _joint_log_prior,
 )
 from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import TemperingScheme
@@ -61,12 +61,12 @@ class _LogLikPlusPriorTempered(LogDensityForm):
 
     beta: Array
 
-    def __call__(self, x, y, *, prior=None):
+    def _call_single(self, x, y, *, prior=None):
         if prior is None:
             raise ValueError(
                 "Tempered LogLikPlusPrior requires a non-None prior."
             )
-        return self.beta * y + _joint_log_prior(prior, x)
+        return self.beta * y + jnp.asarray(log_prob(prior, x))
 
 
 @dataclass(frozen=True)
@@ -76,13 +76,13 @@ class _ForwardModelTempered(LogDensityForm):
     beta: Array
     log_lik_from_outputs: Callable[[Array, Array], Array]
 
-    def __call__(self, x, y, *, prior=None):
+    def _call_single(self, x, y, *, prior=None):
         if prior is None:
             raise ValueError(
                 "Tempered ForwardModel requires a non-None prior."
             )
-        return self.beta * self.log_lik_from_outputs(x, y) + _joint_log_prior(
-            prior, x
+        return self.beta * self.log_lik_from_outputs(x, y) + jnp.asarray(
+            log_prob(prior, x)
         )
 
 
@@ -100,13 +100,13 @@ class _IdentityTempered(LogDensityForm):
 
     beta: Array
 
-    def __call__(self, x, y, *, prior=None):
+    def _call_single(self, x, y, *, prior=None):
         if prior is None:
             raise ValueError(
                 "Tempered Identity (geometric bridge) requires a non-None "
                 "prior to define the bridge endpoints."
             )
-        return (1.0 - self.beta) * _joint_log_prior(prior, x) + self.beta * y
+        return (1.0 - self.beta) * jnp.asarray(log_prob(prior, x)) + self.beta * y
 
 
 def _likelihood_tempered_form(
@@ -175,7 +175,6 @@ class LikelihoodTemperingViaForm(TemperingScheme):
             output_transform=_identity_output_transform,
             base_target_function=base.target_function,
             prior=base.prior,
-            support=base.support,
         )
 
     def is_invariant_target_function(self, state_a: Any, state_b: Any) -> bool:
@@ -250,7 +249,6 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
             output_transform=_scale_output_transform,
             base_target_function=base_target_function,
             prior=base.prior,
-            support=base.support,
         )
 
     def is_invariant_target_function(self, state_a: Any, state_b: Any) -> bool:

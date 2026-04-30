@@ -36,9 +36,8 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from probpipe.core._empirical import NumericEmpiricalDistribution
-from probpipe.core.constraints import interval
-from probpipe.distributions.continuous import Uniform
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
 from sabi.problems.target_distribution import TargetDistribution
@@ -85,7 +84,11 @@ def banana(
 
     lower = jnp.asarray([bounds[0][0], bounds[1][0]], dtype=jnp.float64)
     upper = jnp.asarray([bounds[0][1], bounds[1][1]], dtype=jnp.float64)
-    prior = Uniform(low=lower, high=upper, name=f"banana_design_a{a}_b{b}")
+    # Multivariate-event prior over R^2 (event_shape == (2,)). See
+    # `sabi/_probpipe_compat.py` for the shim.
+    prior = independent_uniform(
+        low=lower, high=upper, name=f"banana_design_a{a}_b{b}"
+    )
 
     target = TargetDistribution.from_target_single(
         target_single=log_prob_single,
@@ -94,7 +97,6 @@ def banana(
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
-        support=interval(lower, upper),
     )
     return Problem(
         target_distribution=target,

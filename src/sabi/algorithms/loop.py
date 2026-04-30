@@ -137,9 +137,8 @@ def weighted_empirical_factory(
     here to compute the weights and is NOT carried on the resulting
     random measure.
     """
-    log_weights = jax.vmap(
-        lambda x, y: log_density_form(x, y, prior=prior)
-    )(X, Y)
+    # log_density_form is batched: takes (X, Y) and returns shape (n,).
+    log_weights = log_density_form(X, Y, prior=prior)
     return WeightedEmpiricalRandomMeasure(
         X=X,
         log_weights=log_weights,
@@ -278,11 +277,9 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     that avoids redundant full refits.
     """
     target = problem.target_distribution
-    if target.support is None:
-        raise ValueError(
-            f"Problem {problem.name!r} requires a non-None `support` for "
-            "SurrogatePosterior construction."
-        )
+    # `prior` is required; `target.support = prior.support` is always
+    # defined (possibly unbounded — algorithms that need bounded
+    # support raise where they need it, not here).
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)

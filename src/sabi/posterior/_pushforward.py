@@ -61,6 +61,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 from jax import Array
+from probpipe import log_prob
 from probpipe.core._distribution_base import Distribution
 from probpipe.core.node import workflow_function
 from probpipe.core.protocols import SupportsSampling
@@ -72,7 +73,6 @@ from sabi.problems.forms import (
     Identity,
     LogDensityForm,
     LogLikPlusPrior,
-    _joint_log_prior,
 )
 
 
@@ -114,7 +114,9 @@ def pushforward_marginal(
                     "non-None prior."
                 )
             # Shift the loc by the joint log-prior at each query point.
-            shifts = jax.vmap(lambda x: _joint_log_prior(prior, x))(X)
+            # `prior.log_prob(x)` returns scalar for a multivariate-event
+            # prior; vmap over the leading n axis to get shape (n,).
+            shifts = jax.vmap(lambda x: jnp.asarray(log_prob(prior, x)))(X)
             return _shift_gaussian_loc(input_dist, shifts)
         # Fall through to MC if it's some other form (e.g., ForwardModel).
 
@@ -197,4 +199,6 @@ def _batch_form(
         Shape `(n,)` — the joint log-density evaluated pointwise across
         the n input points for the given `ys`.
     """
-    return jax.vmap(lambda x, y: form(x, y, prior=prior))(X, ys)
+    # `form` is batched per the LogDensityForm shape contract; takes
+    # (X, Y) of shape (n, ...) and returns (n,).
+    return form(X, ys, prior=prior)

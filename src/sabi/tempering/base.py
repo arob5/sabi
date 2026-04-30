@@ -109,7 +109,6 @@ class NoTempering(TemperingScheme):
             output_transform=_identity_output_transform,
             base_target_function=base.target_function,
             prior=base.prior,
-            support=base.support,
         )
 
     def is_invariant_target_function(

@@ -205,20 +205,15 @@ def test_via_target_with_next_lookahead_runs_to_completion():
     without error; numerical correctness is covered by the per-scheme
     tests."""
     from sabi.acquisitions.random import PriorSampling
-    from sabi.problems.banana import banana
-    from sabi.tempering.likelihood import LikelihoodTemperingViaTarget
-
-    # banana uses LogLikPlusPrior, which LikelihoodTemperingViaTarget supports.
-    # Wait — banana actually uses Identity, not LogLikPlusPrior. Build a
-    # custom problem with LogLikPlusPrior.
-    from probpipe.core.constraints import interval
-    from probpipe.distributions.continuous import Uniform
-
+    from sabi._probpipe_compat import independent_uniform
     from sabi.problems.base import Problem
     from sabi.problems.forms import LogLikPlusPrior
     from sabi.problems.target_distribution import TargetDistribution
+    from sabi.tempering.likelihood import LikelihoodTemperingViaTarget
 
-    prior = Uniform(
+    # Build a custom problem with LogLikPlusPrior so
+    # LikelihoodTemperingViaTarget applies (it requires that base form).
+    prior = independent_uniform(
         low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0), name="p"
     )
     target = TargetDistribution.from_target_single(
@@ -228,7 +223,6 @@ def test_via_target_with_next_lookahead_runs_to_completion():
         output_shape=(),
         log_density_form=LogLikPlusPrior(),
         prior=prior,
-        support=interval(low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0)),
     )
     problem = Problem(target_distribution=target, name="quad_loglik")
     alg = Algorithm(

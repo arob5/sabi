@@ -26,10 +26,9 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import Array
 from probpipe import log_prob
-from probpipe.core.constraints import interval
-from probpipe.distributions.continuous import Uniform
 from probpipe.distributions.multivariate import MultivariateNormal
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
 from sabi.problems.target_distribution import TargetDistribution
@@ -64,7 +63,12 @@ def gaussian2d(
 
     lower = mu - bounds_radius
     upper = mu + bounds_radius
-    prior = Uniform(low=lower, high=upper, name=f"gaussian2d_design_{id(mu)}")
+    # Multivariate-event prior over R^2 (event_shape == (2,)). Wrapping
+    # via the sabi compat shim until ProbPipe ships an `Independent`-
+    # style wrapper. See `sabi/_probpipe_compat.py`.
+    prior = independent_uniform(
+        low=lower, high=upper, name=f"gaussian2d_design_{id(mu)}"
+    )
 
     target = TargetDistribution.from_target_single(
         target_single=target_single,
@@ -73,7 +77,6 @@ def gaussian2d(
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
-        support=interval(lower, upper),
     )
     return Problem(
         target_distribution=target,

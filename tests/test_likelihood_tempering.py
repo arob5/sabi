@@ -11,14 +11,13 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import pytest
-from probpipe.core.constraints import interval
-from probpipe.distributions.continuous import Uniform
+from probpipe import log_prob
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.problems.forms import (
     ForwardModel,
     Identity,
     LogLikPlusPrior,
-    _joint_log_prior,
 )
 from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.likelihood import (
@@ -33,7 +32,8 @@ from sabi.tempering.likelihood import (
 
 
 def _flat_prior():
-    return Uniform(
+    """Multivariate-event uniform on [-5, 5]^2."""
+    return independent_uniform(
         low=jnp.full((2,), -5.0),
         high=jnp.full((2,), 5.0),
         name="flat_prior",
@@ -56,7 +56,6 @@ def _log_lik_plus_prior_target() -> TargetDistribution:
         output_shape=(),
         log_density_form=LogLikPlusPrior(),
         prior=prior,
-        support=interval(low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0)),
     )
 
 
@@ -65,9 +64,7 @@ def _identity_target() -> TargetDistribution:
     prior = _flat_prior()
 
     def full_log_posterior(x):
-        return _quadratic_log_lik(x) + jnp.sum(jax.scipy.stats.uniform.logpdf(
-            x, loc=-5.0, scale=10.0
-        ))
+        return _quadratic_log_lik(x) + jnp.asarray(log_prob(prior, x))
 
     return TargetDistribution.from_target_single(
         target_single=full_log_posterior,
@@ -76,7 +73,6 @@ def _identity_target() -> TargetDistribution:
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
-        support=interval(low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0)),
     )
 
 
@@ -105,8 +101,9 @@ def test_via_form_log_lik_plus_prior_scales_likelihood():
     intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=beta)
     x = jnp.asarray([0.5, -0.3])
     y = _quadratic_log_lik(x)  # log-likelihood
-    out = float(intermediate.log_density_form(x, y, prior=target.prior))
-    expected = beta * float(y) + float(_joint_log_prior(target.prior, x))
+    # Single-point access goes through the form's per-point hook.
+    out = float(intermediate.log_density_form._call_single(x, y, prior=target.prior))
+    expected = beta * float(y) + float(jnp.asarray(log_prob(target.prior, x)))
     assert out == pytest.approx(expected, abs=1e-6)
 
 
@@ -125,14 +122,13 @@ def test_via_form_forward_model_scales_likelihood():
         output_shape=(2,),
         log_density_form=ForwardModel(log_lik_from_outputs=log_lik),
         prior=prior,
-        support=interval(low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0)),
     )
     beta = 0.3
     intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=beta)
     x = jnp.asarray([0.5, -0.3])
     y = jnp.asarray([1.5, 0.5])
-    out = float(intermediate.log_density_form(x, y, prior=prior))
-    expected = beta * float(log_lik(x, y)) + float(_joint_log_prior(prior, x))
+    out = float(intermediate.log_density_form._call_single(x, y, prior=prior))
+    expected = beta * float(log_lik(x, y)) + float(jnp.asarray(log_prob(prior, x)))
     assert out == pytest.approx(expected, abs=1e-6)
 
 
@@ -143,8 +139,11 @@ def test_via_form_identity_uses_geometric_bridge():
     intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=beta)
     x = jnp.asarray([0.5, -0.3])
     y = jnp.asarray(3.14)  # arbitrary "full log-posterior" value
-    out = float(intermediate.log_density_form(x, y, prior=target.prior))
-    expected = (1.0 - beta) * float(_joint_log_prior(target.prior, x)) + beta * float(y)
+    out = float(intermediate.log_density_form._call_single(x, y, prior=target.prior))
+    expected = (
+        (1.0 - beta) * float(jnp.asarray(log_prob(target.prior, x)))
+        + beta * float(y)
+    )
     assert out == pytest.approx(expected, abs=1e-6)
 
 
@@ -173,8 +172,10 @@ def test_via_form_terminal_state_recovers_base_distribution():
     intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=1.0)
     x = jnp.asarray([0.5, -0.3])
     y = _quadratic_log_lik(x)
-    out_tempered = float(intermediate.log_density_form(x, y, prior=target.prior))
-    out_base = float(target.log_density_form(x, y, prior=target.prior))
+    out_tempered = float(
+        intermediate.log_density_form._call_single(x, y, prior=target.prior)
+    )
+    out_base = float(target.log_density_form._call_single(x, y, prior=target.prior))
     assert out_tempered == pytest.approx(out_base, abs=1e-6)
 
 
@@ -272,7 +273,7 @@ def test_via_form_and_via_target_match_explicit_likelihood_tempering():
     beta = 0.7
     x = jnp.asarray([0.5, -0.3])
     explicit = beta * float(_quadratic_log_lik(x)) + float(
-        _joint_log_prior(target.prior, x)
+        jnp.asarray(log_prob(target.prior, x))
     )
 
     via_form = LikelihoodTemperingViaForm().intermediate_target(target, state=beta)

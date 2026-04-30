@@ -30,7 +30,6 @@ from jax import Array
 from probpipe._weights import Weights
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
-from probpipe.core.constraints import Constraint
 
 from sabi.problems.forms import LogDensityForm
 from sabi.reference.io import (
@@ -77,8 +76,7 @@ def load_or_generate_reference_samples(
     cache_key: str,
     target_function: Callable[[Array], Array],
     log_density_form: LogDensityForm,
-    prior: Distribution | None,
-    support: Constraint,
+    prior: Distribution,
     input_shape: tuple[int, ...],
     problem_params: dict[str, Any] | None = None,
     num_results: int = 1000,
@@ -96,8 +94,9 @@ def load_or_generate_reference_samples(
         problem_name: subdirectory under `cache_dir` (e.g., "neals_funnel").
         cache_key: human-readable identifier of the problem variant
             (e.g., "d2_sv3.0"). Different cache_keys → different artifacts.
-        target_function, log_density_form, prior, support, input_shape:
-            forwarded to `generate_via_nuts`.
+        target_function, log_density_form, prior, input_shape:
+            forwarded to `generate_via_nuts`. Support is derived from
+            ``prior.support``.
         problem_params: optional dict embedded verbatim in metadata
             (e.g., `{"d": 2, "sigma_v": 3.0}`).
         num_results, num_warmup, num_chains, random_seed: NUTS
@@ -134,7 +133,6 @@ def load_or_generate_reference_samples(
         target_function=target_function,
         log_density_form=log_density_form,
         prior=prior,
-        support=support,
         input_shape=input_shape,
         num_results=num_results,
         num_warmup=num_warmup,

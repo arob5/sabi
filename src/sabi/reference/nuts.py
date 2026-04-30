@@ -28,7 +28,6 @@ import numpy as np
 from jax import Array
 from probpipe import condition_on
 from probpipe.core._distribution_base import Distribution
-from probpipe.core.constraints import Constraint
 
 from sabi.problems.forms import LogDensityForm
 from sabi.problems.target_distribution import TargetDistribution
@@ -143,8 +142,7 @@ def generate_via_nuts(
     *,
     target_function: Callable[[Array], Array],
     log_density_form: LogDensityForm,
-    prior: Distribution | None,
-    support: Constraint,
+    prior: Distribution,
     input_shape: tuple[int, ...],
     output_shape: tuple[int, ...] = (),
     num_results: int = 1000,
@@ -164,6 +162,9 @@ def generate_via_nuts(
     ``output_shape=()`` corresponds to the log-density-emulation case;
     set explicitly for forward-model targets.
 
+    The support is derived from ``prior.support`` (sabi convention:
+    ``prior`` is required and defines the support).
+
     Returns:
         (samples, diagnostics) where `samples` is a flat
         `(num_chains * num_results, *input_shape)` JAX array of
@@ -177,7 +178,6 @@ def generate_via_nuts(
         output_shape=output_shape,
         log_density_form=log_density_form,
         prior=prior,
-        support=support,
     )
     approx = condition_on(
         target,

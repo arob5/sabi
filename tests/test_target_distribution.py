@@ -16,10 +16,9 @@ import pytest
 from probpipe import condition_on
 from probpipe import unnormalized_log_prob as pp_unnormalized_log_prob
 from probpipe.core._distribution_base import Distribution
-from probpipe.core.constraints import interval
 from probpipe.core.protocols import SupportsUnnormalizedLogProb
-from probpipe.distributions.continuous import Uniform
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.problems.forms import Identity, LogLikPlusPrior
 from sabi.problems.target_distribution import TargetDistribution
 
@@ -29,6 +28,12 @@ def _gaussian_target_single(x):
     return -0.5 * jnp.sum(x * x)
 
 
+def _box_prior():
+    return independent_uniform(
+        low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="box_prior"
+    )
+
+
 def _gaussian_target() -> TargetDistribution:
     return TargetDistribution.from_target_single(
         target_single=_gaussian_target_single,
@@ -36,7 +41,7 @@ def _gaussian_target() -> TargetDistribution:
         input_shape=(2,),
         output_shape=(),
         log_density_form=Identity(),
-        support=interval(low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0)),
+        prior=_box_prior(),
     )
 
 
@@ -87,9 +92,9 @@ def test_event_shape_matches_input_shape():
 
 
 def test_log_lik_plus_prior_form_uses_prior():
-    """With LogLikPlusPrior + Uniform prior on a box, log p = -0.5*x^2 +
-    log_prior(x)."""
-    prior = Uniform(low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p")
+    """With LogLikPlusPrior + multivariate-event Uniform prior on a
+    box, log p = -0.5*x^2 + log_prior(x)."""
+    prior = _box_prior()
     td = TargetDistribution.from_target_single(
         target_single=_gaussian_target_single,
         name="quadratic_with_prior",
@@ -97,14 +102,13 @@ def test_log_lik_plus_prior_form_uses_prior():
         output_shape=(),
         log_density_form=LogLikPlusPrior(),
         prior=prior,
-        support=interval(low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0)),
     )
     x = jnp.asarray([0.5, -0.3])
     out = float(td._unnormalized_log_prob(x))
     # _unnormalized_log_prob = log_lik(x) + log_prior(x)
-    # log_lik = _gaussian_target_single(x); log_prior = log(1/100) per the box
+    # log_lik = _gaussian_target_single(x); log_prior = log(1/100) for the box.
     log_lik = float(_gaussian_target_single(x))
-    log_prior = -2.0 * jnp.log(10.0)  # log(1/10) per dim, two dims
+    log_prior = -2.0 * jnp.log(10.0)  # log(1/10) per dim, summed across two dims
     assert out == pytest.approx(log_lik + float(log_prior), abs=1e-5)
 
 

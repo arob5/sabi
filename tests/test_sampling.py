@@ -4,7 +4,8 @@
 - Output shape matches `(n,) + problem.input_shape`.
 - Samples lie in the problem's support.
 - Independent keys produce different draws; same key reproduces the draw.
-- Missing prior raises `ValueError` with a clear pointer.
+- Missing-prior construction raises (since `prior` is required on
+  `TargetDistribution`).
 """
 
 from __future__ import annotations
@@ -12,9 +13,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import pytest
-from probpipe.core.constraints import interval
 
-from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.problems.target_distribution import TargetDistribution
@@ -41,17 +40,20 @@ def test_prior_sampler_seed_determinism_and_independence():
     assert not jnp.allclose(X_a, X_c)
 
 
-def test_prior_sampler_missing_prior_raises():
-    """A Problem with `prior=None` must surface a clear error."""
-    target = TargetDistribution.from_target_single(
-        name="no_prior_target",
-        input_shape=(2,),
-        output_shape=(),
-        target_single=lambda x: jnp.sum(x),
-        prior=None,
-        support=interval(low=jnp.zeros(2), high=jnp.ones(2)),
-        log_density_form=Identity(),
-    )
-    problem = Problem(target_distribution=target, name="no_prior")
+def test_target_distribution_requires_prior():
+    """`TargetDistribution(prior=None)` raises with a clear pointer.
+
+    `prior` is required for two reasons: (1) it defines the support of
+    the parameter space, and (2) it acts as the design distribution
+    for sampling. See the `TargetDistribution` module docstring for
+    the full role description.
+    """
     with pytest.raises(ValueError, match="prior"):
-        PriorSampler().sample(problem, jax.random.key(0), n=4)
+        TargetDistribution.from_target_single(
+            name="no_prior_target",
+            input_shape=(2,),
+            output_shape=(),
+            target_single=lambda x: jnp.sum(x),
+            log_density_form=Identity(),
+            prior=None,
+        )

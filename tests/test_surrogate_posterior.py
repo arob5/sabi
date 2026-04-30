@@ -38,7 +38,7 @@ from probpipe.core.protocols import (
     SupportsSampling,
     SupportsUnnormalizedLogProb,
 )
-from probpipe.distributions.continuous import Normal, Uniform
+from probpipe.distributions.continuous import Normal
 from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.posterior import (
@@ -211,9 +211,10 @@ def test_pushforward_normal_identity_returns_input_dist():
 
 
 def test_pushforward_normal_log_lik_plus_prior_shifts_loc():
-    """LogLikPlusPrior with element-wise Uniform prior shifts each loc by
-    the joint log-prior at the corresponding point."""
-    from sabi.problems.forms import _joint_log_prior
+    """LogLikPlusPrior with multivariate-event Uniform prior shifts
+    each loc by the log-prior at the corresponding point."""
+    from probpipe import log_prob as pp_log_prob
+    from sabi._probpipe_compat import independent_uniform
 
     n = 3
     X = jnp.asarray([[0.4, -0.1], [0.0, 0.0], [1.0, 1.0]])
@@ -222,12 +223,12 @@ def test_pushforward_normal_log_lik_plus_prior_shifts_loc():
         scale=jnp.asarray([0.1, 0.2, 0.05]),
         name="nrm",
     )
-    prior = Uniform(
+    prior = independent_uniform(
         low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
     )
     out = pushforward_marginal(nrm, LogLikPlusPrior(), X=X, prior=prior)
     assert isinstance(out, Normal)
-    expected_shifts = jax.vmap(lambda x: _joint_log_prior(prior, x))(X)
+    expected_shifts = jax.vmap(lambda x: jnp.asarray(pp_log_prob(prior, x)))(X)
     expected_loc = jnp.asarray(nrm.loc) + expected_shifts
     assert jnp.allclose(jnp.asarray(out.loc), expected_loc, atol=1e-5)
     # Scale is unchanged.
@@ -249,7 +250,8 @@ def test_pushforward_mvn_identity_returns_input_dist():
 def test_pushforward_mvn_log_lik_plus_prior_shifts_loc():
     """Joint MVN over n points: shift loc by per-point log-prior, keep
     scale_tril unchanged."""
-    from sabi.problems.forms import _joint_log_prior
+    from probpipe import log_prob as pp_log_prob
+    from sabi._probpipe_compat import independent_uniform
 
     n = 4
     X = jax.random.uniform(jax.random.key(2), shape=(n, 2), minval=-1, maxval=1)
@@ -258,12 +260,12 @@ def test_pushforward_mvn_log_lik_plus_prior_shifts_loc():
         cov=jnp.eye(n) * 0.5,
         name="mvn",
     )
-    prior = Uniform(
+    prior = independent_uniform(
         low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
     )
     out = pushforward_marginal(mvn, LogLikPlusPrior(), X=X, prior=prior)
     assert isinstance(out, MultivariateNormal)
-    expected_shifts = jax.vmap(lambda x: _joint_log_prior(prior, x))(X)
+    expected_shifts = jax.vmap(lambda x: jnp.asarray(pp_log_prob(prior, x)))(X)
     assert jnp.allclose(jnp.asarray(out.loc), expected_shifts, atol=1e-5)
     # scale_tril unchanged.
     assert jnp.allclose(
@@ -291,10 +293,11 @@ def test_pushforward_forward_model_with_normal_falls_to_mc():
         scale=jnp.ones(n),
         name="nrm",
     )
-    prior = Uniform(
+    from sabi._probpipe_compat import independent_uniform
+    prior = independent_uniform(
         low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
     )
-    form = _Square(log_lik_from_outputs=lambda x, y: -0.5 * (y - 1.0) ** 2)
+    form = _Square(log_lik_from_outputs=lambda x, y: -0.5 * jnp.sum((y - 1.0) ** 2))
     out = pushforward_marginal(nrm, form, X=X, prior=prior)
     # The workflow_function broadcast returns an EmpiricalDistribution.
     # Each sample should have shape (n,) — joint log-density across n points.
@@ -317,9 +320,10 @@ def test_sp_random_unnormalized_log_prob_identity_returns_normal():
 
 
 def test_sp_random_unnormalized_log_prob_log_lik_plus_prior_shifts_mean():
-    from sabi.problems.forms import _joint_log_prior
+    from probpipe import log_prob as pp_log_prob
+    from sabi._probpipe_compat import independent_uniform
 
-    prior = Uniform(
+    prior = independent_uniform(
         low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
     )
     sp = _sp(form=LogLikPlusPrior(), prior=prior)
@@ -327,7 +331,7 @@ def test_sp_random_unnormalized_log_prob_log_lik_plus_prior_shifts_mean():
     marginal = random_unnormalized_log_prob(sp, X)
     assert isinstance(marginal, Normal)
     pred = sp.emulator(X)
-    expected_shifts = jax.vmap(lambda x: _joint_log_prior(prior, x))(X)
+    expected_shifts = jax.vmap(lambda x: jnp.asarray(pp_log_prob(prior, x)))(X)
     expected_loc = jnp.asarray(pred.loc) + expected_shifts
     assert jnp.allclose(jnp.asarray(marginal.loc), expected_loc, atol=1e-5)
 

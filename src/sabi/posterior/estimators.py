@@ -135,10 +135,10 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         pred = self._emulator(x_batch)
         pred_mean = jnp.asarray(mean(pred))
         if single:
-            y = pred_mean[0]
-        else:
-            y = pred_mean
-        return self._form(x, y, prior=self._prior)
+            # Form's per-point hook; avoids vmap overhead on a single x.
+            return self._form._call_single(x, pred_mean[0], prior=self._prior)
+        # Batched: form's public batched call.
+        return self._form(x, pred_mean, prior=self._prior)
 
     def _sample(self, key, sample_shape: tuple[int, ...] = ()) -> Array:
         kwargs = dict(self._sampler_kwargs)

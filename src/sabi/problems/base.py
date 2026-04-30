@@ -85,11 +85,12 @@ class Problem:
         return self.target_distribution.log_density_form
 
     @property
-    def prior(self) -> Distribution | None:
+    def prior(self) -> Distribution:
         return self.target_distribution.prior
 
     @property
-    def support(self) -> Constraint | None:
+    def support(self) -> Constraint:
+        """Support of the parameter space (delegates to ``prior.support``)."""
         return self.target_distribution.support
 
     def log_posterior(self, x: Array) -> Array:

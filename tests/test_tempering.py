@@ -9,11 +9,18 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
 from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import FixedSchedule, UntemperedSchedule
+
+
+def _box_prior():
+    return independent_uniform(
+        low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
+    )
 
 
 def _target() -> TargetDistribution:
@@ -24,6 +31,7 @@ def _target() -> TargetDistribution:
         input_shape=(2,),
         output_shape=(),
         log_density_form=Identity(),
+        prior=_box_prior(),
     )
 
 
@@ -158,6 +166,7 @@ def test_problem_target_distribution_round_trips_via_no_tempering():
         input_shape=(2,),
         output_shape=(),
         log_density_form=Identity(),
+        prior=_box_prior(),
     )
     problem = Problem(target_distribution=target, name="quad_problem")
     intermediate = NoTempering().intermediate_target(

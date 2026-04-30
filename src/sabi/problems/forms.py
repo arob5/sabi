@@ -1,27 +1,58 @@
-"""Log-density forms — sabi's local **pushforward operators**.
+r"""Log-density forms — sabi's local **pushforward operators**.
 
-Each `LogDensityForm` composes a target evaluation `y = f(x)` with a prior
+A `LogDensityForm` composes target evaluations ``y = f(x)`` with a prior
 log-density (and any extra observation-model machinery) to produce an
-unnormalized log-posterior. This is exactly the pushforward of `f` through
-`log_prior(x)` — sabi treats `LogDensityForm` as its local pushforward
+unnormalized log-posterior. This is the pushforward of ``f`` through
+``log_prior(x)`` — sabi treats `LogDensityForm` as its local pushforward
 implementation until ProbPipe's pushforward op lands (see
-`docs/probpipe_issues.md`).
+``docs/probpipe_issues.md``).
 
-Each form is called on a **single** point `(x, y)` plus an optional `prior`
-argument and returns a scalar log-density; vectorize externally (e.g.
-`jax.vmap`) when working with batches. Shape / symbol conventions: see
-`docs/notation.md`.
+Shape contract (mirrors ProbPipe's batch / event semantics)
+-----------------------------------------------------------
 
-Forms take `prior` directly rather than a `Problem` so they can be reused
-in algorithm-agnostic contexts (e.g. by `SurrogatePosterior`, which is
-decoupled from `Problem` per the v1.2 design). The `Problem.log_posterior`
-method passes its own `prior` field through.
+The public ``__call__(X, Y, *, prior)`` is **batched**:
 
-`LogLikPlusPrior` and `ForwardModel` access the prior via
-`probpipe.log_prob(prior, x)`. ProbPipe ops return `NumericRecord`
-containers; we extract the scalar with `jnp.asarray(...)` to interoperate
-with sabi's float arithmetic (see `NumericRecord operator overloading`
-entry in `docs/probpipe_issues.md`).
+- ``X.shape == (n,) + input_shape``  (a leading batch dim of size n
+  prepended to the event shape).
+- ``Y.shape == (n,) + output_shape``.
+- Returns shape ``(n,)`` — one scalar log-density per row of X.
+
+Subclasses implement the per-point hook ``_call_single(x, y, *, prior)``:
+
+- ``x.shape == input_shape``, ``y.shape == output_shape``.
+- Returns scalar.
+
+Default ``__call__`` does ``jax.vmap(self._call_single, in_axes=(0, 0,
+None))(X, Y)`` — vmaps over the leading axis of X and Y; broadcasts the
+``prior`` Distribution. Subclasses can override ``__call__`` directly
+when a vectorized batched implementation is more efficient than
+vmap-of-single-point (e.g., `Identity` is batched-trivial since
+``Y_batched`` is already the answer).
+
+Prior shape contract
+--------------------
+
+The ``prior`` argument is a multivariate-event Distribution over the
+parameter space: ``prior.event_shape == input_shape``,
+``prior.batch_shape == ()``. Then ``log_prob(prior, x)`` for ``x`` of
+shape ``input_shape`` returns a *scalar* — exactly what the form
+needs.
+
+For per-dim distributions (e.g., a per-dim ``Uniform(low_array,
+high_array)`` with ``batch_shape == (d,), event_shape == ()``), wrap
+with `sabi._probpipe_compat.independent_uniform` (or the more general
+`_IndependentArrayDistribution`) to re-interpret the batch dims as
+event dims. Forms call `log_prob(prior, x)` directly and assume the
+scalar result.
+
+Naming
+------
+
+``_call_single`` is the **private hook** subclasses implement
+(underscore by convention; not part of the public API). External
+callers use the batched ``__call__``. Forms that are pointwise scalar
+operations on ``y`` (like `Identity`) override ``__call__`` directly
+to skip the vmap overhead.
 """
 
 from __future__ import annotations
@@ -30,6 +61,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 from probpipe import log_prob
@@ -37,23 +69,51 @@ from probpipe.core._distribution_base import Distribution
 
 
 class LogDensityForm(ABC):
-    """Deterministic assembler `(x, y) → unnormalized log-posterior(x)`."""
+    """Deterministic assembler `(x, y) -> unnormalized log-posterior(x)`.
+
+    Subclasses implement ``_call_single(x, y, *, prior) -> scalar``;
+    the default ``__call__(X, Y, *, prior)`` ``jax.vmap``s it over the
+    leading batch axis of X and Y. Override ``__call__`` directly for
+    a batched implementation more efficient than vmap.
+    """
 
     @abstractmethod
-    def __call__(
+    def _call_single(
         self,
         x: Array,
         y: Array,
         *,
         prior: Distribution | None = None,
-    ) -> Array: ...
+    ) -> Array:
+        """Single-point hook: ``x.shape == input_shape``,
+        ``y.shape == output_shape``; returns scalar.
+        """
+
+    def __call__(
+        self,
+        X: Array,
+        Y: Array,
+        *,
+        prior: Distribution | None = None,
+    ) -> Array:
+        """Batched: ``X.shape == (n,) + input_shape``,
+        ``Y.shape == (n,) + output_shape``; returns shape ``(n,)``.
+
+        Default: ``jax.vmap`` of ``_call_single`` over the leading
+        axis. Override for a vectorized implementation when more
+        efficient.
+        """
+        return jax.vmap(
+            lambda xi, yi: self._call_single(xi, yi, prior=prior),
+            in_axes=(0, 0),
+        )(X, Y)
 
 
 @dataclass(frozen=True)
 class Identity(LogDensityForm):
     """`y` is already the unnormalized log-posterior. Emulator learns log-post."""
 
-    def __call__(
+    def _call_single(
         self,
         x: Array,
         y: Array,
@@ -62,31 +122,27 @@ class Identity(LogDensityForm):
     ) -> Array:
         return y
 
-
-def _joint_log_prior(prior: Distribution, x: Array) -> Array:
-    """Joint log-density of `prior` at `x`, summed across all dims.
-
-    Sabi's forms treat `prior` as a joint distribution over parameter space
-    and need a scalar log-density at each `x`. ProbPipe distributions like
-    `Uniform` are element-wise (returning a per-dim log-density when
-    `event_shape == ()` and the parameters are batched), so we sum across
-    all returned dims to get the joint log-density. For a properly
-    multivariate prior whose `log_prob` already returns a scalar, the sum
-    is a no-op.
-
-    This is a v1.2 pragma — when ProbPipe ships joint multivariate priors
-    natively (via `Independent`-style wrappers or composed
-    `MultivariateNormal`), the form can drop the sum and require scalar
-    `log_prob` output explicitly.
-    """
-    return jnp.sum(jnp.asarray(log_prob(prior, x)))
+    def __call__(
+        self,
+        X: Array,
+        Y: Array,
+        *,
+        prior: Distribution | None = None,
+    ) -> Array:
+        # Trivially batched: Y already is the answer at every row.
+        return Y
 
 
 @dataclass(frozen=True)
 class LogLikPlusPrior(LogDensityForm):
-    """`y` is the log-likelihood; emulator learns log-lik only, prior added here."""
+    """`y` is the log-likelihood; emulator learns log-lik only, prior added here.
 
-    def __call__(
+    Requires a multivariate-event ``prior`` whose ``log_prob(prior, x)``
+    for ``x`` of shape ``input_shape`` returns a scalar. See the
+    module-level shape contract.
+    """
+
+    def _call_single(
         self,
         x: Array,
         y: Array,
@@ -97,17 +153,22 @@ class LogLikPlusPrior(LogDensityForm):
             raise ValueError(
                 f"{type(self).__name__} requires a non-None prior."
             )
-        return y + _joint_log_prior(prior, x)
+        return y + jnp.asarray(log_prob(prior, x))
 
 
 @dataclass(frozen=True)
 class ForwardModel(LogDensityForm):
-    """Emulator learns a forward model `y = g(x)`; observation model + prior are
-    applied here to form the log-posterior."""
+    """Emulator learns a forward model ``y = g(x)``; observation model and
+    prior are applied here to form the log-posterior.
 
-    log_lik_from_outputs: Callable[[Array, Array], Array]  # (x, y) -> log-likelihood
+    The ``log_lik_from_outputs(x, y)`` callable is single-point: takes
+    ``(x.shape == input_shape, y.shape == output_shape)`` and returns
+    a scalar log-likelihood. Requires a multivariate-event ``prior``.
+    """
 
-    def __call__(
+    log_lik_from_outputs: Callable[[Array, Array], Array]  # (x, y) -> scalar
+
+    def _call_single(
         self,
         x: Array,
         y: Array,
@@ -118,4 +179,4 @@ class ForwardModel(LogDensityForm):
             raise ValueError(
                 f"{type(self).__name__} requires a non-None prior."
             )
-        return self.log_lik_from_outputs(x, y) + _joint_log_prior(prior, x)
+        return self.log_lik_from_outputs(x, y) + jnp.asarray(log_prob(prior, x))

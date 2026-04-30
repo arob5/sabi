@@ -17,8 +17,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 from probpipe.core._empirical import NumericEmpiricalDistribution
-from probpipe.core.constraints import interval
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.problems.forms import Identity
 from sabi.reference.cache import load_or_generate_reference_samples
 from sabi.reference.io import (
@@ -32,6 +32,15 @@ from sabi.reference.io import (
 def _scalar_normal_target(theta):
     """Standard 2-D normal log-density (used for cheap NUTS smoke tests)."""
     return -0.5 * jnp.sum(theta ** 2)
+
+
+def _box_prior():
+    """A 2-D multivariate-event uniform on [-5, 5]^2 — used wherever
+    the cache layer wants a prior (sometimes a no-op cache hit; pass
+    a valid prior anyway since `prior` is now required)."""
+    return independent_uniform(
+        low=jnp.full(2, -5.0), high=jnp.full(2, 5.0), name="box_prior"
+    )
 
 
 def test_samples_parquet_roundtrip(tmp_path):
@@ -80,8 +89,7 @@ def test_cache_hit_skips_nuts(tmp_path):
         cache_key="k1",
         target_function=bad_target,
         log_density_form=Identity(),
-        prior=None,
-        support=interval(jnp.full(2, -5.0), jnp.full(2, 5.0)),
+        prior=_box_prior(),
         input_shape=(2,),
         num_results=10,
         num_warmup=5,
@@ -116,8 +124,7 @@ def test_cache_keys_disambiguate_by_params(tmp_path):
         cache_key="kA",
         target_function=_bad,
         log_density_form=Identity(),
-        prior=None,
-        support=interval(jnp.full(2, -5.0), jnp.full(2, 5.0)),
+        prior=_box_prior(),
         input_shape=(2,),
         num_results=4,
         num_warmup=2,
@@ -130,8 +137,7 @@ def test_cache_keys_disambiguate_by_params(tmp_path):
         cache_key="kB",
         target_function=_bad,
         log_density_form=Identity(),
-        prior=None,
-        support=interval(jnp.full(2, -5.0), jnp.full(2, 5.0)),
+        prior=_box_prior(),
         input_shape=(2,),
         num_results=4,
         num_warmup=2,
@@ -154,8 +160,7 @@ def test_quality_threshold_failure_raises(tmp_path):
             cache_key="k",
             target_function=_scalar_normal_target,
             log_density_form=Identity(),
-            prior=None,
-            support=interval(jnp.full(2, -5.0), jnp.full(2, 5.0)),
+            prior=_box_prior(),
             input_shape=(2,),
             num_results=20,
             num_warmup=10,

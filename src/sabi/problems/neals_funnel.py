@@ -42,9 +42,8 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 from jax import Array
-from probpipe.core.constraints import interval
-from probpipe.distributions.continuous import Uniform
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
 from sabi.problems.target_distribution import TargetDistribution
@@ -110,8 +109,11 @@ def neals_funnel(
     # --- support + design distribution ------------------------------------
     lower = jnp.asarray([-v_bound] + [-x_bound] * d, dtype=jnp.float64)
     upper = jnp.asarray([v_bound] + [x_bound] * d, dtype=jnp.float64)
-    support = interval(lower, upper)
-    prior = Uniform(low=lower, high=upper, name=f"neals_funnel_design_d{d}_sv{sigma_v}")
+    # Multivariate-event prior over R^p (event_shape == (p,)). See
+    # `sabi/_probpipe_compat.py` for the shim.
+    prior = independent_uniform(
+        low=lower, high=upper, name=f"neals_funnel_design_d{d}_sv{sigma_v}"
+    )
 
     # --- reference distribution via NUTS (cached on disk) -----------------
     cache_key = (
@@ -141,7 +143,6 @@ def neals_funnel(
         target_function=log_prob_single,
         log_density_form=Identity(),
         prior=prior,
-        support=support,
         input_shape=(p,),
         problem_params={
             "d": d,
@@ -164,7 +165,6 @@ def neals_funnel(
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
-        support=support,
     )
     return Problem(
         target_distribution=target,

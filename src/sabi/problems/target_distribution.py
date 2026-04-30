@@ -7,26 +7,59 @@ with a `LogDensityForm` `phi`:
 
 .. math::
 
-    \log p(x) = \phi(x, f(x), \text{prior}).
+    \log p(x) = \phi(x, f(x); \text{prior}).
 
 Every benchmark inference problem in sabi is fundamentally defined by
 its `TargetDistribution`. `Problem` (in `sabi.problems.base`) bundles a
 target distribution with benchmark-suite metadata (reference posterior,
-name, etc.) but the mathematical content lives here.
+name, etc.); the mathematical content lives here.
 
-The same class represents the **base / final** target and (eventually
-via subclass) **intermediate** targets that a `TemperingScheme` produces
-along the way — they have the same structure.
+The same class represents the **base / final** target and (via
+`IntermediateTarget`) intermediate targets a `TemperingScheme`
+produces along the way — they have the same structure.
 
-Distribution interface (post-PR-#151):
+Role of ``prior``
+------------------
+
+The ``prior`` field is **required**. It plays two roles independent
+of whether the prior also forms part of the target distribution:
+
+1. **Defining the support of the parameter space.** ``support`` is
+   not a separate field — it is exposed as a property delegating to
+   ``prior.support``. The prior may have unbounded support (e.g., a
+   `Normal` over R^d) when bounded support isn't desired.
+2. **Sampling for initial design, candidate sets, and prior-sampling
+   acquisitions.** The prior acts as the "design distribution"
+   regardless of whether it's part of the target.
+
+Whether the prior also enters the unnormalized target is the problem
+builder's choice via ``log_density_form``: `LogLikPlusPrior` builds it
+in (target = log_lik + log_prior); `Identity` doesn't. In Bayesian
+settings the algorithmic ``prior`` may be a *truncated* version of
+the modeling prior — e.g., a Gaussian Bayesian prior paired with a
+uniform-box algorithmic prior used purely to bound sampling.
+
+Shape contract
+--------------
+
+The ``prior`` is a multivariate-event Distribution: ``event_shape ==
+input_shape``, ``batch_shape == ()``. ``log_prob(prior, x)`` for ``x``
+of shape ``input_shape`` returns a scalar — exactly what the form
+needs. For per-dim distributions (e.g., a per-dim
+``Uniform(low_array, high_array)``), wrap with
+`sabi._probpipe_compat.independent_uniform` to re-interpret the batch
+dims as event dims.
+
+Distribution interface
+----------------------
 
 - `SupportsUnnormalizedLogProb`: `_unnormalized_log_prob(x)` evaluates
   `phi(x, f(x), prior)`. Single-point ``value`` (shape ``input_shape``)
   is the primary contract; ProbPipe MCMC dispatches via this path.
   Batched input (shape ``(n,) + input_shape``) is also supported via
-  shape detection (mirrors `_ExpectedTargetDistribution`). Calls `f` at
-  fresh inputs — when the loop has cached `Y_raw`, it should use that
-  directly rather than re-evaluating via this method.
+  shape detection. Calls `f` at fresh inputs — when the loop has
+  cached `Y_raw`, it should use that directly rather than re-evaluating
+  via this method.
 - `condition_on(target_distribution, ...)` works directly: ProbPipe's
   registry auto-dispatches MCMC since the distribution satisfies
   `SupportsUnnormalizedLogProb`.
@@ -42,13 +75,13 @@ import jax.numpy as jnp
 from jax import Array
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._numeric_record_distribution import NumericRecordDistribution
-from probpipe.core.constraints import Constraint
+from probpipe.core.constraints import Constraint  # noqa: F401  (re-exported via support property)
 
 from sabi.problems.forms import LogDensityForm
 
 
 class TargetDistribution(NumericRecordDistribution):
-    """Unnormalized target distribution: ``phi(x, f(x), prior)``.
+    """Unnormalized target distribution: ``phi(x, f(x); prior)``.
 
     Args:
         name: ProbPipe distribution name.
@@ -58,9 +91,12 @@ class TargetDistribution(NumericRecordDistribution):
         target_single: single-point target ``input_shape -> output_shape``.
         log_density_form: composes ``(x, y, prior)`` into a scalar
             unnormalized log-density.
-        prior: optional prior distribution; required by forms that
-            access it (e.g., `LogLikPlusPrior`).
-        support: parameter-space `Constraint`.
+        prior: required `Distribution` over the parameter space. Must
+            be multivariate-event (``event_shape == input_shape``).
+            Defines the support and acts as the design distribution
+            for sampling. May or may not also be part of the target
+            distribution (depends on `log_density_form`). See module
+            docstring for the full role description.
     """
 
     _sampling_cost: ClassVar[str] = "high"
@@ -75,16 +111,22 @@ class TargetDistribution(NumericRecordDistribution):
         target_function: Callable[[Array], Array],
         target_single: Callable[[Array], Array],
         log_density_form: LogDensityForm,
-        prior: Distribution | None = None,
-        support: Constraint | None = None,
+        prior: Distribution,
     ):
+        if prior is None:
+            raise ValueError(
+                "TargetDistribution requires a non-None `prior`. The prior "
+                "defines the support of the parameter space and acts as "
+                "the design distribution. Use a Distribution with "
+                "unbounded support (e.g., a Normal) if bounded support "
+                "isn't needed."
+            )
         self._input_shape = tuple(input_shape)
         self._output_shape = tuple(output_shape)
         self._target_function = target_function
         self._target_single = target_single
         self._log_density_form = log_density_form
         self._prior = prior
-        self._support = support
         super().__init__(name=name)
 
     # ------------------------------------------------------------------------
@@ -136,12 +178,17 @@ class TargetDistribution(NumericRecordDistribution):
         return self._log_density_form
 
     @property
-    def prior(self) -> Distribution | None:
+    def prior(self) -> Distribution:
         return self._prior
 
     @property
-    def support(self) -> Constraint | None:
-        return self._support
+    def support(self) -> Constraint:
+        """Support of the parameter space, derived from ``prior.support``.
+
+        ``prior`` is required, so ``support`` is always defined (may be
+        unbounded — e.g., a Normal prior gives ``real`` support).
+        """
+        return self._prior.support
 
     # ------------------------------------------------------------------------
     # Distribution interface
@@ -157,18 +204,18 @@ class TargetDistribution(NumericRecordDistribution):
         `value` may be a single point of shape ``input_shape`` (the
         primary contract; ProbPipe MCMC dispatches via this path) or a
         batch of shape ``(n,) + input_shape``. Detected by shape;
-        single-point uses ``target_single``, batched uses
-        ``target_function``.
+        single-point uses ``target_single`` + form's per-point hook,
+        batched uses ``target_function`` + the form's batched call.
         """
         x = jnp.asarray(value)
         if x.shape == self._input_shape:
             y = self._target_single(x)
-            return self._log_density_form(x, y, prior=self._prior)
-        # Batched (n,) + input_shape
+            # Use the form's per-point hook to avoid vmap overhead on a
+            # single-point call.
+            return self._log_density_form._call_single(x, y, prior=self._prior)
+        # Batched (n,) + input_shape: use the form's public batched call.
         y = self._target_function(x)
-        return jax.vmap(
-            lambda xi, yi: self._log_density_form(xi, yi, prior=self._prior)
-        )(x, y)
+        return self._log_density_form(x, y, prior=self._prior)
 
 
 class IntermediateTarget(TargetDistribution):
@@ -216,8 +263,7 @@ class IntermediateTarget(TargetDistribution):
         state: Any,
         output_transform: Callable[[Any, Array, Array], Array],
         base_target_function: Callable[[Array], Array],
-        prior: Distribution | None = None,
-        support: Constraint | None = None,
+        prior: Distribution,
     ):
         self._state = state
         self._output_transform = output_transform
@@ -230,7 +276,6 @@ class IntermediateTarget(TargetDistribution):
             target_single=target_single,
             log_density_form=log_density_form,
             prior=prior,
-            support=support,
         )
 
     @property
