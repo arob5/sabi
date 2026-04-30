@@ -20,7 +20,7 @@ families:
    this lands (v1.5+).
 
 The acquisition sees the current `SurrogatePosterior` (carrying the
-round's surrogate and log-density form) plus an `AcquisitionState`
+round's emulator and log-density form) plus an `AcquisitionState`
 bundling the design data and tempering state. See the
 `PointwiseScoredAcquisition` docstring for the scoring contract.
 
@@ -49,19 +49,19 @@ if TYPE_CHECKING:
 class AcquisitionState:
     """Per-round bundle passed to acquisitions. All fields are read-only.
 
-    The round's `SurrogatePosterior` carries the surrogate fit on the
+    The round's `SurrogatePosterior` carries the emulator fit on the
     current design data plus the log-density form for the round.
-    Acquisitions that need a real (non-degenerate) surrogate should check
-    ``state.surrogate_posterior.surrogate is None`` — this is the case
+    Acquisitions that need a real (non-degenerate) emulator should check
+    ``state.surrogate_posterior.emulator is None`` — this is the case
     when the loop is running the weighted-empirical baseline (a
     `WeightedEmpiricalRandomMeasure`, which is a `SurrogatePosterior`
-    subclass with ``surrogate=None``).
+    subclass with ``emulator=None``).
 
     Attributes:
         problem: the inference problem (provides `prior`, `support`,
             `input_shape`, etc.).
         surrogate_posterior: round's surrogate-posterior random measure
-            (always set; ``surrogate_posterior.surrogate`` may be
+            (always set; ``surrogate_posterior.emulator`` may be
             ``None`` for the weighted-empirical baseline).
         X: design inputs, shape `(n,) + problem.input_shape`.
         Y: design outputs, shape `(n,) + problem.output_shape`.
@@ -100,15 +100,15 @@ class PointwiseScoredAcquisition(Acquisition, ABC):
     The default `score(X, state)` implementation `jax.vmap`s
     `_score_single` over the leading axis of `X`; override `score`
     directly when a true batched implementation is more efficient (e.g.,
-    one surrogate call over the whole batch instead of `n` per-point
+    one emulator call over the whole batch instead of `n` per-point
     queries).
 
     **JAX-traceability.** `_score_single` (or `score`) must be
     JAX-traceable for `ContinuousMultiStartOptimizer` to take its
     gradient. The candidate-set optimizer needs only forward evaluation.
 
-    **Surrogate-protocol assumptions.** The score function reads from
-    `state.surrogate_posterior.surrogate` (an `ArrayRandomFunction`)
+    **Emulator-protocol assumptions.** The score function reads from
+    `state.surrogate_posterior.emulator` (an `ArrayRandomFunction`)
     whatever predictive moments / samples it needs. See subclass
     docstrings for specifics. ProbPipe's `mean` and `variance` ops
     require `SupportsMean` / `SupportsVariance` — they do **not**
@@ -143,7 +143,7 @@ class PointwiseScoredAcquisition(Acquisition, ABC):
         """Batched score: shape `(n,) + input_shape` → `(n,)`.
 
         Default: `jax.vmap(_score_single)`. Override directly when a
-        batched evaluation is more efficient (e.g., one surrogate call
+        batched evaluation is more efficient (e.g., one emulator call
         for the whole batch).
         """
         return jax.vmap(lambda x: self._score_single(x, state))(X)

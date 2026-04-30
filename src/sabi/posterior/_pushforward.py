@@ -2,13 +2,13 @@ r"""Pushforward dispatch on ``(input_dist, log_density_form)``.
 
 ``pushforward_marginal(input_dist, form, X=X, prior=prior)`` is the
 central entry point: given a ``Distribution[Array]`` describing a
-surrogate's predictive at a batch of query points (univariate marginals,
+emulator's predictive at a batch of query points (univariate marginals,
 joint over inputs, joint over outputs, or any combination per ProbPipe's
 ``ArrayRandomFunction`` shape table), and a ``LogDensityForm``, return a
 new ``Distribution[Array]`` representing the marginal random log-density
 at those query points.
 
-For an input distribution :math:`F(x)` (the surrogate's predictive at
+For an input distribution :math:`F(x)` (the emulator's predictive at
 :math:`x`) and a form :math:`\Phi`, the marginal random log-density at
 :math:`x` is
 
@@ -83,11 +83,11 @@ def pushforward_marginal(
     X: Array,
     prior: Distribution | None,
 ) -> Distribution:
-    """Pushforward of `input_dist` (the surrogate's predictive at `X`)
+    """Pushforward of `input_dist` (the emulator's predictive at `X`)
     through `form`.
 
     Args:
-        input_dist: surrogate's predictive distribution at `X`. May be a
+        input_dist: emulator's predictive distribution at `X`. May be a
             `Normal` (marginal mode, batch_shape=(n,)), a
             `MultivariateNormal` (joint mode, event_shape=(n,)), or any
             samplable `Distribution[Array]`.
@@ -184,7 +184,7 @@ def _batch_form(
     property of the function.
 
     Args:
-        ys: shape `(n,) + output_shape` — surrogate output values at the
+        ys: shape `(n,) + output_shape` — emulator output values at the
             n query points. (When broadcast, each per-sample value passed
             to this function has this shape.)
         X: query points, shape `(n,) + input_shape`.

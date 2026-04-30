@@ -1,5 +1,5 @@
 n_initial: 16
 n_rounds: 20
 q: 1
-# `surrogate_pushforward` (default) or `weighted_empirical` (no-emulator baseline).
-surrogate_posterior: surrogate_pushforward
+# `emulator_pushforward` (default) or `weighted_empirical` (no-emulator baseline).
+surrogate_posterior: emulator_pushforward

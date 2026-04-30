@@ -9,11 +9,11 @@ Three concrete optimizers ship in v1.4:
   to top-`n_starts`, BFGS each in unconstrained reparameterization
   space (TFP bijector dispatched on the support `Constraint`), return
   top-q distinct local maxima. Gradient-based; substantially more
-  accurate on smooth scores when the surrogate is well-conditioned.
+  accurate on smooth scores when the emulator is well-conditioned.
 - ``GreedyMultiPointOptimizer`` — for `q > 1` with in-batch diversity.
   Wraps an inner optimizer (any of the above with `q=1`); after each
   pick, hallucinates an observation at the pending point via a
-  pluggable ``FantasyImputer`` and refits the surrogate before the
+  pluggable ``FantasyImputer`` and refits the emulator before the
   next pick.
 
 For non-trivial supports (anything other than ``interval(low, high)``),
@@ -217,7 +217,7 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
        imputation always uses the **original** state's data so the
        imputer sees real observations.
     3. :math:`S_i` = ``replace(S_0, X=X_0 ∪ x_{1:i}, Y=Y_0 ∪ y_{1:i},
-       surrogate=S_0.surrogate.fit(X_i, Y_i))``.
+       emulator=S_0.emulator.fit(X_i, Y_i))``.
 
     Args:
         inner: per-point optimizer (e.g., ``CandidateSetOptimizer()``).
@@ -245,18 +245,18 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                 y_pending = self.imputer.impute(x_pending, state)
                 new_X = jnp.concatenate([state.X, x_pending], axis=0)
                 new_Y = jnp.concatenate([state.Y, y_pending], axis=0)
-                # Refit the surrogate on the augmented design. Mutate
+                # Refit the emulator on the augmented design. Mutate
                 # the surrogate_posterior copy so downstream score calls
-                # see the new surrogate.
+                # see the new emulator.
                 old_sp = state.surrogate_posterior
-                if old_sp.surrogate is None:
+                if old_sp.emulator is None:
                     raise ValueError(
                         "GreedyMultiPointOptimizer requires a non-degenerate "
-                        "surrogate; got `surrogate_posterior.surrogate=None`."
+                        "emulator; got `surrogate_posterior.emulator=None`."
                     )
-                new_surrogate = old_sp.surrogate.fit(new_X, new_Y)
+                new_emulator = old_sp.emulator.fit(new_X, new_Y)
                 new_sp = type(old_sp)(
-                    surrogate=new_surrogate,
+                    emulator=new_emulator,
                     log_density_form=old_sp.log_density_form,
                     support=old_sp.inner_support,
                     input_shape=old_sp.inner_event_shape,

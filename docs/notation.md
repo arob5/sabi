@@ -46,7 +46,7 @@ reserve `θ` for prose where it aids intuition.
 ## Naming in code
 
 - **Single-point args:** lowercase `x`, `y`. Used in `LogDensityForm.__call__(x, y, problem)` and anywhere a function is called on a single parameter setting.
-- **Batch args:** uppercase `X`, `Y`. Used in `Surrogate.fit(X, Y)`, `Surrogate.predict(X)`, and anywhere a function is called on a collection.
+- **Batch args:** uppercase `X`, `Y`. Used in `Emulator.fit(X, Y)`, `Emulator.predict(X)`, and anywhere a function is called on a collection.
 - **JAX PRNG keys:** `key`, `key_init`, `key_loop`, `key_acq`, etc. Never `k_init` or bare `k`.
 - **Dimensions:** prefer `problem.input_shape` / `problem.output_shape`. Use `d` / `p` only in math contexts where the scalar dim is unambiguous.
 - **Tempering:** `tempering_state` for the opaque state PyTree; `current_form` for the post-tempering `LogDensityForm`.

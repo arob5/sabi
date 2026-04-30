@@ -3,7 +3,7 @@
 Coverage:
 - Inheritance: SurrogatePosterior is a NumericRandomMeasure;
   WeightedEmpiricalRandomMeasure is a SurrogatePosterior subclass with
-  ``surrogate=None`` (the degenerate / no-emulator case).
+  ``emulator=None`` (the degenerate / no-emulator case).
 - Inner-support / inner-event-shape derived from constructor args.
 - Decoupling from Problem (constructed from math primitives only).
 - Protocol opt-in matrix per class.
@@ -48,7 +48,7 @@ from sabi.posterior import (
 )
 from sabi.posterior._pushforward import pushforward_marginal
 from sabi.problems.forms import ForwardModel, Identity, LogLikPlusPrior
-from sabi.surrogates.gp import GPSurrogate
+from sabi.emulators.gp import GPEmulator
 
 
 # -------------------------------------------------------------------------
@@ -79,9 +79,9 @@ def _sp(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
     key = jax.random.key(seed)
     X = jax.random.uniform(key, shape=(n, d), minval=-3.0, maxval=3.0)
     Y = -0.5 * jnp.sum(X ** 2, axis=-1)
-    surrogate = GPSurrogate(input_shape=(d,)).fit(X, Y)
+    emulator = GPEmulator(input_shape=(d,)).fit(X, Y)
     return SurrogatePosterior(
-        surrogate=surrogate,
+        emulator=emulator,
         log_density_form=form if form is not None else Identity(),
         support=_box_support(d),
         input_shape=(d,),
@@ -99,9 +99,9 @@ def test_werm_is_surrogate_posterior_subclass():
     werm = _werm()
     assert isinstance(werm, NumericRandomMeasure)
     assert isinstance(werm, RandomMeasure)
-    # WERM is a SurrogatePosterior subclass with degenerate surrogate.
+    # WERM is a SurrogatePosterior subclass with degenerate emulator.
     assert isinstance(werm, SurrogatePosterior)
-    assert werm.surrogate is None
+    assert werm.emulator is None
     assert werm.log_density_form is None
 
 
@@ -131,28 +131,28 @@ def test_werm_requires_support():
 
 
 def test_sp_requires_support():
-    surrogate = GPSurrogate(input_shape=(2,)).fit(
+    emulator = GPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="support"):
         SurrogatePosterior(
-            surrogate=surrogate,
+            emulator=emulator,
             log_density_form=Identity(),
             support=None,  # type: ignore[arg-type]
             input_shape=(2,),
         )
 
 
-def test_sp_input_shape_must_match_surrogate_input_shape():
-    surrogate = GPSurrogate(input_shape=(2,)).fit(
+def test_sp_input_shape_must_match_emulator_input_shape():
+    emulator = GPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="input_shape"):
         SurrogatePosterior(
-            surrogate=surrogate,
+            emulator=emulator,
             log_density_form=Identity(),
             support=_box_support(3),
-            input_shape=(3,),  # surrogate is (2,); this is (3,)
+            input_shape=(3,),  # emulator is (2,); this is (3,)
         )
 
 
@@ -312,7 +312,7 @@ def test_sp_random_unnormalized_log_prob_identity_returns_normal():
     X = jnp.asarray([[0.4, -0.1], [0.2, 0.3]])
     marginal = random_unnormalized_log_prob(sp, X)
     assert isinstance(marginal, Normal)
-    pred = sp.surrogate(X)
+    pred = sp.emulator(X)
     assert jnp.allclose(jnp.asarray(marginal.loc), jnp.asarray(pred.loc), atol=1e-5)
 
 
@@ -326,7 +326,7 @@ def test_sp_random_unnormalized_log_prob_log_lik_plus_prior_shifts_mean():
     X = jnp.asarray([[0.4, -0.1], [0.2, 0.3]])
     marginal = random_unnormalized_log_prob(sp, X)
     assert isinstance(marginal, Normal)
-    pred = sp.surrogate(X)
+    pred = sp.emulator(X)
     expected_shifts = jax.vmap(lambda x: _joint_log_prior(prior, x))(X)
     expected_loc = jnp.asarray(pred.loc) + expected_shifts
     assert jnp.allclose(jnp.asarray(marginal.loc), expected_loc, atol=1e-5)
@@ -370,7 +370,7 @@ def test_expected_target_for_sp_unnormalized_log_prob_matches_form():
     sp = _sp()
     et = expected_target(sp)
     x = jnp.asarray([0.3, -0.2])
-    pred = sp.surrogate(x[None])
+    pred = sp.emulator(x[None])
     pred_mean = jnp.asarray(mean(pred))[0]
     expected = float(sp.log_density_form(x, pred_mean, prior=sp.prior))
     assert float(et._unnormalized_log_prob(x)) == pytest.approx(expected, abs=1e-5)

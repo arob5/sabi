@@ -40,7 +40,7 @@ from probpipe.core.constraints import Constraint
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.forms import LogDensityForm
-from sabi.surrogates.base import Surrogate
+from sabi.emulators.base import Emulator
 
 
 def expected_target(
@@ -69,7 +69,7 @@ def expected_target(
         return sp.inner_distribution
     if isinstance(sp, SurrogatePosterior):
         return _ExpectedTargetDistribution(
-            surrogate=sp.surrogate,
+            emulator=sp.emulator,
             log_density_form=sp.log_density_form,
             prior=sp.prior,
             input_shape=sp.inner_event_shape,
@@ -84,10 +84,10 @@ def expected_target(
 
 
 class _ExpectedTargetDistribution(NumericRecordDistribution):
-    """The deterministic posterior obtained by plugging the surrogate's
+    """The deterministic posterior obtained by plugging the emulator's
     predictive mean into the log-density form.
 
-    `_unnormalized_log_prob(x) = log_density_form(x, surrogate_mean(x), prior=prior)`.
+    `_unnormalized_log_prob(x) = log_density_form(x, emulator_mean(x), prior=prior)`.
 
     Sampling delegates to ProbPipe `condition_on(self)`; the registry
     auto-selects an MCMC method (typically `tfp_nuts`) since this
@@ -99,7 +99,7 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
 
     def __init__(
         self,
-        surrogate: Surrogate,
+        emulator: Emulator,
         log_density_form: LogDensityForm,
         prior: Distribution | None,
         *,
@@ -109,7 +109,7 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         sampler_kwargs: dict[str, Any] | None = None,
         name: str | None = None,
     ):
-        self._surrogate = surrogate
+        self._emulator = emulator
         self._form = log_density_form
         self._prior = prior
         self._input_shape = tuple(input_shape)
@@ -130,9 +130,9 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         x = jnp.asarray(value)
         single = x.shape == self._input_shape
         x_batch = x[None] if single else x
-        # Surrogate is an ArrayRandomFunction; __call__(X) returns a
+        # Emulator is an ArrayRandomFunction; __call__(X) returns a
         # Distribution whose `mean` is the predictive mean across the n axis.
-        pred = self._surrogate(x_batch)
+        pred = self._emulator(x_batch)
         pred_mean = jnp.asarray(mean(pred))
         if single:
             y = pred_mean[0]

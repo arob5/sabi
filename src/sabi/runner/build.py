@@ -21,7 +21,7 @@ from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms.loop import (
     Algorithm,
     SurrogatePosteriorFactory,
-    surrogate_pushforward_factory,
+    emulator_pushforward_factory,
     weighted_empirical_factory,
 )
 from sabi.metrics.base import PosteriorMetric
@@ -30,7 +30,7 @@ from sabi.problems.banana import banana
 from sabi.problems.base import Problem
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.problems.neals_funnel import neals_funnel
-from sabi.surrogates.gp import GPSurrogate
+from sabi.emulators.gp import GPEmulator
 
 
 def build_problem(cfg: DictConfig) -> Problem:
@@ -61,13 +61,13 @@ def build_problem(cfg: DictConfig) -> Problem:
     raise ValueError(f"Unknown problem.name={name!r}.")
 
 
-def _build_surrogate_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
-    """Build a no-arg factory that constructs a `Surrogate` with the
+def _build_emulator_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
+    """Build a no-arg factory that constructs an `Emulator` with the
     problem's input_shape baked in."""
     name = cfg.name
     if name == "gp":
-        def factory() -> GPSurrogate:
-            return GPSurrogate(
+        def factory() -> GPEmulator:
+            return GPEmulator(
                 input_shape=input_shape,
                 ls_factor=float(cfg.get("ls_factor", 1.5)),
                 ls_floor=float(cfg.get("ls_floor", 0.05)),
@@ -75,7 +75,7 @@ def _build_surrogate_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
                 jitter=float(cfg.get("jitter", 1e-3)),
             )
         return factory
-    raise ValueError(f"Unknown surrogate.name={name!r}.")
+    raise ValueError(f"Unknown emulator.name={name!r}.")
 
 
 def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
@@ -132,8 +132,8 @@ def _build_metrics(cfg: DictConfig) -> tuple[PosteriorMetric, ...]:
 
 
 def _build_surrogate_posterior_factory(name: str) -> SurrogatePosteriorFactory:
-    if name == "surrogate_pushforward":
-        return surrogate_pushforward_factory
+    if name == "emulator_pushforward":
+        return emulator_pushforward_factory
     if name == "weighted_empirical":
         return weighted_empirical_factory
     raise ValueError(f"Unknown surrogate_posterior factory: {name!r}.")
@@ -141,14 +141,14 @@ def _build_surrogate_posterior_factory(name: str) -> SurrogatePosteriorFactory:
 
 def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
     """Build the `Algorithm` from config, baking in problem shape metadata
-    where downstream components need it (e.g., the surrogate factory)."""
+    where downstream components need it (e.g., the emulator factory)."""
     return Algorithm(
-        surrogate_factory=_build_surrogate_factory(
-            cfg.surrogate, input_shape=problem.input_shape
+        emulator_factory=_build_emulator_factory(
+            cfg.emulator, input_shape=problem.input_shape
         ),
         acquisition=_build_acquisition(cfg.acquisition),
         surrogate_posterior_factory=_build_surrogate_posterior_factory(
-            str(cfg.algorithm.get("surrogate_posterior", "surrogate_pushforward"))
+            str(cfg.algorithm.get("surrogate_posterior", "emulator_pushforward"))
         ),
         n_initial=int(cfg.algorithm.n_initial),
         n_rounds=int(cfg.algorithm.n_rounds),

@@ -7,8 +7,8 @@ a `FantasyImputer`.
 
 This is the standard taxonomy from BO literature:
 
-- **Kriging-believer**: `y_pending = surrogate.predict_mean(x_pending)`.
-  The surrogate's own best guess; conservative.
+- **Kriging-believer**: `y_pending = emulator.predict_mean(x_pending)`.
+  The emulator's own best guess; conservative.
 - **Constant-liar**: `y_pending = constant`. Pessimistic ("min" of seen
   Y) drives the optimizer toward exploration; optimistic ("max") toward
   exploitation.
@@ -43,16 +43,16 @@ class FantasyImputer(ABC):
 
 @dataclass(frozen=True)
 class KrigingBeliever(FantasyImputer):
-    r"""Use the surrogate's predictive mean at `x_pending` as the imputed y.
+    r"""Use the emulator's predictive mean at `x_pending` as the imputed y.
 
     .. math::
 
         y_{\text{pending}} = \mathbb{E}_f[f(x_{\text{pending}})] = \mu(x_{\text{pending}})
 
-    Conservative: the optimizer "believes" the surrogate is right at the
+    Conservative: the optimizer "believes" the emulator is right at the
     pending points. Standard default for greedy multi-point BO.
 
-    **Caveat for non-GP / hyperparameter-refit surrogates.** For a GP
+    **Caveat for non-GP / hyperparameter-refit emulators.** For a GP
     with **fixed** hyperparameters, kriging-believer imputation has a
     special property: refitting the GP on data points whose `y` values
     match the predictive mean leaves the predictive mean unchanged —
@@ -60,21 +60,21 @@ class KrigingBeliever(FantasyImputer):
     sees the same `mu` but tighter `sigma`, and greedy diversity comes
     entirely from variance reduction. **This property does not hold**
     for GPs with hyperparameters re-estimated between picks (sabi's
-    GreedyMultiPointOptimizer triggers this via ``surrogate.fit``)
-    nor for non-Gaussian surrogates. The implementation here is general:
-    it refits the surrogate each greedy step and the predictive mean may
+    GreedyMultiPointOptimizer triggers this via ``emulator.fit``)
+    nor for non-Gaussian emulators. The implementation here is general:
+    it refits the emulator each greedy step and the predictive mean may
     shift between picks.
     """
 
     def impute(self, x_pending: Array, state: AcquisitionState) -> Array:
-        surrogate = state.surrogate_posterior.surrogate
-        if surrogate is None:
+        emulator = state.surrogate_posterior.emulator
+        if emulator is None:
             raise ValueError(
-                "KrigingBeliever requires a non-degenerate surrogate; got "
-                "`state.surrogate_posterior.surrogate=None` (the "
+                "KrigingBeliever requires a non-degenerate emulator; got "
+                "`state.surrogate_posterior.emulator=None` (the "
                 "weighted-empirical baseline)."
             )
-        pred = surrogate(x_pending)
+        pred = emulator(x_pending)
         return jnp.asarray(mean(pred))
 
 
@@ -88,7 +88,7 @@ class ConstantLiar(FantasyImputer):
         \quad c \in \{ \min Y, \max Y, \overline{Y}, \text{user-supplied} \}.
 
     The constant is broadcast across all pending points (no spatial
-    dependence). After refitting the surrogate on
+    dependence). After refitting the emulator on
     :math:`(X \cup x_{\text{pending}}, Y \cup c\mathbf{1})`, the next
     score call sees a posterior that has been "informed" of pending picks
     via the lie.

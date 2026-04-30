@@ -1,6 +1,6 @@
 defaults:
   - problem: gaussian2d
-  - surrogate: gp
+  - emulator: gp
   - acquisition: ei
   - algorithm: default
   - _self_

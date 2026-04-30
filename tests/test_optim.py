@@ -29,7 +29,7 @@ from sabi.acquisitions.optim import (
 )
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
-from sabi.surrogates.gp import GPSurrogate
+from sabi.emulators.gp import GPEmulator
 
 
 # -------------------------------------------------------------------------
@@ -45,9 +45,9 @@ def _state(n: int = 30, seed: int = 0):
         key, shape=(n,) + problem.input_shape
     )
     Y = problem.target_function(X)
-    surrogate = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
+    emulator = GPEmulator(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(
-        surrogate=surrogate,
+        emulator=emulator,
         log_density_form=problem.log_density_form,
         support=problem.support,
         input_shape=problem.input_shape,

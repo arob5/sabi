@@ -14,7 +14,7 @@ from sabi.acquisitions.fantasize import (
 )
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
-from sabi.surrogates.gp import GPSurrogate
+from sabi.emulators.gp import GPEmulator
 
 
 def _state(n: int = 20, seed: int = 0):
@@ -25,9 +25,9 @@ def _state(n: int = 20, seed: int = 0):
         key, shape=(n,) + problem.input_shape
     )
     Y = problem.target_function(X)
-    surrogate = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
+    emulator = GPEmulator(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(
-        surrogate=surrogate,
+        emulator=emulator,
         log_density_form=problem.log_density_form,
         support=problem.support,
         input_shape=problem.input_shape,
@@ -48,7 +48,7 @@ def test_kriging_believer_returns_predictive_mean():
 
     imputer = KrigingBeliever()
     y = imputer.impute(x_pending, state)
-    expected = jnp.asarray(mean(state.surrogate_posterior.surrogate(x_pending)))
+    expected = jnp.asarray(mean(state.surrogate_posterior.emulator(x_pending)))
     assert jnp.allclose(y, expected, atol=1e-5)
     assert y.shape == (2,) + state.problem.output_shape
 

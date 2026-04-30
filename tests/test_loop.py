@@ -13,24 +13,24 @@ from sabi.acquisitions.optim import (
 from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms.loop import (
     Algorithm,
-    surrogate_pushforward_factory,
+    emulator_pushforward_factory,
     run,
     weighted_empirical_factory,
 )
 from sabi.metrics.posterior_mmd import ReferenceMMD
 from sabi.problems.banana import banana
 from sabi.problems.gaussian2d import gaussian2d
-from sabi.surrogates.gp import GPSurrogate
+from sabi.emulators.gp import GPEmulator
 
 
 def _algorithm(
     acquisition,
     n_rounds: int = 4,
     metrics=(ReferenceMMD(n_estimate_samples=512, n_reference_samples=512),),
-    surrogate_posterior_factory=surrogate_pushforward_factory,
+    surrogate_posterior_factory=emulator_pushforward_factory,
 ):
     return Algorithm(
-        surrogate_factory=lambda: GPSurrogate(),
+        emulator_factory=lambda: GPEmulator(),
         acquisition=acquisition,
         n_initial=16,
         n_rounds=n_rounds,

@@ -14,13 +14,13 @@ where :math:`\Phi`, :math:`\phi` are the standard-Normal CDF / PDF and
 (larger `offset` → more exploration). Setting :math:`\sigma(x) = 0`
 collapses EI to zero (already-evaluated points contribute nothing).
 
-EI targets regions likely to exceed the current-best surrogate value.
-When the surrogate emulates the log-posterior (`Identity` form), this
+EI targets regions likely to exceed the current-best emulator value.
+When the emulator emulates the log-posterior (`Identity` form), this
 hunts for high-posterior-density regions — a reasonable v0+ heuristic.
 
-**Assumptions.** EI reads only the first two moments of the surrogate
+**Assumptions.** EI reads only the first two moments of the emulator
 predictive at each query point. Concretely the score requires
-`state.surrogate_posterior.surrogate(x[None])` to satisfy ProbPipe's
+`state.surrogate_posterior.emulator(x[None])` to satisfy ProbPipe's
 `SupportsMean` and `SupportsVariance` protocols (TFP-backed `Normal` /
 `MultivariateNormal` do this by construction). See the
 `PointwiseScoredAcquisition` base docstring for the full contract on
@@ -56,7 +56,7 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
             exploration). Default `0.0` for noiseless surrogates;
             small positive values can stabilize EI for noisy ones.
         best_from: ``"data"`` uses `max(state.Y)`; ``"mean"`` uses the
-            surrogate's predictive-mean max at `state.X` (more robust
+            emulator's predictive-mean max at `state.X` (more robust
             for noisy labels — unused in v0/v1 noiseless setting).
     """
 
@@ -67,16 +67,16 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
     def _score_single(self, x: Array, state: AcquisitionState) -> Array:
         """Single-point EI at `x` (shape `state.problem.input_shape`).
         Returns scalar."""
-        surrogate = state.surrogate_posterior.surrogate
-        if surrogate is None:
+        emulator = state.surrogate_posterior.emulator
+        if emulator is None:
             raise ValueError(
-                "ExpectedImprovement requires a non-degenerate surrogate; "
-                "got `state.surrogate_posterior.surrogate=None` (this happens "
+                "ExpectedImprovement requires a non-degenerate emulator; "
+                "got `state.surrogate_posterior.emulator=None` (this happens "
                 "with the weighted-empirical baseline). Switch to a real "
-                "surrogate or use a sampling acquisition like PriorSampling."
+                "emulator or use a sampling acquisition like PriorSampling."
             )
-        # surrogate.__call__ expects a leading batch axis.
-        pred = surrogate(x[None])
+        # emulator.__call__ expects a leading batch axis.
+        pred = emulator(x[None])
         mu = jnp.asarray(mean(pred))[0]
         var_ = jnp.asarray(variance(pred))[0]
         std = jnp.sqrt(jnp.maximum(var_, 1e-30))
@@ -91,12 +91,12 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
         if self.best_from == "data":
             return jnp.max(state.Y)
         if self.best_from == "mean":
-            surrogate = state.surrogate_posterior.surrogate
-            if surrogate is None:
+            emulator = state.surrogate_posterior.emulator
+            if emulator is None:
                 raise ValueError(
                     "ExpectedImprovement(best_from='mean') requires a "
-                    "non-degenerate surrogate."
+                    "non-degenerate emulator."
                 )
-            train_pred = surrogate(state.X)
+            train_pred = emulator(state.X)
             return jnp.max(jnp.asarray(mean(train_pred)))
         raise ValueError(f"Unknown best_from={self.best_from!r}.")

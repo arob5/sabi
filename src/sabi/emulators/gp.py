@@ -1,6 +1,6 @@
-"""tinygp-backed GP surrogate with a Matern-5/2 kernel.
+"""tinygp-backed GP emulator with a Matern-5/2 kernel.
 
-Inherits from both `Surrogate` (sabi-side fittable random function marker)
+Inherits from both `Emulator` (sabi-side fittable random function marker)
 and ProbPipe's `GaussianRandomFunction`. Diamond inheritance over
 `ArrayRandomFunction`, resolved cleanly by Python's C3 MRO.
 
@@ -31,7 +31,7 @@ from jax import Array
 from probpipe.distributions.gaussian_random_function import GaussianRandomFunction
 from tinygp import GaussianProcess, kernels
 
-from sabi.surrogates.base import Surrogate
+from sabi.emulators.base import Emulator
 
 
 @dataclass(frozen=True)
@@ -80,12 +80,12 @@ def _build_gp(X: Array, lengthscale: Array, noise: float, jitter: float) -> Gaus
     return GaussianProcess(kernel, X, diag=noise + jitter)
 
 
-class GPSurrogate(Surrogate, GaussianRandomFunction):
-    """GP surrogate with Matern-5/2 isotropic kernel.
+class GPEmulator(Emulator, GaussianRandomFunction):
+    """GP emulator with Matern-5/2 isotropic kernel.
 
     `predict_mean` / `predict_variance` implement the abstract `GaussianRandomFunction`
     interface; `predict` / `__call__` come for free from the parent. `fit(X, Y)`
-    returns a new `GPSurrogate` carrying the conditioned state.
+    returns a new `GPEmulator` carrying the conditioned state.
     """
 
     # Marginal-only in v1.2 — joint covariance lands when emulator metrics need it.
@@ -116,7 +116,7 @@ class GPSurrogate(Surrogate, GaussianRandomFunction):
         super().__init__(
             input_shape=input_shape,
             output_shape=output_shape,
-            name=name or "GPSurrogate",
+            name=name or "GPEmulator",
         )
         self.ls_factor = ls_factor
         self.ls_floor = ls_floor
@@ -135,7 +135,7 @@ class GPSurrogate(Surrogate, GaussianRandomFunction):
     def fit(self, X: Array, Y: Array) -> Self:
         if X.ndim != 1 + len(self.input_shape):
             raise ValueError(
-                f"GPSurrogate.fit: expected X.shape == (n,) + input_shape="
+                f"GPEmulator.fit: expected X.shape == (n,) + input_shape="
                 f"{self.input_shape}, got {tuple(X.shape)}."
             )
         if Y.shape != X.shape[: -len(self.input_shape) or None]:
@@ -143,7 +143,7 @@ class GPSurrogate(Surrogate, GaussianRandomFunction):
             expected_y_shape = X.shape[: -len(self.input_shape)] + self.output_shape
             if Y.shape != expected_y_shape:
                 raise ValueError(
-                    f"GPSurrogate.fit: expected Y.shape={expected_y_shape}, "
+                    f"GPEmulator.fit: expected Y.shape={expected_y_shape}, "
                     f"got {tuple(Y.shape)}."
                 )
 

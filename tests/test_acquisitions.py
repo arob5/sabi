@@ -9,7 +9,7 @@ from sabi.acquisitions.random import PriorSampling
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.sampling import PriorSampler
-from sabi.surrogates.gp import GPSurrogate
+from sabi.emulators.gp import GPEmulator
 
 
 def _state(problem, key_seed=0, n=20):
@@ -18,9 +18,9 @@ def _state(problem, key_seed=0, n=20):
     trained on the same support."""
     X = PriorSampler().sample(problem, jax.random.key(key_seed), n)
     Y = problem.target_function(X)
-    gp = GPSurrogate(input_shape=problem.input_shape).fit(X, Y)
+    gp = GPEmulator(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(
-        surrogate=gp,
+        emulator=gp,
         log_density_form=problem.log_density_form,
         support=problem.support,
         input_shape=problem.input_shape,
@@ -53,9 +53,9 @@ def test_ei_acquisition_shape():
     assert batch.shape == (3,) + problem.input_shape
 
 
-def test_ei_picks_points_with_higher_surrogate_mean_than_random():
-    """EI is defined to prefer points with high surrogate mean + variance.
-    Verify directly against the surrogate (decouples from GP fit quality)."""
+def test_ei_picks_points_with_higher_emulator_mean_than_random():
+    """EI is defined to prefer points with high emulator mean + variance.
+    Verify directly against the emulator (decouples from GP fit quality)."""
     problem = gaussian2d()
     state = _state(problem, n=60)
 
@@ -64,9 +64,9 @@ def test_ei_picks_points_with_higher_surrogate_mean_than_random():
     )
     random_batch = PriorSampling().select_batch(state, q=16, key=jax.random.key(3))
 
-    surrogate = state.surrogate_posterior.surrogate
-    ei_pred = surrogate(ei_batch)
-    rand_pred = surrogate(random_batch)
+    emulator = state.surrogate_posterior.emulator
+    ei_pred = emulator(ei_batch)
+    rand_pred = emulator(random_batch)
 
     ei_mean = jnp.asarray(mean(ei_pred))
     rand_mean = jnp.asarray(mean(rand_pred))

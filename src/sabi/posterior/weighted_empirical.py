@@ -4,10 +4,10 @@ The simplest non-trivial random measure: zero variance over inner-distribution
 draws, with the inner distribution being a `NumericEmpiricalDistribution`
 weighted by `softmax(log_weights)`.
 
-Conceptually this is a `SurrogatePosterior` whose underlying surrogate is
+Conceptually this is a `SurrogatePosterior` whose underlying emulator is
 degenerate — there's no random function, the design points carry the
 posterior structure directly. Implemented as a `SurrogatePosterior`
-subclass with `surrogate=None`, so the algorithm loop and acquisitions
+subclass with `emulator=None`, so the algorithm loop and acquisitions
 see one unified type.
 
 In sabi this serves as a no-emulator baseline for the loop — the loop's
@@ -45,7 +45,7 @@ class WeightedEmpiricalRandomMeasure(SurrogatePosterior):
     `NumericEmpiricalDistribution` over `(X, log_weights)`. Implements
     the full `NumericRandomMeasure` protocol surface via the underlying
     empirical and Dirac shims. As a `SurrogatePosterior` subclass, it
-    reports `surrogate=None` and `log_density_form=None` (the form was
+    reports `emulator=None` and `log_density_form=None` (the form was
     consumed at construction time to compute the weights).
 
     Args:
@@ -85,9 +85,9 @@ class WeightedEmpiricalRandomMeasure(SurrogatePosterior):
         self._X = X
         self._log_weights = log_weights
         # Initialize the SurrogatePosterior base with a degenerate
-        # surrogate (None) and no form (consumed into log_weights).
+        # emulator (None) and no form (consumed into log_weights).
         super().__init__(
-            surrogate=None,
+            emulator=None,
             log_density_form=None,
             support=support,
             input_shape=input_shape,

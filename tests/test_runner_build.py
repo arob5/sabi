@@ -2,7 +2,7 @@ from omegaconf import OmegaConf
 
 from sabi.algorithms.loop import (
     Algorithm,
-    surrogate_pushforward_factory,
+    emulator_pushforward_factory,
     weighted_empirical_factory,
 )
 from sabi.metrics.posterior_mmd import ReferenceMMD
@@ -18,7 +18,7 @@ def _cfg(with_metric=True):
             "cov": [[1.0, 0.0], [0.0, 1.0]],
             "bounds_radius": 5.0,
         },
-        "surrogate": {"name": "gp"},
+        "emulator": {"name": "gp"},
         "acquisition": {"name": "prior_sampling"},
         "algorithm": {"n_initial": 4, "n_rounds": 2, "q": 1},
         "seed": 0,
@@ -42,9 +42,9 @@ def test_build_algorithm_wires_components():
     assert isinstance(alg, Algorithm)
     assert alg.n_initial == 4
     assert alg.n_rounds == 2
-    from sabi.surrogates.gp import GPSurrogate
+    from sabi.emulators.gp import GPEmulator
 
-    assert isinstance(alg.surrogate_factory(), GPSurrogate)
+    assert isinstance(alg.emulator_factory(), GPEmulator)
     assert len(alg.metrics) == 1
     assert isinstance(alg.metrics[0], ReferenceMMD)
 
@@ -55,10 +55,10 @@ def test_build_algorithm_without_metrics_yields_empty_tuple():
     assert alg.metrics == ()
 
 
-def test_build_algorithm_default_surrogate_posterior_is_surrogate_pushforward():
+def test_build_algorithm_default_surrogate_posterior_is_emulator_pushforward():
     cfg = _cfg()
     alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
-    assert alg.surrogate_posterior_factory is surrogate_pushforward_factory
+    assert alg.surrogate_posterior_factory is emulator_pushforward_factory
 
 
 def test_build_algorithm_can_select_weighted_empirical_factory():
