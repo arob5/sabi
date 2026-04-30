@@ -8,6 +8,11 @@ For shape and symbol conventions (`x`, `y`, `X`, `Y`, `n`, `d`, `p`, `q`,
 `f`), see [`notation.md`](notation.md). All sabi math docstrings use
 those symbols without redefining them.
 
+For the tempering layer (`TemperingScheme`, `IntermediateTarget`,
+`AcquisitionTarget`) — the conceptual layering, the two-axes
+decomposition, and worked case examples — see
+[`tempering.md`](tempering.md).
+
 ## Documentation
 
 ### Math goes in docstrings

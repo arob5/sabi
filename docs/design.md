@@ -178,10 +178,11 @@ Algorithm:
   initial_sampler: BatchSampler
   emulator_factory: Callable[[], Emulator]
   acquisition: Acquisition
-  surrogate_posterior_factory: SurrogatePosteriorFactory   # default surrogate_pushforward_factory
+  surrogate_posterior_factory: SurrogatePosteriorFactory   # default emulator_pushforward_factory
   estimator: Callable[[SurrogatePosterior], Distribution]  # default expected_target
-  tempering: Tempering                 # default NoTempering()
+  tempering_scheme: TemperingScheme    # default NoTempering()
   schedule: TemperingSchedule          # default UntemperedSchedule()
+  acquisition_target: AcquisitionTarget # default CURRENT
   metrics: tuple[PosteriorMetric, ...] # default ()
   n_initial: int
   n_rounds: int
@@ -192,24 +193,68 @@ Algorithm:
 
 Hydra entry point. Responsibilities: seed splitting across replicates, config hashing, git SHA capture, environment capture, per-round logging, artifact layout.
 
-### 4.11 `Tempering`
+### 4.11 `TemperingScheme` and `IntermediateTarget`
 
-A `Tempering` transforms a `LogDensityForm` at a given **tempering state**. The state is an opaque PyTree — its type and contents are tempering-strategy-specific, because not every bridging scheme is parameterized by a scalar. For `LikelihoodTempering` the state is a scalar `β ∈ [0, 1]`; for `DataTempering` it's a subset identifier; for more exotic bridges it could be a tuple, a dict, or a Distribution.
+A `TemperingScheme` is a family of intermediate target distributions
+indexed by a state. The single method
+`intermediate_target(base, state) -> IntermediateTarget` produces, for
+each state, the per-state target distribution.
 
-```
-Tempering:
-  apply(form: LogDensityForm, state: PyTree) -> LogDensityForm
-```
+`IntermediateTarget` extends `TargetDistribution` with three pieces of
+metadata:
 
-`apply` is implemented by **dispatch on `(type(tempering), type(form))`** so new tempering strategies drop in without editing every existing `LogDensityForm`. The dispatch registry is the only place that knows how a particular tempering composes with a particular form; the state is passed through unchanged and unpacked inside the registered implementation.
+- `state`: the tempering state that produced this intermediate.
+- `output_transform(state, X, Y_raw) -> Y_train`: derives emulator
+  training data from cached raw evaluations of the *base* target
+  function — the loop uses this instead of evaluating the (possibly
+  expensive) base target afresh.
+- `base_target_function`: the un-tempered base target (for reference;
+  the loop typically already has it via the base `TargetDistribution`).
 
-Built-in:
-- `NoTempering` — returns `form` unchanged (state ignored). Default.
-- `LikelihoodTempering` (state = `β ∈ [0, 1]`) — raises the likelihood to power β:
-  - `(LikelihoodTempering, LogLikPlusPrior)` → `(x, y) ↦ β·y + log_prior(x)`
-  - `(LikelihoodTempering, ForwardModel)` → `(x, y) ↦ β·log_lik_from_outputs(data, y) + log_prior(x)`
-  - `(LikelihoodTempering, Identity)` → `(x, y) ↦ (1−β)·log_prior(x) + β·y` (requires `prior` on the `Problem`; errors if absent, since full log-posterior emulation with no accessible prior cannot be tempered without refitting).
-- `DataTempering(partition)` (state = subset index / identifier) — restricts the likelihood to data subset `S_state`. Requires a form that exposes per-datapoint likelihood structure (a later `PartitionedLogLikForm`); added when the first data-tempering benchmark lands.
+Two orthogonal axes can be tempered:
+
+- **Target axis**: the emulator's training target `f_state` varies
+  with state. `output_transform` is non-trivial; the form is
+  invariant.
+- **Form axis**: the log-density form `phi_state` varies with state.
+  `output_transform` is identity; the form is non-invariant.
+
+Concrete schemes pick one axis at a time. The scheme advertises
+which axis is invariant via
+`is_invariant_target_function(state_a, state_b)` and
+`is_invariant_form(state_a, state_b)`; the loop uses these to skip
+redundant emulator refits / form rebuilds.
+
+The state is an opaque PyTree — its type and contents are
+strategy-specific. For likelihood tempering it's a scalar `β ∈ [0, 1]`;
+for a future data tempering it's a subset identifier; for exotic
+bridges it could be a tuple, a dict, or a Distribution. The
+`TemperingSchedule` produces states; the scheme consumes them. The
+two must agree on the state type — that's a user / config-level
+convention (no static check).
+
+Built-in schemes:
+
+- `NoTempering` — identity on both axes. The intermediate is the
+  base target distribution wrapped with `state=state`. Default.
+- `LikelihoodTemperingViaForm` — form-axis tempering. Per-form-type
+  dispatch:
+  - `(LogLikPlusPrior, β)` → `(x, y) ↦ β·y + log_prior(x)`.
+  - `(ForwardModel, β)` → `(x, y) ↦ β·log_lik_from_outputs(x, y) + log_prior(x)`.
+  - `(Identity, β)` → `(x, y) ↦ (1−β)·log_prior(x) + β·y` (geometric
+    bridge; requires `prior` for the bridge endpoints).
+  Compatible with all three form types; emulator is invariant under
+  state changes.
+- `LikelihoodTemperingViaTarget` — target-axis tempering.
+  `output_transform(β, X, Y_raw) = β·Y_raw`; form is unchanged.
+  Restricted to `LogLikPlusPrior` base forms (the case where `f` is
+  the log-likelihood directly).
+
+A future `DataTempering` would land naturally as a third scheme with
+state = subset identifier.
+
+See [`tempering.md`](tempering.md) for the full case analysis with
+worked examples.
 
 ### 4.12 `TemperingSchedule`
 
@@ -218,42 +263,89 @@ Selects the sequence of tempering states over the loop.
 ```
 TemperingSchedule:
   next(round_idx: int, loop_state: LoopState) -> (tempering_state: PyTree, final: bool)
+  terminal_state() -> tempering_state
 ```
 
-`final=True` signals that this is the terminal distribution (β=1 or equivalent) and no further rounds should advance the schedule. The schedule and the matching `Tempering` must agree on the state type.
+`final=True` signals that this round is the terminal distribution
+(β=1 or equivalent); the schedule should not advance past it.
+`terminal_state()` returns the schedule's final state explicitly —
+used by `AcquisitionTarget.TERMINAL` to build the look-ahead SP.
 
 Built-in:
-- `UntemperedSchedule` — always returns `(None, True)`. Default; paired with `NoTempering` this recovers the v0 untempered loop.
-- `FixedSchedule(states: tuple)` — iterates a pre-computed sequence; last entry is marked `final=True`. Typical for `LikelihoodTempering` with a geometric or linear β schedule.
-- `ESSAdaptiveSchedule(target_ess_ratio)` — chooses the next state so that the ESS of importance weights between consecutive distributions hits the target ratio. Standard in SMC samplers; only defined for tempering schemes whose state supports ESS computation (likelihood tempering, data tempering).
+- `UntemperedSchedule` — always `(None, True)`; `terminal_state()` = `None`.
+  Default; paired with `NoTempering` this recovers the untempered loop.
+- `FixedSchedule(states: tuple)` — iterates a pre-computed sequence;
+  last entry is marked `final=True`; `terminal_state()` = `states[-1]`.
+  Typical for likelihood tempering with a geometric or linear β
+  schedule.
+- `ESSAdaptiveSchedule(target_ess_ratio)` — chooses the next state so
+  the ESS of importance weights between consecutive distributions hits
+  the target ratio. Standard in SMC samplers; only defined for
+  tempering schemes whose state supports ESS computation. Tracked as
+  [issue #5](https://github.com/arob5/sabi/issues/5).
 
-### 4.13 Tempering in the algorithm loop
+### 4.13 `AcquisitionTarget`
 
-`Algorithm` gains two fields with no-op defaults:
+Picks *which* tempering state the acquisition's `SurrogatePosterior`
+is built at — independent of the round's "current" state.
+
+- `CURRENT` (default): the round's current state. Acquisition
+  optimizes against the current intermediate.
+- `NEXT`: the next round's state (clamped to terminal at the last
+  round). Standard SMC-flavor look-ahead.
+- `TERMINAL`: the schedule's terminal state for every round.
+  Acquisition optimizes toward the final target throughout.
+
+For untempered loops, all three collapse. For tempered loops, the
+loop builds a separate look-ahead `IntermediateTarget` at the
+resolved state and may refit the emulator on its training data
+before the acquisition runs (see §4.14).
+
+Richer policies (ESS-adaptive look-ahead, custom callable that
+depends on loop state) are tracked as
+[issue #5](https://github.com/arob5/sabi/issues/5).
+
+### 4.14 Tempering in the algorithm loop
+
+`Algorithm` gains three fields with no-op defaults:
 
 ```
-tempering: Tempering = NoTempering()
+tempering_scheme: TemperingScheme = NoTempering()
 schedule: TemperingSchedule = UntemperedSchedule()
+acquisition_target: AcquisitionTarget = AcquisitionTarget.CURRENT
 ```
 
-Per round:
-1. `tempering_state, final = schedule.next(round_idx, loop_state)`
-2. `current_form = tempering.apply(problem.log_density_form, tempering_state)` — the **intermediate target log-density form** for this round.
-3. Build `SurrogatePosterior(surrogate, current_form, prior)` — this is what `Acquisition` and `PosteriorEstimator`s consume.
-4. `x_batch = acquisition.select_batch(acquisition_state, q, key)` where the acquisition state carries `current_form` and `tempering_state`.
-5. Evaluate `f` at `x_batch`; `emulator.fit` / `.update` on raw `(x, f(x))` values — the tempering state is **not** threaded through the emulator.
-6. Metrics: evaluate registered `PosteriorMetric`s each round. Metrics compare against the terminal reference (state=final) by default; metrics can also log quantities against the current intermediate target if they choose.
+Per round (loop sketch):
 
-Each round's log row includes the `tempering_state` verbatim (serialized via a tempering-specific `to_json` when the state isn't JSON-primitive) so ablations over schedules can be reproduced exactly.
+1. `current_state, final = schedule.next(round_idx, None)`.
+2. `target_state` resolved from `acquisition_target` — `CURRENT`
+   gives `current_state`; `NEXT` gives `schedule.next(round_idx + 1)`;
+   `TERMINAL` gives `schedule.terminal_state()`.
+3. `current_intermediate = tempering_scheme.intermediate_target(target, current_state)`.
+4. Acquisition's intermediate: reuse `current_intermediate` if the
+   scheme reports both axes invariant under
+   `(current_state, target_state)`; else build a fresh
+   `target_intermediate` at `target_state`.
+5. Acquisition's emulator: reuse the round's emulator if the scheme
+   reports the target axis invariant; else refit on the look-ahead
+   state's training data
+   (`Y_train_acq = target_intermediate.output_transform(target_state, X, Y_raw)`).
+   Cheap-update dispatch ([issue #4](https://github.com/arob5/sabi/issues/4))
+   will replace the full refit.
+6. `SurrogatePosterior` for acquisition = `(emulator_for_acq,
+   target_intermediate.log_density_form, ...)`. Acquisition picks
+   `x_new`, loop appends `y_new_raw = problem.target_function(x_new)`
+   to `Y_raw`.
+7. Round-end emulator + SP at the *current* state for metrics:
+   `Y_train = current_intermediate.output_transform(current_state, X, Y_raw)`;
+   refit emulator; build SP for metrics at `current_intermediate`.
+8. Run metrics. Per-round metrics record both `tempering_state` and
+   `target_tempering_state` for ablation reproducibility.
 
-**Opt-in emulator-target tempering.** Some algorithms want the GP to learn the tempered log-density directly, not the raw `f`. This is handled by a future `EmulatorTarget` adapter:
-
-```
-EmulatorTarget:
-  transform(x, y, tempering_state, prior) -> y_train
-```
-
-Default `RawTarget` returns `y` unchanged (v0 behavior). A `TemperedLogDensityTarget` would return the tempered log-density value, and the algorithm would refit the emulator on those values each round. This keeps the tempering state out of `Emulator` and out of `LogDensityForm` dispatch — the adapter is the one place that combines the two.
+The base-class `Emulator` is tempering-agnostic — it just consumes
+`(X, Y_train)`. The state-dependence enters through the scheme's
+`output_transform`. Forward-model emulation with form-side tempering
+works unchanged because the emulator never sees the state.
 
 ## 5. Optimization module (`acquisitions/optim.py`)
 
