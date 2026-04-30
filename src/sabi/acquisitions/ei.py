@@ -55,7 +55,8 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
         offset: exploration offset :math:`\\xi \\ge 0` (larger → more
             exploration). Default `0.0` for noiseless surrogates;
             small positive values can stabilize EI for noisy ones.
-        best_from: ``"data"`` uses `max(state.Y)`; ``"mean"`` uses the
+        best_from: ``"data"`` uses `max(state.Y_train)` (the surrogate's
+            training-data max); ``"mean"`` uses the
             emulator's predictive-mean max at `state.X` (more robust
             for noisy labels — unused in v0/v1 noiseless setting).
     """
@@ -89,7 +90,7 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
 
     def _best(self, state: AcquisitionState) -> Array:
         if self.best_from == "data":
-            return jnp.max(state.Y)
+            return jnp.max(state.Y_train)
         if self.best_from == "mean":
             emulator = state.surrogate_posterior.emulator
             if emulator is None:

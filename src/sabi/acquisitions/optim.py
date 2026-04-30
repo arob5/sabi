@@ -239,22 +239,26 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
             x_picks.append(x_i)
             if i < q - 1:
                 # Hallucinate y at all pending picks (use the *original*
-                # state so imputers see real Y values, not previous
-                # hallucinations).
+                # state so imputers see real Y_train values, not
+                # previous hallucinations).
                 x_pending = jnp.stack(x_picks)
                 y_pending = self.imputer.impute(x_pending, state)
                 new_X = jnp.concatenate([state.X, x_pending], axis=0)
-                new_Y = jnp.concatenate([state.Y, y_pending], axis=0)
-                # Refit the emulator on the augmented design. Mutate
-                # the surrogate_posterior copy so downstream score calls
-                # see the new emulator.
+                # Imputer hallucinates training-scale values; extend
+                # Y_train. Y_raw is left as the original (we don't
+                # have raw evaluations at the hallucinated points; the
+                # emulator only consumes Y_train anyway).
+                new_Y_train = jnp.concatenate([state.Y_train, y_pending], axis=0)
+                # Refit the emulator on the augmented training design.
+                # Mutate the surrogate_posterior copy so downstream
+                # score calls see the new emulator.
                 old_sp = state.surrogate_posterior
                 if old_sp.emulator is None:
                     raise ValueError(
                         "GreedyMultiPointOptimizer requires a non-degenerate "
                         "emulator; got `surrogate_posterior.emulator=None`."
                     )
-                new_emulator = old_sp.emulator.fit(new_X, new_Y)
+                new_emulator = old_sp.emulator.fit(new_X, new_Y_train)
                 new_sp = type(old_sp)(
                     emulator=new_emulator,
                     log_density_form=old_sp.log_density_form,
@@ -267,7 +271,7 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                     state,
                     surrogate_posterior=new_sp,
                     X=new_X,
-                    Y=new_Y,
+                    Y_train=new_Y_train,
                 )
         return jnp.stack(x_picks)
 

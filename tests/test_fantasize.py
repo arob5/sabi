@@ -37,7 +37,8 @@ def _state(n: int = 20, seed: int = 0):
         problem=problem,
         surrogate_posterior=sp,
         X=X,
-        Y=Y,
+        Y_raw=Y,
+        Y_train=Y,
         tempering_state=None,
     )
 
@@ -58,9 +59,9 @@ def test_constant_liar_min_max_mean_yield_constants():
     x_pending = jnp.asarray([[0.0, 0.0], [1.0, -0.5], [-1.0, 1.0]])
 
     for value, expected_constant in [
-        ("min", float(jnp.min(state.Y))),
-        ("max", float(jnp.max(state.Y))),
-        ("mean", float(jnp.mean(state.Y))),
+        ("min", float(jnp.min(state.Y_train))),
+        ("max", float(jnp.max(state.Y_train))),
+        ("mean", float(jnp.mean(state.Y_train))),
     ]:
         imputer = ConstantLiar(value=value)
         y = imputer.impute(x_pending, state)

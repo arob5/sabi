@@ -30,7 +30,8 @@ def _state(problem, key_seed=0, n=20):
         problem=problem,
         surrogate_posterior=sp,
         X=X,
-        Y=Y,
+        Y_raw=Y,
+        Y_train=Y,
         tempering_state=None,
     )
 

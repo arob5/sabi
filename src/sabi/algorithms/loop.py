@@ -168,7 +168,8 @@ class Algorithm:
 @dataclass
 class RunResult:
     X: Array
-    Y: Array
+    Y_raw: Array
+    Y_train: Array
     emulator: Emulator
     tempering_states: list[Any]
     per_round_metrics: list[dict[str, Any]]
@@ -237,9 +238,16 @@ def _build_surrogate_posterior(
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential emulator-based inference loop.
 
-    State is explicit and flat. The emulator is re-fit each round on the full
-    `(X, Y)` (no incremental updates in v1.2; design doc lists `condition_on`-
-    backed updates as a v2 item).
+    State is explicit and flat. The emulator is re-fit each round on the
+    full `(X, Y_train)` (no incremental updates in v1.2; design doc lists
+    `condition_on`-backed updates as a v2 item).
+
+    `Y_raw` holds the un-transformed evaluations of
+    ``problem.target_function``; `Y_train` holds the values the emulator
+    is fit on. Under no tempering they are equal. Under the upcoming
+    tempering schemes (Step 3+), `Y_train` may be a state-dependent
+    transformation of `Y_raw` produced by an `EmulatorTarget`-style
+    adapter.
     """
     if problem.support is None:
         raise ValueError(
@@ -249,13 +257,16 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
-    Y = problem.target_function(X)
+    Y_raw = problem.target_function(X)
+    # No target-side tempering yet (Step 2 plumbs the field; Step 3+ will
+    # produce a non-trivial Y_train via TemperingScheme).
+    Y_train = Y_raw
 
     tempering_states: list[Any] = []
     per_round_metrics: list[dict[str, Any]] = []
 
     emulator = algorithm.emulator_factory()
-    emulator = emulator.fit(X, Y)
+    emulator = emulator.fit(X, Y_train)
 
     for round_idx in range(algorithm.n_rounds):
         tempering_state, _final = algorithm.schedule.next(round_idx, None)
@@ -272,7 +283,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             algorithm.surrogate_posterior_factory,
             emulator=emulator,
             X=X,
-            Y=Y,
+            Y=Y_train,
             log_density_form=current_form,
             problem=problem,
         )
@@ -280,21 +291,25 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             problem=problem,
             surrogate_posterior=pre_round_posterior,
             X=X,
-            Y=Y,
+            Y_raw=Y_raw,
+            Y_train=Y_train,
             tempering_state=tempering_state,
         )
         x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key_acq)
-        y_new = problem.target_function(x_new)
+        y_new_raw = problem.target_function(x_new)
 
         X = jnp.concatenate([X, x_new], axis=0)
-        Y = jnp.concatenate([Y, y_new], axis=0)
-        emulator = emulator.fit(X, Y)
+        Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
+        # Step 2: Y_train = Y_raw (identity). Step 3+ will derive
+        # Y_train from Y_raw via the tempering scheme's output transform.
+        Y_train = Y_raw
+        emulator = emulator.fit(X, Y_train)
 
         sp = _build_surrogate_posterior(
             algorithm.surrogate_posterior_factory,
             emulator=emulator,
             X=X,
-            Y=Y,
+            Y=Y_train,
             log_density_form=current_form,
             problem=problem,
         )
@@ -313,7 +328,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         algorithm.surrogate_posterior_factory,
         emulator=emulator,
         X=X,
-        Y=Y,
+        Y=Y_train,
         log_density_form=final_form,
         problem=problem,
     )
@@ -324,7 +339,8 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
     return RunResult(
         X=X,
-        Y=Y,
+        Y_raw=Y_raw,
+        Y_train=Y_train,
         emulator=emulator,
         tempering_states=tempering_states,
         per_round_metrics=per_round_metrics,

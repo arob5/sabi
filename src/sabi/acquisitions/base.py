@@ -57,6 +57,22 @@ class AcquisitionState:
     `WeightedEmpiricalRandomMeasure`, which is a `SurrogatePosterior`
     subclass with ``emulator=None``).
 
+    Two `Y` arrays are exposed:
+
+    - ``Y_raw``: the un-transformed evaluations of
+      ``problem.target_function``. Always present, regardless of any
+      tempering scheme.
+    - ``Y_train``: the values the round's emulator was actually trained
+      on. Under no tempering this equals ``Y_raw``. Under the upcoming
+      tempering schemes (Step 3+) this may be a state-dependent
+      transformation (e.g., ``lambda * Y_raw`` for likelihood tempering
+      via target).
+
+    Most acquisitions only care about ``Y_train`` (it's what's
+    consistent with ``state.surrogate_posterior.emulator``'s training
+    data). Diagnostic / logging code can use ``Y_raw`` to access the
+    raw evaluations.
+
     Attributes:
         problem: the inference problem (provides `prior`, `support`,
             `input_shape`, etc.).
@@ -64,7 +80,10 @@ class AcquisitionState:
             (always set; ``surrogate_posterior.emulator`` may be
             ``None`` for the weighted-empirical baseline).
         X: design inputs, shape `(n,) + problem.input_shape`.
-        Y: design outputs, shape `(n,) + problem.output_shape`.
+        Y_raw: raw target evaluations, shape `(n,) + problem.output_shape`.
+        Y_train: emulator-training targets at the round's state, same
+            shape as Y_raw. Equal to Y_raw when no target-side
+            tempering is in effect.
         tempering_state: opaque PyTree from the `TemperingSchedule`;
             `None` for untempered loops. Provided so acquisitions that
             care about the round's tempering state can read it directly
@@ -74,7 +93,8 @@ class AcquisitionState:
     problem: Problem
     surrogate_posterior: SurrogatePosterior
     X: Array
-    Y: Array
+    Y_raw: Array
+    Y_train: Array
     tempering_state: Any
 
 

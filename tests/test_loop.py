@@ -65,7 +65,8 @@ def test_loop_grows_dataset_and_records_metrics():
     alg = _algorithm(ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)), n_rounds=3)
     result = run(problem, alg, jax.random.key(3))
     assert result.X.shape == (19, 2)
-    assert result.Y.shape == (19,)
+    assert result.Y_raw.shape == (19,)
+    assert result.Y_train.shape == (19,)
     assert [m["round"] for m in result.per_round_metrics] == [0, 1, 2]
     assert [m["n_evals"] for m in result.per_round_metrics] == [17, 18, 19]
 

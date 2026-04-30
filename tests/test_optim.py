@@ -57,7 +57,8 @@ def _state(n: int = 30, seed: int = 0):
         problem=problem,
         surrogate_posterior=sp,
         X=X,
-        Y=Y,
+        Y_raw=Y,
+        Y_train=Y,
         tempering_state=None,
     )
 

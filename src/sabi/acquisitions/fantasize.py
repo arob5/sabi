@@ -94,10 +94,13 @@ class ConstantLiar(FantasyImputer):
     via the lie.
 
     Args:
-        value: ``"min"`` / ``"max"`` / ``"mean"`` of ``state.Y``, or a fixed
-            float. ``"min"`` (pessimistic) discourages re-picking nearby
-            points (drives exploration); ``"max"`` (optimistic) encourages
-            it (drives exploitation).
+        value: ``"min"`` / ``"max"`` / ``"mean"`` of ``state.Y_train``,
+            or a fixed float. ``"min"`` (pessimistic) discourages
+            re-picking nearby points (drives exploration); ``"max"``
+            (optimistic) encourages it (drives exploitation). Operates
+            on `Y_train` (the values consistent with the emulator's
+            training data) — under target-side tempering this differs
+            from `Y_raw`.
     """
 
     value: Literal["min", "max", "mean"] | float = "min"
@@ -106,11 +109,11 @@ class ConstantLiar(FantasyImputer):
         n_pending = x_pending.shape[0]
         if isinstance(self.value, str):
             if self.value == "min":
-                v = jnp.min(state.Y)
+                v = jnp.min(state.Y_train)
             elif self.value == "max":
-                v = jnp.max(state.Y)
+                v = jnp.max(state.Y_train)
             elif self.value == "mean":
-                v = jnp.mean(state.Y)
+                v = jnp.mean(state.Y_train)
             else:
                 raise ValueError(
                     f"ConstantLiar.value={self.value!r}; expected 'min' / 'max' / 'mean' or a float."
