@@ -41,6 +41,7 @@ from abc import ABC, abstractmethod
 from typing import Any, NamedTuple
 
 from sabi.target_distribution import IntermediateTarget, TargetDistribution
+from sabi.tempering.output_transform import Identity
 
 
 class InvarianceFlags(NamedTuple):
@@ -139,7 +140,7 @@ class NoTempering(TemperingScheme):
             target_single=base.target_single,
             log_density_form=base.log_density_form,
             state=state,
-            output_transform=_identity_output_transform,
+            output_transform=Identity(),
             base_target_function=base.target_function,
             prior=base.prior,
         )
@@ -153,8 +154,3 @@ class NoTempering(TemperingScheme):
 
     def is_invariant_form(self, state_a: Any, state_b: Any) -> bool:
         return True
-
-
-def _identity_output_transform(state, X, Y_raw):
-    """``output_transform`` for the no-op case: return ``Y_raw`` unchanged."""
-    return Y_raw

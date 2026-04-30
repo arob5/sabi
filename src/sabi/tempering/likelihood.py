@@ -48,6 +48,8 @@ from sabi.problems.forms import (
 )
 from sabi.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import TemperingScheme
+from sabi.tempering.output_transform import Identity as IdentityTransform
+from sabi.tempering.output_transform import Rescale as RescaleTransform
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +173,7 @@ class LikelihoodTemperingViaForm(TemperingScheme):
             target_single=base.target_single,  # f unchanged
             log_density_form=tempered_form,
             state=state,
-            output_transform=_identity_output_transform,
+            output_transform=IdentityTransform(),
             base_target_function=base.target_function,
             prior=base.prior,
         )
@@ -241,7 +243,7 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
             target_single=tempered_target_single,
             log_density_form=base.log_density_form,  # unchanged
             state=state,
-            output_transform=_scale_output_transform,
+            output_transform=RescaleTransform(),
             base_target_function=base_target_function,
             prior=base.prior,
         )
@@ -253,16 +255,7 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
         return True  # form is invariant under state changes
 
 
-# ---------------------------------------------------------------------------
-# Output transforms
-# ---------------------------------------------------------------------------
-
-
-def _identity_output_transform(state: Any, X: Array, Y_raw: Array) -> Array:
-    """For form-axis tempering: emulator target is unchanged."""
-    return Y_raw
-
-
-def _scale_output_transform(state: Any, X: Array, Y_raw: Array) -> Array:
-    """For target-axis tempering: ``Y_train = state * Y_raw``."""
-    return jnp.asarray(state) * Y_raw
+# Output transforms (Identity / Rescale) live in
+# `sabi.tempering.output_transform` as value-typed `OutputTransform`
+# subclasses; both schemes above import them via aliases at the top of
+# this module to avoid colliding with `sabi.problems.forms.Identity`.

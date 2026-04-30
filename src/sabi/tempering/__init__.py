@@ -3,6 +3,12 @@ from sabi.tempering.likelihood import (
     LikelihoodTemperingViaForm,
     LikelihoodTemperingViaTarget,
 )
+from sabi.tempering.output_transform import (
+    Generic,
+    Identity,
+    OutputTransform,
+    Rescale,
+)
 from sabi.tempering.schedule import (
     FixedSchedule,
     TemperingSchedule,
@@ -11,9 +17,13 @@ from sabi.tempering.schedule import (
 
 __all__ = [
     "FixedSchedule",
+    "Generic",
+    "Identity",
     "LikelihoodTemperingViaForm",
     "LikelihoodTemperingViaTarget",
     "NoTempering",
+    "OutputTransform",
+    "Rescale",
     "TemperingScheme",
     "TemperingSchedule",
     "UntemperedSchedule",

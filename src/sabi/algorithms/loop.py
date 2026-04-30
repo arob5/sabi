@@ -38,10 +38,17 @@ from sabi.acquisitions.base import (
 from sabi.algorithms.algorithm import Algorithm, RunResult
 from sabi.algorithms.surrogate_posterior_factory import SurrogatePosteriorFactory
 from sabi.emulators.base import Emulator
+from sabi.emulators.dispatch import update_emulator
+from sabi.emulators.updates import (
+    EmulatorUpdate,
+    RescaleOutputs,
+    RescaleThenAppend,
+)
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
+from sabi.tempering.output_transform import OutputTransform
 
 
 def _check_protocols(metric: PosteriorMetric, estimate: Distribution) -> None:
@@ -102,6 +109,51 @@ def _build_surrogate_posterior(
     )
 
 
+def _plan_round_update(
+    transform: OutputTransform,
+    state_prev: Any,
+    state_new: Any,
+    X_new: Array | None,
+    Y_new_at_new_state: Array | None,
+) -> EmulatorUpdate | None:
+    """Build the round's `EmulatorUpdate` plan, or ``None`` to refit.
+
+    Combines the transform's structural diff (existing-rows update) with
+    optional new-row append into a single op for `update_emulator`. The
+    dispatcher reduces no-op rescales (factor=1.0 with no new rows) to
+    nothing useful here, so the caller should also short-circuit on the
+    invariant case before calling this.
+
+    Args:
+        transform: the round's `OutputTransform` (same shape across
+            states for a given scheme; only state varies).
+        state_prev: state of the emulator's last fit.
+        state_new: target state for the new emulator.
+        X_new: optional new rows of inputs (``None`` or empty for a
+            state-only update like the look-ahead emulator).
+        Y_new_at_new_state: outputs for ``X_new`` *already at*
+            ``state_new`` (caller materializes via
+            ``transform.apply(state_new, X_new, Y_new_raw)``).
+
+    Returns:
+        An `EmulatorUpdate` op when a fast path is expressible; ``None``
+        when no closed-form diff is available (caller refits).
+    """
+    diff = transform.diff(state_prev, state_new)
+    has_new_rows = X_new is not None and X_new.shape[0] > 0
+    if diff is None:
+        return None  # caller refits
+    if isinstance(diff, RescaleOutputs):
+        if has_new_rows:
+            return RescaleThenAppend(
+                factor=diff.factor, X_new=X_new, Y_new=Y_new_at_new_state
+            )
+        return diff
+    # Unknown diff shape — let the dispatcher try; if no handler claims
+    # it, it'll fall back to refit on its own.
+    return diff
+
+
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential emulator-based inference loop.
 
@@ -144,6 +196,10 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
     emulator = algorithm.emulator_factory()
     emulator = emulator.fit(X, Y_train)
+    # Track the state of the emulator's last fit. Used as the "from"
+    # state when building cheap-update plans below; updated after each
+    # round-end fit to the round's current_state.
+    emulator_state: Any = state_0
 
     # Loop body: rounds 1 through n_rounds-1 inclusive — the
     # acquisition rounds. Each round adds q evaluations chosen by the
@@ -174,10 +230,11 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
                 target, target_state
             )
 
-        # Y_train and emulator the acquisition sees: derived at
-        # target_state. If target_state's training data differs from
-        # current's, refit. Step 5 (issue #4) will replace this with a
-        # cheap-update dispatch.
+        # Path 1: Y_train and emulator the acquisition sees, derived at
+        # target_state. When target_state == emulator_state for the Y
+        # axis (`invariance.target_function`), reuse directly. Otherwise
+        # dispatch a state-only cheap update (no new rows yet); the
+        # dispatcher falls back to refit when no fast path is registered.
         if invariance.target_function:
             Y_train_for_acq = Y_train
             emulator_for_acq = emulator
@@ -185,7 +242,20 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             Y_train_for_acq = target_intermediate.output_transform(
                 target_state, X, Y_raw
             )
-            emulator_for_acq = algorithm.emulator_factory().fit(X, Y_train_for_acq)
+            lookahead_plan = _plan_round_update(
+                target_intermediate.output_transform,
+                state_prev=emulator_state,
+                state_new=target_state,
+                X_new=None,
+                Y_new_at_new_state=None,
+            )
+            emulator_for_acq = update_emulator(
+                emulator,
+                lookahead_plan,
+                factory=algorithm.emulator_factory,
+                X_full=X,
+                Y_full=Y_train_for_acq,
+            )
 
         key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
         # Pre-acquisition SP wraps the acquisition-state emulator +
@@ -215,11 +285,30 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
         X = jnp.concatenate([X, x_new], axis=0)
         Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
-        # Round-end fit: emulator + Y_train at the round's *current*
-        # state (used by round-end metrics). For the no-look-ahead
-        # case this is the only emulator fit per round.
+        # Path 2: round-end emulator at current_state with the new q
+        # rows appended. Plan combines the existing-rows diff
+        # (transform.diff(emulator_state, current_state)) with the new-
+        # rows append into a single op; the dispatcher tries fast paths
+        # and falls back to refit otherwise.
         Y_train = current_intermediate.output_transform(current_state, X, Y_raw)
-        emulator = emulator.fit(X, Y_train)
+        y_new_at_current = current_intermediate.output_transform(
+            current_state, x_new, y_new_raw
+        )
+        round_plan = _plan_round_update(
+            current_intermediate.output_transform,
+            state_prev=emulator_state,
+            state_new=current_state,
+            X_new=x_new,
+            Y_new_at_new_state=y_new_at_current,
+        )
+        emulator = update_emulator(
+            emulator,
+            round_plan,
+            factory=algorithm.emulator_factory,
+            X_full=X,
+            Y_full=Y_train,
+        )
+        emulator_state = current_state
 
         sp = _build_surrogate_posterior(
             algorithm.surrogate_posterior_factory,

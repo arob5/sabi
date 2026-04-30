@@ -68,7 +68,7 @@ Distribution interface
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import jax
 import jax.numpy as jnp
@@ -78,6 +78,12 @@ from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint  # noqa: F401  (re-exported via support property)
 
 from sabi.problems.forms import LogDensityForm
+
+if TYPE_CHECKING:
+    # Avoid the circular import sabi.target_distribution → sabi.tempering →
+    # sabi.tempering.base → sabi.target_distribution. With `from __future__
+    # import annotations`, the annotation is a string at runtime.
+    from sabi.tempering.output_transform import OutputTransform
 
 
 class TargetDistribution(NumericRecordDistribution):
@@ -209,11 +215,14 @@ class IntermediateTarget(TargetDistribution):
     training data efficiently:
 
     - ``state``: the tempering state that produced this intermediate.
-    - ``output_transform``: a callable
-      ``(state, X, Y_raw) -> Y_train`` that converts cached raw
-      evaluations of the *base* target function ``f`` to training
-      values for ``f_state``. The loop uses this instead of evaluating
-      ``f_state`` directly when it has cached ``Y_raw``.
+    - ``output_transform``: an `OutputTransform` value object
+      describing how to derive ``Y_train`` for ``f_state`` from cached
+      raw evaluations ``Y_raw`` of the base target ``f``. Carries
+      both ``apply(state, X, Y_raw) -> Y_train`` (for materialization)
+      and ``diff(state_a, state_b) -> EmulatorUpdate | None`` (for the
+      cheap-update fast path; see `sabi.emulators.dispatch`). Callable
+      on instances via ``__call__``, so existing call sites read as
+      plain function calls.
     - ``base_target_function``: the un-tempered base target ``f`` (for
       reference; the loop typically already has it via the base
       `TargetDistribution`).
@@ -225,10 +234,10 @@ class IntermediateTarget(TargetDistribution):
 
         f_state(x) == output_transform(state, x, base_target_function(x))
 
-    For Case 1 (no tempering): ``output_transform`` is identity and
-    ``f_state == f``. For Case 2 (likelihood tempering via target):
-    ``output_transform(state, X, Y_raw) = state * Y_raw`` (state is
-    the inverse temperature beta).
+    For Case 1 (no tempering): ``output_transform`` is the `Identity`
+    transform and ``f_state == f``. For Case 2 (likelihood tempering
+    via target): ``output_transform`` is `Rescale` and yields
+    ``state * Y_raw`` (state is the inverse temperature beta).
 
     See `docs/tempering.md` for the conceptual layering.
     """
@@ -242,7 +251,7 @@ class IntermediateTarget(TargetDistribution):
         target_single: Callable[[Array], Array],
         log_density_form: LogDensityForm,
         state: Any,
-        output_transform: Callable[[Any, Array, Array], Array],
+        output_transform: "OutputTransform",
         base_target_function: Callable[[Array], Array],
         prior: Distribution,
     ):
@@ -263,7 +272,7 @@ class IntermediateTarget(TargetDistribution):
         return self._state
 
     @property
-    def output_transform(self) -> Callable[[Any, Array, Array], Array]:
+    def output_transform(self) -> "OutputTransform":
         return self._output_transform
 
     @property
