@@ -1,9 +1,7 @@
 """NUTS-based reference posterior generation via ProbPipe `condition_on`.
 
-Given the math primitives that define a problem's unnormalized posterior
-(`target_function`, `log_density_form`, `prior`, `support`, `input_shape`),
-build a `Distribution[Array]` whose `_unnormalized_log_prob` is the
-posterior log-density and call `condition_on(target_dist, ...)`. ProbPipe's
+Given a `TargetDistribution` (defined by a target function + form +
+prior + support), call `condition_on(target_dist, ...)`. ProbPipe's
 inference registry auto-dispatches to `tfp_nuts` (post-PR-#151, MCMC
 methods accept `SupportsUnnormalizedLogProb`).
 
@@ -11,70 +9,29 @@ Diagnostics (R-hat, ESS, divergence count) are computed via ArviZ on
 the returned `ApproximateDistribution.inference_data` and embedded in
 the saved metadata. The regen script enforces minimum quality
 thresholds before allowing the artifact to land.
+
+Historical note: prior to the `TargetDistribution` introduction, this
+module carried a local `_ProblemTargetDistribution` shim that wrapped
+the problem's components into a Distribution. That shim is now
+redundant — `TargetDistribution` is itself the right Distribution and
+goes directly into `condition_on`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
 from probpipe import condition_on
 from probpipe.core._distribution_base import Distribution
-from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
 from sabi.problems.forms import LogDensityForm
-
-
-# ---------------------------------------------------------------------------
-# Problem-target distribution wrapper
-# ---------------------------------------------------------------------------
-
-
-class _ProblemTargetDistribution(NumericRecordDistribution):
-    """Wraps a problem's unnormalized posterior log-density as a
-    `Distribution[Array]` so `condition_on` can dispatch MCMC against it.
-
-    Same shape as v1.2's `_ExpectedTargetDistribution` but uses the *true*
-    `target_function` instead of a surrogate's predictive mean.
-    """
-
-    _sampling_cost: ClassVar[str] = "high"
-    _preferred_orchestration: ClassVar[str | None] = None
-
-    def __init__(
-        self,
-        target_function: Callable[[Array], Array],
-        log_density_form: LogDensityForm,
-        prior: Distribution | None,
-        *,
-        input_shape: tuple[int, ...],
-        support: Constraint,
-        name: str | None = None,
-    ):
-        self._target_function = target_function
-        self._form = log_density_form
-        self._prior = prior
-        self._input_shape = tuple(input_shape)
-        self._support_value = support
-        super().__init__(name=name or "problem_target")
-
-    @property
-    def event_shape(self) -> tuple[int, ...]:
-        return self._input_shape
-
-    @property
-    def support(self) -> Constraint:
-        return self._support_value
-
-    def _unnormalized_log_prob(self, value: Array) -> Array:
-        x = jnp.asarray(value)
-        y = self._target_function(x)
-        return self._form(x, y, prior=self._prior)
+from sabi.problems.target_distribution import TargetDistribution
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +146,7 @@ def generate_via_nuts(
     prior: Distribution | None,
     support: Constraint,
     input_shape: tuple[int, ...],
+    output_shape: tuple[int, ...] = (),
     num_results: int = 1000,
     num_warmup: int = 500,
     num_chains: int = 4,
@@ -198,19 +156,28 @@ def generate_via_nuts(
     """Run NUTS via ProbPipe `condition_on` against the problem's
     unnormalized posterior.
 
+    `target_function` is the **single-point** target callable (shape
+    ``input_shape -> output_shape``) — that's what NUTS evaluates
+    pointwise. The function builds a `TargetDistribution` from this
+    via `from_target_single` (which `jax.vmap`s for the batched view)
+    and feeds it directly to `condition_on`. Default
+    ``output_shape=()`` corresponds to the log-density-emulation case;
+    set explicitly for forward-model targets.
+
     Returns:
         (samples, diagnostics) where `samples` is a flat
         `(num_chains * num_results, *input_shape)` JAX array of
         post-warmup draws, and `diagnostics` carries R-hat / ESS /
         divergence counts.
     """
-    target = _ProblemTargetDistribution(
-        target_function=target_function,
+    target = TargetDistribution.from_target_single(
+        target_single=target_function,
+        name=name or "reference_target",
+        input_shape=input_shape,
+        output_shape=output_shape,
         log_density_form=log_density_form,
         prior=prior,
-        input_shape=input_shape,
         support=support,
-        name=name or "reference_target",
     )
     approx = condition_on(
         target,

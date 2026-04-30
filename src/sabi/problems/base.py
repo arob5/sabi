@@ -1,31 +1,30 @@
 """`Problem` — a benchmark inference problem bundle.
 
+The mathematical content of a problem (target function + form + prior +
+support) lives in `target_distribution: TargetDistribution`. The
+`Problem` layer adds benchmark-suite metadata: a name, an optional
+reference posterior, and any reproducibility info. Convenience
+``@property`` accessors mirror the inner target distribution so existing
+callers (acquisitions, metrics, the loop) read the same fields they
+always have.
+
+This split — math vs. benchmark identity — was the right framing
+because:
+
+- A `TargetDistribution` is a self-contained mathematical object that
+  can be consumed by ProbPipe ops directly (`condition_on`,
+  `unnormalized_log_prob`, etc.). No `Problem` wrapping required.
+- `TemperingScheme` (Step 3) operates on `TargetDistribution` to produce
+  intermediate targets, with no awareness of `Problem`-level metadata.
+- A future `BenchmarkProblem` (issue #2) can subclass / extend `Problem`
+  with validated reference artifacts without touching the math layer.
+
 Shape conventions follow ProbPipe's `ArrayRandomFunction` (see
-`docs/notation.md`): a single target input has shape `input_shape`, a
-single target output has shape `output_shape`, and design sets `X` / `Y`
-prepend a batch dimension.
-
-Vectorization. ``target_function`` is **batched** — it takes
-``X`` of shape ``(n,) + input_shape`` and returns ``Y`` of shape
-``(n,) + output_shape``. Mirrors `PointwiseScoredAcquisition.score`'s
-batched contract, so callers (the loop, tests) never need
-``jax.vmap(...)`` at the call site. Builders that have a natural
-single-point implementation should `jax.vmap` it before storing —
-the convenience helper :meth:`Problem.from_target_single` does this.
-
-Schema is built around ProbPipe primitives:
-
-- `prior` is a ProbPipe `Distribution` — used for initial-design and
-  random-acquisition sampling. For benchmarks where there's no Bayesian
-  prior (e.g. analytic posteriors expressed directly via
-  `target_function`), `prior` doubles as the design distribution.
-- `support` is a ProbPipe `Constraint` — metadata describing the
-  parameter space; consumed by acquisitions / metrics that want to check
-  feasibility.
-- `reference_distribution` is a ProbPipe `Distribution` representing the
-  ground-truth posterior used by reference-based metrics (analytic when
-  one fits naturally, otherwise an `EmpiricalDistribution` over
-  precomputed samples).
+`docs/notation.md`): a single input has shape `input_shape`, a single
+output has shape `output_shape`, and design sets `X` / `Y` prepend a
+batch dimension. ``target_function`` is the **batched** view;
+``target_single`` is the per-point view. See
+`sabi.problems.target_distribution.TargetDistribution`.
 """
 
 from __future__ import annotations
@@ -34,77 +33,165 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import jax
 from jax import Array
 from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
 from sabi.problems.forms import LogDensityForm
+from sabi.problems.target_distribution import TargetDistribution
 
 
 @dataclass(frozen=True)
 class Problem:
     """A benchmark inference problem.
 
-    The emulator fits `target_function`. The unnormalized log-posterior at
-    `x` is reconstructed by applying `log_density_form` to
-    `(x, target_function(x[None])[0])`.
-
-    `target_function` is **batched**: ``(n,) + input_shape -> (n,) + output_shape``.
+    Attributes:
+        target_distribution: the mathematical target — a
+            `TargetDistribution` carrying the target function, form,
+            prior, and support.
+        reference_distribution: optional ground-truth posterior used by
+            reference-based metrics (analytic when one fits naturally,
+            otherwise an `EmpiricalDistribution` over precomputed
+            samples).
+        name: human-readable benchmark name (e.g. ``"gaussian2d"``,
+            ``"banana"``). Used for cache keys and metadata.
     """
 
-    name: str
-    input_shape: tuple[int, ...]
-    output_shape: tuple[int, ...]
-    target_function: Callable[[Array], Array]
-    log_density_form: LogDensityForm
-    prior: Distribution | None = None
-    support: Constraint | None = None
+    target_distribution: TargetDistribution
     reference_distribution: Distribution | None = None
+    name: str = ""
+
+    # ------------------------------------------------------------------------
+    # Convenience accessors mirroring the inner target_distribution
+    # ------------------------------------------------------------------------
+
+    @property
+    def input_shape(self) -> tuple[int, ...]:
+        return self.target_distribution.input_shape
+
+    @property
+    def output_shape(self) -> tuple[int, ...]:
+        return self.target_distribution.output_shape
+
+    @property
+    def target_function(self) -> Callable[[Array], Array]:
+        return self.target_distribution.target_function
+
+    @property
+    def target_single(self) -> Callable[[Array], Array]:
+        return self.target_distribution.target_single
+
+    @property
+    def log_density_form(self) -> LogDensityForm:
+        return self.target_distribution.log_density_form
+
+    @property
+    def prior(self) -> Distribution | None:
+        return self.target_distribution.prior
+
+    @property
+    def support(self) -> Constraint | None:
+        return self.target_distribution.support
+
+    def log_posterior(self, x: Array) -> Array:
+        """Single-point unnormalized log-posterior at ``x`` (shape ``input_shape``).
+
+        Convenience for tests / debugging — not used in the hot loop.
+        Equivalent to ``target_distribution.unnormalized_log_prob(x)``
+        via the ProbPipe op.
+        """
+        y = self.target_single(x)
+        return self.log_density_form(x, y, prior=self.prior)
+
+    # ------------------------------------------------------------------------
+    # Builders
+    # ------------------------------------------------------------------------
 
     @classmethod
     def from_target_single(
         cls,
         *,
         target_single: Callable[[Array], Array],
-        **kwargs: Any,
+        name: str,
+        input_shape: tuple[int, ...],
+        output_shape: tuple[int, ...],
+        log_density_form: LogDensityForm,
+        prior: Distribution | None = None,
+        support: Constraint | None = None,
+        reference_distribution: Distribution | None = None,
+        target_distribution_name: str | None = None,
     ) -> Problem:
         """Build a `Problem` from a single-point ``target_single`` callable.
 
-        Wraps ``target_single`` with `jax.vmap` to produce the batched
-        ``target_function``. The wrapped single-point function is also
-        cached on the instance as ``_target_single`` for paths that need
-        per-point evaluation (e.g., NUTS-based reference generation in
-        ``sabi.reference.nuts``).
+        Constructs the underlying `TargetDistribution` via
+        :meth:`TargetDistribution.from_target_single`. Returns the
+        `Problem` bundle.
+
+        Args:
+            target_single: single-point target ``input_shape -> output_shape``.
+            name: benchmark name (also used as the default
+                target_distribution name).
+            input_shape, output_shape: shape conventions.
+            log_density_form: how the target output composes into the
+                unnormalized log-posterior.
+            prior, support: passed to the `TargetDistribution`.
+            reference_distribution: optional ground-truth posterior.
+            target_distribution_name: optional override for the inner
+                target's name; defaults to ``f"{name}_target"``.
         """
-        target_function = jax.vmap(target_single)
-        problem = cls(target_function=target_function, **kwargs)
-        # Stash the single-point function on the instance — bypasses the
-        # frozen dataclass, but is the natural place for it since callers
-        # that want per-point access shouldn't reach back into the
-        # benchmark builder.
-        object.__setattr__(problem, "_target_single", target_single)
-        return problem
+        td = TargetDistribution.from_target_single(
+            target_single=target_single,
+            name=target_distribution_name or f"{name}_target",
+            input_shape=input_shape,
+            output_shape=output_shape,
+            log_density_form=log_density_form,
+            prior=prior,
+            support=support,
+        )
+        return cls(
+            target_distribution=td,
+            reference_distribution=reference_distribution,
+            name=name,
+        )
 
-    @property
-    def target_single(self) -> Callable[[Array], Array]:
-        """Single-point view of ``target_function``: ``input_shape -> output_shape``.
+    # Legacy constructor support — for tests / call sites that bypass
+    # `from_target_single` and build a Problem from individual
+    # components. New code should prefer `from_target_single` or
+    # construct a `TargetDistribution` directly.
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        name: str,
+        input_shape: tuple[int, ...],
+        output_shape: tuple[int, ...],
+        target_function: Callable[[Array], Array],
+        target_single: Callable[[Array], Array],
+        log_density_form: LogDensityForm,
+        prior: Distribution | None = None,
+        support: Constraint | None = None,
+        reference_distribution: Distribution | None = None,
+        target_distribution_name: str | None = None,
+    ) -> Problem:
+        """Build a `Problem` from already-constructed batched + single
+        target callables.
 
-        If the problem was built via :meth:`from_target_single`, returns
-        the original single-point callable. Otherwise wraps
-        ``target_function`` to extract one point at a time (slower; a
-        thin convenience for benchmarks that only define the batched
-        version).
+        Use this when you have explicit batched and single-point
+        functions that aren't a simple `jax.vmap` of each other (e.g.,
+        the batched version uses a more efficient implementation).
         """
-        cached = self.__dict__.get("_target_single")
-        if cached is not None:
-            return cached
-        return lambda x: self.target_function(x[None])[0]
-
-    def log_posterior(self, x: Array) -> Array:
-        """Single-point unnormalized log-posterior at ``x`` (shape ``input_shape``).
-
-        Convenience for tests / debugging — not used in the hot loop.
-        """
-        y = self.target_single(x)
-        return self.log_density_form(x, y, prior=self.prior)
+        td = TargetDistribution(
+            name=target_distribution_name or f"{name}_target",
+            input_shape=input_shape,
+            output_shape=output_shape,
+            target_function=target_function,
+            target_single=target_single,
+            log_density_form=log_density_form,
+            prior=prior,
+            support=support,
+        )
+        return cls(
+            target_distribution=td,
+            reference_distribution=reference_distribution,
+            name=name,
+        )

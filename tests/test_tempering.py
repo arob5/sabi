@@ -8,11 +8,11 @@ from sabi.tempering.schedule import FixedSchedule, UntemperedSchedule
 
 
 def _problem():
-    return Problem(
+    return Problem.from_target_single(
         name="dummy",
         input_shape=(1,),
         output_shape=(),
-        target_function=lambda x: jnp.asarray(0.0),
+        target_single=lambda x: jnp.asarray(0.0),
         log_density_form=Identity(),
     )
 

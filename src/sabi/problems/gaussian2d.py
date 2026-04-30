@@ -74,4 +74,5 @@ def gaussian2d(
         prior=prior,
         support=interval(lower, upper),
         reference_distribution=posterior,
+        target_distribution_name=f"gaussian2d_target_{id(mu)}",
     )

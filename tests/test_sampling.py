@@ -42,11 +42,11 @@ def test_prior_sampler_seed_determinism_and_independence():
 
 def test_prior_sampler_missing_prior_raises():
     """A Problem with `prior=None` must surface a clear error."""
-    problem = Problem(
+    problem = Problem.from_target_single(
         name="no_prior",
         input_shape=(2,),
         output_shape=(),
-        target_function=lambda x: jnp.sum(x),
+        target_single=lambda x: jnp.sum(x),
         prior=None,
         support=interval(low=jnp.zeros(2), high=jnp.ones(2)),
         log_density_form=Identity(),
