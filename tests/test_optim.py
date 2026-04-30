@@ -60,6 +60,7 @@ def _state(n: int = 30, seed: int = 0):
         Y_raw=Y,
         Y_train=Y,
         tempering_state=None,
+        target_tempering_state=None,
     )
 
 

@@ -33,6 +33,7 @@ def _state(problem, key_seed=0, n=20):
         Y_raw=Y,
         Y_train=Y,
         tempering_state=None,
+        target_tempering_state=None,
     )
 
 

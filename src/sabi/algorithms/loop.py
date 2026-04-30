@@ -42,12 +42,14 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
+from sabi.algorithms.acquisition_target import AcquisitionTarget
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.posterior.estimators import expected_target
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
+from sabi.problems.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.sampling import BatchSampler, PriorSampler
 from sabi.emulators.base import Emulator
 from sabi.tempering.base import NoTempering, TemperingScheme
@@ -160,6 +162,7 @@ class Algorithm:
     initial_sampler: BatchSampler = field(default_factory=PriorSampler)
     tempering_scheme: TemperingScheme = field(default_factory=NoTempering)
     schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
+    acquisition_target: AcquisitionTarget = AcquisitionTarget.CURRENT
     surrogate_posterior_factory: SurrogatePosteriorFactory = emulator_pushforward_factory
     estimator: Callable[[SurrogatePosterior], Distribution] = expected_target
     metrics: tuple[PosteriorMetric, ...] = ()
@@ -235,6 +238,24 @@ def _build_surrogate_posterior(
     )
 
 
+def _resolve_target_state(
+    acquisition_target: AcquisitionTarget,
+    schedule: TemperingSchedule,
+    round_idx: int,
+    current_state: Any,
+) -> Any:
+    """Map ``AcquisitionTarget`` to a concrete tempering state."""
+    if acquisition_target == AcquisitionTarget.CURRENT:
+        return current_state
+    if acquisition_target == AcquisitionTarget.NEXT:
+        # Probe the next round; built-in schedules clamp at terminal.
+        next_state, _ = schedule.next(round_idx + 1, None)
+        return next_state
+    if acquisition_target == AcquisitionTarget.TERMINAL:
+        return schedule.terminal_state()
+    raise ValueError(f"Unknown AcquisitionTarget: {acquisition_target!r}")
+
+
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential emulator-based inference loop.
 
@@ -248,6 +269,14 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     the round's form (used to build the `SurrogatePosterior`) is the
     intermediate's ``log_density_form``. Under `NoTempering` (default),
     these are identity / unchanged from the base target distribution.
+
+    Acquisition target: ``algorithm.acquisition_target`` selects which
+    state the acquisition optimizes against (`CURRENT`, `NEXT`,
+    `TERMINAL`). When this differs from the round's ``current_state``,
+    the loop builds a separate look-ahead `IntermediateTarget` and may
+    refit the emulator on the look-ahead-state's training data before
+    the acquisition runs. Issue #4 will add a cheap-update dispatch
+    that avoids redundant full refits.
     """
     target = problem.target_distribution
     if target.support is None:
@@ -272,24 +301,62 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     emulator = emulator.fit(X, Y_train)
 
     for round_idx in range(algorithm.n_rounds):
-        tempering_state, _final = algorithm.schedule.next(round_idx, None)
-        intermediate = algorithm.tempering_scheme.intermediate_target(
-            target, tempering_state
+        current_state, _final = algorithm.schedule.next(round_idx, None)
+        target_state = _resolve_target_state(
+            algorithm.acquisition_target,
+            algorithm.schedule,
+            round_idx,
+            current_state,
         )
-        current_form = intermediate.log_density_form
+        current_intermediate = algorithm.tempering_scheme.intermediate_target(
+            target, current_state
+        )
+        # Acquisition's intermediate may live at a different state.
+        # Reuse current_intermediate when target_state == current_state
+        # (both invariance flags trivially hold).
+        target_invariant = (
+            algorithm.tempering_scheme.is_invariant_target_function(
+                current_state, target_state
+            )
+            and algorithm.tempering_scheme.is_invariant_form(
+                current_state, target_state
+            )
+        )
+        if target_invariant:
+            target_intermediate = current_intermediate
+        else:
+            target_intermediate = algorithm.tempering_scheme.intermediate_target(
+                target, target_state
+            )
+
+        # Y_train and emulator the acquisition sees: derived at
+        # target_state. If target_state's training data differs from
+        # current's (or the emulator hasn't been fit at this state
+        # yet), refit. Step 5 (issue #4) will replace this with a
+        # cheap-update dispatch.
+        if algorithm.tempering_scheme.is_invariant_target_function(
+            current_state, target_state
+        ):
+            Y_train_for_acq = Y_train
+            emulator_for_acq = emulator
+        else:
+            Y_train_for_acq = target_intermediate.output_transform(
+                target_state, X, Y_raw
+            )
+            emulator_for_acq = algorithm.emulator_factory().fit(X, Y_train_for_acq)
 
         key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
-        # Pre-acquisition SP wraps the current emulator + intermediate's
+        # Pre-acquisition SP wraps the acquisition-state emulator +
         # form. The weighted-empirical factory produces a
         # SurrogatePosterior with ``emulator=None``; acquisitions that
         # need a real emulator check
         # ``state.surrogate_posterior.emulator is None`` and raise.
         pre_round_posterior = _build_surrogate_posterior(
             algorithm.surrogate_posterior_factory,
-            emulator=emulator,
+            emulator=emulator_for_acq,
             X=X,
-            Y=Y_train,
-            log_density_form=current_form,
+            Y=Y_train_for_acq,
+            log_density_form=target_intermediate.log_density_form,
             problem=problem,
         )
         acq_state = AcquisitionState(
@@ -297,17 +364,19 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             surrogate_posterior=pre_round_posterior,
             X=X,
             Y_raw=Y_raw,
-            Y_train=Y_train,
-            tempering_state=tempering_state,
+            Y_train=Y_train_for_acq,
+            tempering_state=current_state,
+            target_tempering_state=target_state,
         )
         x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key_acq)
         y_new_raw = problem.target_function(x_new)
 
         X = jnp.concatenate([X, x_new], axis=0)
         Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
-        # Derive Y_train from Y_raw via the intermediate's
-        # output_transform. For NoTempering this is the identity.
-        Y_train = intermediate.output_transform(tempering_state, X, Y_raw)
+        # Round-end fit: emulator + Y_train at the round's *current*
+        # state (used by round-end metrics). For the no-look-ahead
+        # case this is the only emulator fit per round.
+        Y_train = current_intermediate.output_transform(current_state, X, Y_raw)
         emulator = emulator.fit(X, Y_train)
 
         sp = _build_surrogate_posterior(
@@ -315,16 +384,17 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             emulator=emulator,
             X=X,
             Y=Y_train,
-            log_density_form=current_form,
+            log_density_form=current_intermediate.log_density_form,
             problem=problem,
         )
         estimate = algorithm.estimator(sp)
         round_metrics = _evaluate_metrics(estimate, problem, algorithm.metrics, key_metric)
         round_metrics["round"] = round_idx
-        round_metrics["tempering_state"] = tempering_state
+        round_metrics["tempering_state"] = current_state
+        round_metrics["target_tempering_state"] = target_state
         round_metrics["n_evals"] = int(X.shape[0])
         per_round_metrics.append(round_metrics)
-        tempering_states.append(tempering_state)
+        tempering_states.append(current_state)
 
     # Final evaluation at the base target (un-tempered form) so
     # downstream tooling always has a reference row at the terminal

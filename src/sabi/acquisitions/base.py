@@ -77,17 +77,24 @@ class AcquisitionState:
         problem: the inference problem (provides `prior`, `support`,
             `input_shape`, etc.).
         surrogate_posterior: round's surrogate-posterior random measure
-            (always set; ``surrogate_posterior.emulator`` may be
-            ``None`` for the weighted-empirical baseline).
+            built at ``target_tempering_state`` (the state the
+            acquisition optimizes against — see `AcquisitionTarget`).
+            Always set; ``surrogate_posterior.emulator`` may be
+            ``None`` for the weighted-empirical baseline.
         X: design inputs, shape `(n,) + problem.input_shape`.
         Y_raw: raw target evaluations, shape `(n,) + problem.output_shape`.
-        Y_train: emulator-training targets at the round's state, same
-            shape as Y_raw. Equal to Y_raw when no target-side
-            tempering is in effect.
-        tempering_state: opaque PyTree from the `TemperingSchedule`;
-            `None` for untempered loops. Provided so acquisitions that
-            care about the round's tempering state can read it directly
-            without inferring from the SP.
+        Y_train: emulator-training targets *at the
+            target_tempering_state*, same shape as Y_raw. Consistent
+            with the SP's emulator. Equal to Y_raw when no
+            target-side tempering is in effect.
+        tempering_state: round's current state from the schedule.
+            Available for acquisitions that want to introspect the
+            round's intermediate distribution independently of the
+            target.
+        target_tempering_state: state at which the
+            ``surrogate_posterior`` is built — the state the
+            acquisition optimizes against. Equal to ``tempering_state``
+            when ``Algorithm.acquisition_target == CURRENT`` (default).
     """
 
     problem: Problem
@@ -96,6 +103,7 @@ class AcquisitionState:
     Y_raw: Array
     Y_train: Array
     tempering_state: Any
+    target_tempering_state: Any
 
 
 class Acquisition(ABC):
