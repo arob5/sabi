@@ -17,6 +17,7 @@ from probpipe.core.constraints import interval
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
 from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.target_distribution import TargetDistribution
 from sabi.sampling import PriorSampler
 
 
@@ -42,8 +43,8 @@ def test_prior_sampler_seed_determinism_and_independence():
 
 def test_prior_sampler_missing_prior_raises():
     """A Problem with `prior=None` must surface a clear error."""
-    problem = Problem.from_target_single(
-        name="no_prior",
+    target = TargetDistribution.from_target_single(
+        name="no_prior_target",
         input_shape=(2,),
         output_shape=(),
         target_single=lambda x: jnp.sum(x),
@@ -51,5 +52,6 @@ def test_prior_sampler_missing_prior_raises():
         support=interval(low=jnp.zeros(2), high=jnp.ones(2)),
         log_density_form=Identity(),
     )
+    problem = Problem(target_distribution=target, name="no_prior")
     with pytest.raises(ValueError, match="prior"):
         PriorSampler().sample(problem, jax.random.key(0), n=4)

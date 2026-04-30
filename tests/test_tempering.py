@@ -152,13 +152,14 @@ def test_problem_target_distribution_round_trips_via_no_tempering():
     """Constructing an intermediate via NoTempering on a Problem's
     target_distribution should produce a distribution whose log-density
     matches `Problem.log_posterior` at the same input."""
-    problem = Problem.from_target_single(
+    target = TargetDistribution.from_target_single(
         target_single=lambda x: -0.5 * jnp.sum(x * x),
-        name="quad_problem",
+        name="quad_problem_target",
         input_shape=(2,),
         output_shape=(),
         log_density_form=Identity(),
     )
+    problem = Problem(target_distribution=target, name="quad_problem")
     intermediate = NoTempering().intermediate_target(
         problem.target_distribution, state=None
     )

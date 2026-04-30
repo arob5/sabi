@@ -41,6 +41,7 @@ from probpipe.distributions.continuous import Uniform
 
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
+from sabi.problems.target_distribution import TargetDistribution
 
 
 def banana(
@@ -86,13 +87,17 @@ def banana(
     upper = jnp.asarray([bounds[0][1], bounds[1][1]], dtype=jnp.float64)
     prior = Uniform(low=lower, high=upper, name=f"banana_design_a{a}_b{b}")
 
-    return Problem.from_target_single(
+    target = TargetDistribution.from_target_single(
         target_single=log_prob_single,
-        name="banana",
+        name="banana_target",
         input_shape=(2,),
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
         support=interval(lower, upper),
+    )
+    return Problem(
+        target_distribution=target,
         reference_distribution=reference,
+        name="banana",
     )

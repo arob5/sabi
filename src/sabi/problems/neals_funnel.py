@@ -47,6 +47,7 @@ from probpipe.distributions.continuous import Uniform
 
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
+from sabi.problems.target_distribution import TargetDistribution
 from sabi.reference.cache import load_or_generate_reference_samples
 
 
@@ -156,13 +157,17 @@ def neals_funnel(
         name=f"neals_funnel_d{d}_reference",
     )
 
-    return Problem.from_target_single(
+    target = TargetDistribution.from_target_single(
         target_single=log_prob_single,
-        name="neals_funnel",
+        name=f"neals_funnel_d{d}_target",
         input_shape=(p,),
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
         support=support,
+    )
+    return Problem(
+        target_distribution=target,
         reference_distribution=reference,
+        name="neals_funnel",
     )

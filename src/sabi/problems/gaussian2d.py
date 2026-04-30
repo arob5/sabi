@@ -32,6 +32,7 @@ from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
+from sabi.problems.target_distribution import TargetDistribution
 
 
 def gaussian2d(
@@ -65,14 +66,17 @@ def gaussian2d(
     upper = mu + bounds_radius
     prior = Uniform(low=lower, high=upper, name=f"gaussian2d_design_{id(mu)}")
 
-    return Problem.from_target_single(
+    target = TargetDistribution.from_target_single(
         target_single=target_single,
-        name="gaussian2d",
+        name=f"gaussian2d_target_{id(mu)}",
         input_shape=(2,),
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
         support=interval(lower, upper),
+    )
+    return Problem(
+        target_distribution=target,
         reference_distribution=posterior,
-        target_distribution_name=f"gaussian2d_target_{id(mu)}",
+        name="gaussian2d",
     )

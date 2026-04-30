@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import pytest
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
-from sabi.algorithms.acquisition_target import AcquisitionTarget
+from sabi.acquisitions.base import AcquisitionTarget
 from sabi.algorithms.loop import Algorithm, run
 from sabi.emulators.gp import GPEmulator
 from sabi.problems.gaussian2d import gaussian2d
@@ -216,19 +216,21 @@ def test_via_target_with_next_lookahead_runs_to_completion():
 
     from sabi.problems.base import Problem
     from sabi.problems.forms import LogLikPlusPrior
+    from sabi.problems.target_distribution import TargetDistribution
 
     prior = Uniform(
         low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0), name="p"
     )
-    problem = Problem.from_target_single(
+    target = TargetDistribution.from_target_single(
         target_single=lambda x: -0.5 * jnp.sum(x * x),  # log-likelihood
-        name="quad_loglik",
+        name="quad_loglik_target",
         input_shape=(2,),
         output_shape=(),
         log_density_form=LogLikPlusPrior(),
         prior=prior,
         support=interval(low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0)),
     )
+    problem = Problem(target_distribution=target, name="quad_loglik")
     alg = Algorithm(
         emulator_factory=lambda: GPEmulator(input_shape=(2,)),
         acquisition=PriorSampling(),

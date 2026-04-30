@@ -41,8 +41,7 @@ from jax import Array
 from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
-from sabi.acquisitions.base import Acquisition, AcquisitionState
-from sabi.algorithms.acquisition_target import AcquisitionTarget
+from sabi.acquisitions.base import Acquisition, AcquisitionState, AcquisitionTarget
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.posterior.estimators import expected_target
 from sabi.posterior.surrogate_posterior import SurrogatePosterior

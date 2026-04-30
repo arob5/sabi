@@ -31,7 +31,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from jax import Array
 from probpipe.core._distribution_base import Distribution
@@ -103,95 +102,3 @@ class Problem:
         y = self.target_single(x)
         return self.log_density_form(x, y, prior=self.prior)
 
-    # ------------------------------------------------------------------------
-    # Builders
-    # ------------------------------------------------------------------------
-
-    @classmethod
-    def from_target_single(
-        cls,
-        *,
-        target_single: Callable[[Array], Array],
-        name: str,
-        input_shape: tuple[int, ...],
-        output_shape: tuple[int, ...],
-        log_density_form: LogDensityForm,
-        prior: Distribution | None = None,
-        support: Constraint | None = None,
-        reference_distribution: Distribution | None = None,
-        target_distribution_name: str | None = None,
-    ) -> Problem:
-        """Build a `Problem` from a single-point ``target_single`` callable.
-
-        Constructs the underlying `TargetDistribution` via
-        :meth:`TargetDistribution.from_target_single`. Returns the
-        `Problem` bundle.
-
-        Args:
-            target_single: single-point target ``input_shape -> output_shape``.
-            name: benchmark name (also used as the default
-                target_distribution name).
-            input_shape, output_shape: shape conventions.
-            log_density_form: how the target output composes into the
-                unnormalized log-posterior.
-            prior, support: passed to the `TargetDistribution`.
-            reference_distribution: optional ground-truth posterior.
-            target_distribution_name: optional override for the inner
-                target's name; defaults to ``f"{name}_target"``.
-        """
-        td = TargetDistribution.from_target_single(
-            target_single=target_single,
-            name=target_distribution_name or f"{name}_target",
-            input_shape=input_shape,
-            output_shape=output_shape,
-            log_density_form=log_density_form,
-            prior=prior,
-            support=support,
-        )
-        return cls(
-            target_distribution=td,
-            reference_distribution=reference_distribution,
-            name=name,
-        )
-
-    # Legacy constructor support — for tests / call sites that bypass
-    # `from_target_single` and build a Problem from individual
-    # components. New code should prefer `from_target_single` or
-    # construct a `TargetDistribution` directly.
-    @classmethod
-    def from_components(
-        cls,
-        *,
-        name: str,
-        input_shape: tuple[int, ...],
-        output_shape: tuple[int, ...],
-        target_function: Callable[[Array], Array],
-        target_single: Callable[[Array], Array],
-        log_density_form: LogDensityForm,
-        prior: Distribution | None = None,
-        support: Constraint | None = None,
-        reference_distribution: Distribution | None = None,
-        target_distribution_name: str | None = None,
-    ) -> Problem:
-        """Build a `Problem` from already-constructed batched + single
-        target callables.
-
-        Use this when you have explicit batched and single-point
-        functions that aren't a simple `jax.vmap` of each other (e.g.,
-        the batched version uses a more efficient implementation).
-        """
-        td = TargetDistribution(
-            name=target_distribution_name or f"{name}_target",
-            input_shape=input_shape,
-            output_shape=output_shape,
-            target_function=target_function,
-            target_single=target_single,
-            log_density_form=log_density_form,
-            prior=prior,
-            support=support,
-        )
-        return cls(
-            target_distribution=td,
-            reference_distribution=reference_distribution,
-            name=name,
-        )
