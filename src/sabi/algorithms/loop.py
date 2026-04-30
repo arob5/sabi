@@ -50,7 +50,7 @@ from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
 from sabi.sampling import BatchSampler, PriorSampler
 from sabi.emulators.base import Emulator
-from sabi.tempering.base import NoTempering, Tempering
+from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule
 
 
@@ -158,7 +158,7 @@ class Algorithm:
     n_rounds: int = 10
     q: int = 1
     initial_sampler: BatchSampler = field(default_factory=PriorSampler)
-    tempering: Tempering = field(default_factory=NoTempering)
+    tempering_scheme: TemperingScheme = field(default_factory=NoTempering)
     schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
     surrogate_posterior_factory: SurrogatePosteriorFactory = emulator_pushforward_factory
     estimator: Callable[[SurrogatePosterior], Distribution] = expected_target
@@ -242,25 +242,28 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     full `(X, Y_train)` (no incremental updates in v1.2; design doc lists
     `condition_on`-backed updates as a v2 item).
 
-    `Y_raw` holds the un-transformed evaluations of
-    ``problem.target_function``; `Y_train` holds the values the emulator
-    is fit on. Under no tempering they are equal. Under the upcoming
-    tempering schemes (Step 3+), `Y_train` may be a state-dependent
-    transformation of `Y_raw` produced by an `EmulatorTarget`-style
-    adapter.
+    Tempering integration: each round, the `tempering_scheme` produces
+    an `IntermediateTarget` at the round's state. ``Y_train`` is derived
+    from cached ``Y_raw`` via the intermediate's ``output_transform``;
+    the round's form (used to build the `SurrogatePosterior`) is the
+    intermediate's ``log_density_form``. Under `NoTempering` (default),
+    these are identity / unchanged from the base target distribution.
     """
-    if problem.support is None:
+    target = problem.target_distribution
+    if target.support is None:
         raise ValueError(
-            f"Problem {problem.name!r} requires a non-None `support` for v1.2 "
+            f"Problem {problem.name!r} requires a non-None `support` for "
             "SurrogatePosterior construction."
         )
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
     Y_raw = problem.target_function(X)
-    # No target-side tempering yet (Step 2 plumbs the field; Step 3+ will
-    # produce a non-trivial Y_train via TemperingScheme).
-    Y_train = Y_raw
+
+    # Build the round-0 intermediate to derive the initial Y_train.
+    state_0, _ = algorithm.schedule.next(0, None)
+    target_0 = algorithm.tempering_scheme.intermediate_target(target, state_0)
+    Y_train = target_0.output_transform(state_0, X, Y_raw)
 
     tempering_states: list[Any] = []
     per_round_metrics: list[dict[str, Any]] = []
@@ -270,15 +273,17 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
     for round_idx in range(algorithm.n_rounds):
         tempering_state, _final = algorithm.schedule.next(round_idx, None)
-        current_form = algorithm.tempering.apply(
-            problem.log_density_form, tempering_state
+        intermediate = algorithm.tempering_scheme.intermediate_target(
+            target, tempering_state
         )
+        current_form = intermediate.log_density_form
 
         key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
-        # Pre-acquisition SP wraps the current emulator + form. The
-        # weighted-empirical factory produces a SurrogatePosterior with
-        # ``emulator=None``; acquisitions that need a real emulator
-        # check ``state.surrogate_posterior.emulator is None`` and raise.
+        # Pre-acquisition SP wraps the current emulator + intermediate's
+        # form. The weighted-empirical factory produces a
+        # SurrogatePosterior with ``emulator=None``; acquisitions that
+        # need a real emulator check
+        # ``state.surrogate_posterior.emulator is None`` and raise.
         pre_round_posterior = _build_surrogate_posterior(
             algorithm.surrogate_posterior_factory,
             emulator=emulator,
@@ -300,9 +305,9 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
         X = jnp.concatenate([X, x_new], axis=0)
         Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
-        # Step 2: Y_train = Y_raw (identity). Step 3+ will derive
-        # Y_train from Y_raw via the tempering scheme's output transform.
-        Y_train = Y_raw
+        # Derive Y_train from Y_raw via the intermediate's
+        # output_transform. For NoTempering this is the identity.
+        Y_train = intermediate.output_transform(tempering_state, X, Y_raw)
         emulator = emulator.fit(X, Y_train)
 
         sp = _build_surrogate_posterior(
@@ -321,9 +326,10 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         per_round_metrics.append(round_metrics)
         tempering_states.append(tempering_state)
 
-    # Final evaluation at the terminal target (untempered form), regardless
-    # of schedule state, so downstream tooling always has a reference row.
-    final_form = problem.log_density_form
+    # Final evaluation at the base target (un-tempered form) so
+    # downstream tooling always has a reference row at the terminal
+    # distribution, regardless of where the schedule ended.
+    final_form = target.log_density_form
     final_sp = _build_surrogate_posterior(
         algorithm.surrogate_posterior_factory,
         emulator=emulator,

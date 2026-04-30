@@ -1,4 +1,4 @@
-from sabi.tempering.base import NoTempering, Tempering, register_tempering
+from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import (
     FixedSchedule,
     TemperingSchedule,
@@ -8,8 +8,7 @@ from sabi.tempering.schedule import (
 __all__ = [
     "FixedSchedule",
     "NoTempering",
-    "Tempering",
+    "TemperingScheme",
     "TemperingSchedule",
     "UntemperedSchedule",
-    "register_tempering",
 ]

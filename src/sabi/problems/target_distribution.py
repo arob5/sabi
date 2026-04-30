@@ -169,3 +169,78 @@ class TargetDistribution(NumericRecordDistribution):
         return jax.vmap(
             lambda xi, yi: self._log_density_form(xi, yi, prior=self._prior)
         )(x, y)
+
+
+class IntermediateTarget(TargetDistribution):
+    """A `TargetDistribution` that's one step of a tempering scheme.
+
+    Identical structure to the base `TargetDistribution` (target function
+    `f_state`, log-density form `phi_state`, prior, support), plus
+    metadata that the algorithm loop uses to derive the emulator's
+    training data efficiently:
+
+    - ``state``: the tempering state that produced this intermediate.
+    - ``output_transform``: a callable
+      ``(state, X, Y_raw) -> Y_train`` that converts cached raw
+      evaluations of the *base* target function ``f`` to training
+      values for ``f_state``. The loop uses this instead of evaluating
+      ``f_state`` directly when it has cached ``Y_raw``.
+    - ``base_target_function``: the un-tempered base target ``f`` (for
+      reference; the loop typically already has it via the base
+      `TargetDistribution`).
+
+    The relationship between ``target_function`` (which is ``f_state``)
+    and ``output_transform`` is:
+
+    .. code-block:: python
+
+        f_state(x) == output_transform(state, x, base_target_function(x))
+
+    For Case 1 (no tempering): ``output_transform`` is identity and
+    ``f_state == f``. For Case 2 (likelihood tempering via target):
+    ``output_transform(state, X, Y_raw) = state * Y_raw`` (state is
+    the inverse temperature beta).
+
+    See `docs/tempering.md` for the conceptual layering.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        input_shape: tuple[int, ...],
+        output_shape: tuple[int, ...],
+        target_function: Callable[[Array], Array],
+        target_single: Callable[[Array], Array],
+        log_density_form: LogDensityForm,
+        state: Any,
+        output_transform: Callable[[Any, Array, Array], Array],
+        base_target_function: Callable[[Array], Array],
+        prior: Distribution | None = None,
+        support: Constraint | None = None,
+    ):
+        self._state = state
+        self._output_transform = output_transform
+        self._base_target_function = base_target_function
+        super().__init__(
+            name=name,
+            input_shape=input_shape,
+            output_shape=output_shape,
+            target_function=target_function,
+            target_single=target_single,
+            log_density_form=log_density_form,
+            prior=prior,
+            support=support,
+        )
+
+    @property
+    def state(self) -> Any:
+        return self._state
+
+    @property
+    def output_transform(self) -> Callable[[Any, Array, Array], Array]:
+        return self._output_transform
+
+    @property
+    def base_target_function(self) -> Callable[[Array], Array]:
+        return self._base_target_function
