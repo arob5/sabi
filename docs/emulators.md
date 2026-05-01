@@ -166,7 +166,35 @@ will land there when a benchmark needs it.
   comparison between the cached and naive predict paths catches the
   divergence.
 
+## Fixed-hyperparameter conditioning
+
+`DSPGPEmulator.condition_on(X_new, Y_new)` returns a new emulator that
+appends `(X_new, Y_new)` to the training set **without re-running
+hyperparameter optimization**. The kernel lengthscales, observation
+noise, and input/output scalers all carry over from the existing fit.
+Internally it does a block Cholesky update on the cached factor:
+costs `O(n²·m + m³)` for `m` new points, vs `O((n+m)³)` for a
+refit-from-scratch. See `_PredictCache.append_rows` for the math.
+
+Use `condition_on` when:
+- Hyperparameters were already optimized on a representative dataset
+  and adding a few more points won't materially change them.
+- You're inside a tight inner loop (e.g., greedy q-batch acquisition)
+  where refitting per candidate would dominate runtime.
+
+Use `fit` when:
+- The new points push the data into a new regime (e.g., a tempering
+  step changed the output scale).
+- You haven't fitted yet, or want to refresh the hyperparameter
+  estimate.
+
+The dispatch surface (`update_emulator` + `AppendRows`) is not yet
+wired to `condition_on` — that integration lands when the user-facing
+API is settled. Today it's a direct method call.
+
 ## Forward-look
 
-- ProbPipe `condition_on` integration replaces the bespoke `fit` once the
-  primitive lands.
+- Wire `AppendRows` dispatch handler that delegates to `condition_on`
+  once the dispatch API for tempering composition stabilizes.
+- ProbPipe `condition_on` integration replaces the bespoke `fit` once
+  the primitive lands.

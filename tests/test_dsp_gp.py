@@ -454,6 +454,168 @@ def test_dspgp_predict_joint_assembles_multivariate_normal():
     assert jnp.allclose(dist.loc, em.predict_mean(X_test), rtol=1e-9, atol=1e-12)
 
 
+# --- Fixed-hyperparameter conditioning (rank-one Cholesky update) ------------
+
+
+def test_dspgp_condition_on_interpolates_through_appended_training_data():
+    """Sanity check: after ``condition_on(X_new, Y_new)``, the new
+    points are training data, so the latent posterior mean at those
+    inputs should pass approximately through ``Y_new`` (within
+    obs_stddev — typically tiny for the default fit)."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    key = jr.key(101)
+    d = 2
+    X_part = jr.uniform(key, (12, d))
+    Y_part = jnp.sin(X_part[:, 0]) + 0.2 * X_part[:, 1]
+    em = DSPGPEmulator(input_shape=(d,)).fit(X_part, Y_part)
+
+    X_extra = jr.uniform(jr.key(102), (4, d))
+    Y_extra = jnp.sin(X_extra[:, 0]) + 0.2 * X_extra[:, 1]
+
+    em_cond = em.condition_on(X_extra, Y_extra)
+    # Predicting at appended training inputs returns near-perfect fit.
+    pred_at_appended = em_cond.predict_mean(X_extra)
+    assert jnp.max(jnp.abs(pred_at_appended - Y_extra)) < 1e-2
+
+
+def test_dspgp_condition_on_predicts_identically_to_partial_when_no_new_rows():
+    """``condition_on(empty)`` should be a no-op (sanity check)."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    key = jr.key(111)
+    X = jr.uniform(key, (12, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_test = jr.uniform(jr.key(112), (5, 2))
+    pred_before = em.predict_mean(X_test)
+    var_before = em.predict_variance(X_test)
+
+    em_cond = em.condition_on(jnp.empty((0, 2)), jnp.empty((0,)))
+    assert jnp.allclose(em_cond.predict_mean(X_test), pred_before, rtol=1e-12, atol=1e-14)
+    assert jnp.allclose(em_cond.predict_variance(X_test), var_before, rtol=1e-12, atol=1e-14)
+
+
+def test_dspgp_condition_on_matches_partition_then_condition_strategy():
+    """The cleanest equivalence test for the rank-one update:
+
+    Two paths must yield the same cache, hence the same predictions:
+    1. Build cache from full data: ``cache_full = build(opt_posterior, X_full, Y_full)``
+    2. Build cache from partial data, then condition on the rest:
+       ``cache_partial.append_rows(X_extra_scaled, Y_extra_scaled)``
+
+    Both should produce the same ``L_sigma``, ``alpha``, and the same
+    predict_mean/variance values — they're the same mathematical
+    object via two different computational paths.
+
+    This test bypasses the scaler by going directly through the cache
+    on already-standardized inputs, isolating the rank-one update math.
+    """
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.gpjax.dsp_gp import _PredictCache
+
+    key = jr.key(121)
+    n_total, d = 18, 3
+    X = jr.uniform(key, (n_total, d))
+    Y = jnp.sin(X[:, 0]) + 0.3 * X[:, 1] - 0.1 * X[:, 2]
+
+    em = DSPGPEmulator(input_shape=(d,)).fit(X, Y)
+
+    # Standardize using the emulator's own scalers so the same numbers
+    # flow through both paths.
+    Xs = em._x_scaler.transform(X).astype(jnp.float64)
+    Ys = em._y_scaler.transform(Y).astype(jnp.float64)
+
+    # Path 1: build cache from full standardized data.
+    cache_full = _PredictCache.build(em._opt_posterior, Xs, Ys)
+
+    # Path 2: build cache from prefix, append rest via rank-one update.
+    n_part = 11
+    cache_partial = _PredictCache.build(em._opt_posterior, Xs[:n_part], Ys[:n_part])
+    cache_appended = cache_partial.append_rows(Xs[n_part:], Ys[n_part:])
+
+    # The L_sigma factors should match (up to fp slop) — same target
+    # matrix, same Cholesky algorithm.
+    assert jnp.allclose(cache_full.L_sigma, cache_appended.L_sigma, rtol=1e-9, atol=1e-12)
+    # alpha vectors equal.
+    assert jnp.allclose(cache_full.alpha, cache_appended.alpha, rtol=1e-9, atol=1e-12)
+    # And consequently predictions agree.
+    Xt = jr.uniform(jr.key(122), (8, d))
+    Xst = em._x_scaler.transform(Xt).astype(jnp.float64)
+    m_full, v_full = cache_full.predict_latent(Xst)
+    m_app, v_app = cache_appended.predict_latent(Xst)
+    assert jnp.allclose(m_full, m_app, rtol=1e-9, atol=1e-12)
+    assert jnp.allclose(v_full, v_app, rtol=1e-9, atol=1e-12)
+
+
+def test_dspgp_condition_on_is_faster_than_refit_in_principle():
+    """End-to-end: ``condition_on`` should NOT call fit_scipy.
+
+    We don't measure wall-clock time (flaky in CI), but we verify the
+    optimized posterior pytree is the same object after conditioning
+    — it can't have been re-optimized."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    key = jr.key(131)
+    X = jr.uniform(key, (10, 2))
+    Y = jnp.cos(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_extra = jr.uniform(jr.key(132), (5, 2))
+    Y_extra = jnp.cos(X_extra[:, 0])
+    em_cond = em.condition_on(X_extra, Y_extra)
+
+    # Same opt_posterior: condition_on did not re-fit.
+    assert em_cond._opt_posterior is em._opt_posterior
+    # Same scalers.
+    assert em_cond._x_scaler is em._x_scaler
+    assert em_cond._y_scaler is em._y_scaler
+    # New cache, augmented training set.
+    assert em_cond._predict_cache.Xs_train.shape == (15, 2)
+    assert em_cond._predict_cache.alpha.shape == (15,)
+    assert em_cond._predict_cache.L_sigma.shape == (15, 15)
+
+
+def test_dspgp_condition_on_rejects_wrong_shapes():
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    em = DSPGPEmulator(input_shape=(2,)).fit(
+        jnp.array([[0.0, 0.0], [1.0, 1.0], [0.5, 0.5]]),
+        jnp.array([0.0, 1.0, 0.5]),
+    )
+    # Wrong d
+    with pytest.raises(ValueError, match=r"X_new.shape=\(m, 2\)"):
+        em.condition_on(jnp.zeros((3, 5)), jnp.zeros((3,)))
+    # Wrong Y length
+    with pytest.raises(ValueError, match=r"Y_new.shape="):
+        em.condition_on(jnp.zeros((3, 2)), jnp.zeros((4,)))
+
+
 # --- Sample efficiency at high d ---------------------------------------------
 
 

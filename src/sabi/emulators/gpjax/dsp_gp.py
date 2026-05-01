@@ -292,6 +292,174 @@ class _PredictCache:
         cov = cov + test_jitter * jnp.eye(cov.shape[0], dtype=cov.dtype)
         return mean, cov
 
+    def append_rows(
+        self, Xs_new: Array, Ys_new: Array
+    ) -> "_PredictCache":
+        r"""Append new training rows via a block Cholesky / alpha update.
+
+        Conditions the GP on ``(Xs_new, Ys_new)`` while holding the
+        kernel hyperparameters and the observation-noise variance
+        fixed. Bit-equivalent to building a fresh cache on the
+        concatenated training set with the same hyperparameters, but
+        runs in O(n²·m + m³) instead of O((n+m)³).
+
+        Math
+        ----
+        Let
+
+        .. math::
+
+            \Sigma = K(X, X) + \sigma^2 I + \text{jitter} \cdot I = L L^\top
+
+        be the cached training covariance with its lower Cholesky
+        factor (n × n). Suppose we condition on a new batch of size m,
+        so the augmented training covariance has the symmetric block
+        form
+
+        .. math::
+
+            \Sigma' = \begin{bmatrix}
+                \Sigma & K(X, X_\text{new}) \\
+                K(X_\text{new}, X) & K(X_\text{new}, X_\text{new}) +
+                    \sigma^2 I + \text{jitter} \cdot I
+            \end{bmatrix}.
+
+        Its lower Cholesky factor admits the block form
+
+        .. math::
+
+            L' = \begin{bmatrix} L & 0 \\ U^\top & L_{22} \end{bmatrix},
+
+        where
+
+        .. math::
+
+            U &= L^{-1} K(X, X_\text{new})
+                \quad (\text{forward triangular solve, n} \times \text{m}) \\
+            D &= K(X_\text{new}, X_\text{new}) + \sigma^2 I +
+                \text{jitter} \cdot I - U^\top U
+                \quad (\text{m} \times \text{m, the Schur complement}) \\
+            L_{22} &= \text{chol}(D)
+                \quad (\text{m} \times \text{m, dense Cholesky}).
+
+        Verification:
+
+        .. math::
+
+            L' (L')^\top = \begin{bmatrix}
+                L L^\top & L U \\
+                U^\top L^\top & U^\top U + L_{22} L_{22}^\top
+            \end{bmatrix}
+            = \begin{bmatrix} \Sigma & K(X, X_\text{new}) \\
+                K(X_\text{new}, X) & K(X_\text{new}, X_\text{new})
+                    + \sigma^2 I + \text{jitter} \cdot I \end{bmatrix}
+            = \Sigma',
+
+        using ``L L^\top = \Sigma``, ``L U = K(X, X_\text{new})``, and
+        ``U^\top U + D = K(X_\text{new}, X_\text{new}) + \sigma^2 I +
+        \text{jitter} \cdot I``.
+
+        The training residual ``α = L^{-1}(y - m(X))`` extends as
+
+        .. math::
+
+            \alpha_\text{new} &= L_{22}^{-1}\bigl(
+                y_\text{new} - m(X_\text{new}) - U^\top \alpha
+            \bigr), \\
+            \alpha' &= [\alpha; \, \alpha_\text{new}],
+
+        which satisfies
+
+        .. math::
+
+            L' \alpha' = \begin{bmatrix} L \alpha \\
+                U^\top \alpha + L_{22} \alpha_\text{new} \end{bmatrix}
+            = \begin{bmatrix} y - m(X) \\
+                y_\text{new} - m(X_\text{new}) \end{bmatrix},
+
+        so ``α'`` is the canonical residual for the augmented training
+        set under the same model.
+
+        Cost: one (n × m) triangular solve, one (m × m) gram
+        evaluation, one (m × m) Cholesky, and one (m,) triangular
+        solve. Memory: a fresh (n+m) × (n+m) lower-triangular factor.
+        Refit-from-scratch costs O((n+m)³).
+
+        Args:
+            Xs_new: ``(m, d)`` new training inputs in scaled
+                coordinates (must already be transformed by the same
+                x-scaler used at fit time).
+            Ys_new: ``(m,)`` new training outputs in standardized
+                coordinates (must already be transformed by the same
+                y-scaler used at fit time).
+
+        Returns:
+            A new ``_PredictCache`` whose training data is the
+            concatenation of the cached data and the new rows, with
+            the Cholesky factor and ``alpha`` vector updated.
+            Hyperparameters (kernel, mean function, noise) are frozen.
+        """
+        if Xs_new.ndim != 2 or Xs_new.shape[1] != self.Xs_train.shape[1]:
+            raise ValueError(
+                f"_PredictCache.append_rows: expected Xs_new.shape=(m, "
+                f"{self.Xs_train.shape[1]}), got {tuple(Xs_new.shape)}."
+            )
+        if Ys_new.shape != (Xs_new.shape[0],):
+            raise ValueError(
+                f"_PredictCache.append_rows: expected Ys_new.shape="
+                f"({Xs_new.shape[0]},), got {tuple(Ys_new.shape)}."
+            )
+
+        kernel = self.unwrapped_posterior.prior.kernel
+        mean_fn = self.unwrapped_posterior.prior.mean_function
+        train_jitter = self.unwrapped_posterior.jitter
+        m = Xs_new.shape[0]
+        n_old = self.Xs_train.shape[0]
+
+        # K(X_old, X_new): (n_old, m). cross_covariance returns a plain Array.
+        K_on = kernel.cross_covariance(self.Xs_train, Xs_new)
+        # U = L^{-1} K(X_old, X_new): forward triangular solve, (n_old, m).
+        U = jsp.linalg.solve_triangular(self.L_sigma, K_on, lower=True)
+
+        # K(X_new, X_new) + (σ² + jitter)·I - U^T U  → Schur complement (m, m).
+        K_nn = kernel.gram(Xs_new).as_matrix()
+        D = (
+            K_nn
+            + (self.noise_var + train_jitter)
+            * jnp.eye(m, dtype=K_nn.dtype)
+            - U.T @ U
+        )
+        # Symmetrize for Cholesky stability.
+        D = 0.5 * (D + D.T)
+        L_22 = jnp.linalg.cholesky(D)
+
+        # Assemble L' = [[L, 0], [U^T, L_22]] of shape (n_old+m, n_old+m).
+        n_new = n_old + m
+        L_new = jnp.zeros((n_new, n_new), dtype=self.L_sigma.dtype)
+        L_new = L_new.at[:n_old, :n_old].set(self.L_sigma)
+        L_new = L_new.at[n_old:, :n_old].set(U.T)
+        L_new = L_new.at[n_old:, n_old:].set(L_22)
+
+        # Augmented residual:
+        #   α_new = L_22^{-1} (y_new - m(X_new) - U^T α)
+        mx_new = mean_fn(Xs_new)  # (m, 1) for Constant
+        mx_new_flat = jnp.atleast_1d(mx_new.squeeze())
+        residual = jnp.atleast_1d(Ys_new) - mx_new_flat - U.T @ self.alpha
+        alpha_block = jsp.linalg.solve_triangular(L_22, residual, lower=True)
+        alpha_aug = jnp.concatenate([self.alpha, alpha_block])
+
+        Xs_aug = jnp.concatenate([self.Xs_train, Xs_new], axis=0)
+
+        # Defensive: dataclasses.replace would require the import; we
+        # rebuild explicitly to keep this file self-contained.
+        return _PredictCache(
+            unwrapped_posterior=self.unwrapped_posterior,
+            L_sigma=L_new,
+            alpha=alpha_aug,
+            Xs_train=Xs_aug,
+            noise_var=self.noise_var,
+        )
+
 
 @dataclass(frozen=True)
 class _ZScoreScaler:
@@ -653,3 +821,80 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
                 f"{type(self).__name__} called before fit; conditioning "
                 "state is unset."
             )
+
+    # --- Fixed-hyperparameter conditioning ---------------------------------
+
+    def condition_on(self, X_new: Array, Y_new: Array) -> Self:
+        """Append ``(X_new, Y_new)`` to the training set without refitting.
+
+        Returns a new emulator that conditions on the augmented data
+        with **frozen** hyperparameters and **frozen** input/output
+        scalers (i.e., the kernel lengthscales, observation noise,
+        x-scaler, and y-scaler all carry over from the current fit).
+        Internally uses ``_PredictCache.append_rows``, which updates
+        the cached Cholesky factor via a block update — see that
+        method's docstring for the math and cost analysis.
+
+        For the public dispatch surface (``update_emulator`` +
+        ``AppendRows``), the user-facing API isn't fully settled yet.
+        This method exposes the low-level capability so it can be
+        called directly while the dispatch wiring is designed.
+        Crucially it does **not** re-run hyperparameter optimization;
+        callers wanting refit semantics should call ``fit`` on the
+        concatenated data instead.
+
+        Args:
+            X_new: ``(m, d)`` new training inputs in the original
+                (raw) input space — they are passed through the same
+                ``x-scaler`` used at fit time, so callers don't need
+                to pre-scale.
+            Y_new: ``(m,)`` new training outputs in the original
+                (raw) output space — passed through the same
+                ``y-scaler`` used at fit time.
+
+        Returns:
+            A new ``DSPGPEmulator`` with the augmented training data
+            and an updated cache; the same hyperparameters and scalers.
+        """
+        self._require_fit()
+        d = self.input_shape[0]
+        if X_new.ndim != 2 or X_new.shape[1] != d:
+            raise ValueError(
+                f"DSPGPEmulator.condition_on: expected X_new.shape=(m, {d}), "
+                f"got {tuple(X_new.shape)}."
+            )
+        if Y_new.shape != (X_new.shape[0],):
+            raise ValueError(
+                f"DSPGPEmulator.condition_on: expected Y_new.shape="
+                f"({X_new.shape[0]},), got {tuple(Y_new.shape)}."
+            )
+
+        Xs_new = self._x_scaler.transform(X_new).astype(jnp.float64)  # type: ignore[union-attr]
+        Ys_new = self._y_scaler.transform(Y_new).astype(jnp.float64)  # type: ignore[union-attr]
+
+        new_cache = self._predict_cache.append_rows(Xs_new, Ys_new)  # type: ignore[union-attr]
+
+        # Augment the stored gpjax Dataset so the (unused-by-predict
+        # but available-for-callers) field stays consistent.
+        new_dataset = gpx.Dataset(
+            X=new_cache.Xs_train,
+            y=jnp.concatenate(
+                [self._train_dataset.y, Ys_new.reshape(-1, 1)],  # type: ignore[union-attr]
+                axis=0,
+            ),
+        )
+
+        return type(self)(
+            input_shape=self.input_shape,
+            output_shape=self.output_shape,
+            name=self.name,
+            kernel=self.kernel_name,
+            max_iters=self.max_iters,
+            jitter=self.jitter,
+            verbose=self.verbose,
+            _x_scaler=self._x_scaler,
+            _y_scaler=self._y_scaler,
+            _opt_posterior=self._opt_posterior,
+            _train_dataset=new_dataset,
+            _predict_cache=new_cache,
+        )
