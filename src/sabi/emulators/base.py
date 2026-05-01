@@ -22,6 +22,37 @@ predictive model fit to observations of the target function. The broader
 word "surrogate" denotes any approximate quantity replacing its exact
 analog (hence `SurrogatePosterior` for the surrogate of the true
 posterior).
+
+Latent vs. observation predictive
+---------------------------------
+
+Sabi emulators report the **latent** posterior. Concretely:
+
+- ``predict_mean(X)``: posterior mean of the latent function ``f(X)``.
+- ``predict_variance(X)``: marginal posterior variance of ``f(X)``,
+  with **no observation noise added to the diagonal**.
+- ``predict_covariance(X, joint_inputs=True)``: full posterior
+  covariance of ``f(X)``, with no observation noise added.
+
+Rationale: sabi targets sequential surrogate-based Bayesian inference
+on (in v1) deterministic targets. The GP's noise term is primarily a
+Cholesky-stability regularizer rather than a model of real measurement
+noise. Acquisition functions (EI, etc.) and pushforward-based posterior
+estimators want the *latent* uncertainty — the uncertainty over the
+true function value at unobserved inputs — not the broader observation-
+predictive uncertainty.
+
+Callers that want the observation-predictive distribution can build it
+explicitly: ``Var[y* | data] = predict_variance(X) + sigma_n²``, where
+``sigma_n²`` is whatever observation-noise model the application has.
+Sabi emulators don't expose an ``obs_stddev`` accessor in v1; backends
+that have one (e.g. ``DSPGPEmulator``'s gpjax-fitted ``obs_stddev``)
+keep it as internal implementation detail.
+
+When v2's noisy-target work lands and the latent vs. observation
+distinction becomes user-facing, this module will grow a separate
+``predict_obs_*`` family rather than overloading the existing
+``predict_*`` methods.
 """
 
 from __future__ import annotations

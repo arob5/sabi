@@ -126,16 +126,21 @@ def test_dspgp_fit_rejects_wrong_x_shape():
 
 
 def _naive_predict_mean_var(em, X_test):
-    """Recompute predictions the way the pre-cache code did: run the
-    gpjax `posterior.predict` -> `likelihood` pipeline, then undo the
-    output scaling. The cache must match this pointwise."""
+    """Recompute predictions the naive way: run gpjax's
+    ``posterior.predict`` (latent path — no obs noise), then undo the
+    output scaling. The cached predict must match this pointwise.
+
+    Sabi's `Emulator` convention is **latent** posterior — no
+    observation noise on the diagonal — so we deliberately stop at
+    ``posterior.predict`` and do NOT call ``posterior.likelihood`` on
+    top of it.
+    """
     import jax.numpy as jnp
 
     Xs_test = em._x_scaler.transform(X_test).astype(jnp.float64)
     latent = em._opt_posterior.predict(Xs_test, train_data=em._train_dataset)
-    pred = em._opt_posterior.likelihood(latent)
-    naive_mean = em._y_scaler.inverse_mean(pred.mean)
-    naive_var = em._y_scaler.inverse_var(jnp.maximum(pred.variance, 0.0))
+    naive_mean = em._y_scaler.inverse_mean(latent.mean)
+    naive_var = em._y_scaler.inverse_var(jnp.maximum(latent.variance, 0.0))
     return naive_mean, naive_var
 
 
@@ -201,40 +206,79 @@ def test_dspgp_cached_predict_matches_naive_with_inflated_jitter():
     assert jnp.allclose(cached_var, naive_var, rtol=1e-7, atol=1e-9)
 
 
-def test_dspgp_cached_predict_variance_includes_obs_noise():
-    """Independent ground-truth check: predict_variance should equal
-    `latent_var + obs_stddev^2 * y_scale^2` (the noise scales with the
-    output standardizer). This pins down the noise layer separately
-    from the jitter layer.
+def test_dspgp_predict_variance_is_latent_only_not_observation():
+    """Per the sabi `Emulator` convention, ``predict_variance`` returns
+    the **latent** posterior variance (no observation noise on the
+    diagonal). To make the latent-vs-obs distinction crisp regardless
+    of what the optimizer found for ``obs_stddev``, we inject a known
+    non-trivial obs_stddev into the cache post-hoc via ``eqx.tree_at``
+    and check predict_variance against both candidates.
     """
     pytest.importorskip("gpjax")
     _enable_x64()
     import jax.numpy as jnp
     import jax.random as jr
-    import paramax
 
     from sabi.emulators.gpjax import DSPGPEmulator
 
     key = jr.key(31)
     n, d = 18, 2
     X = jr.uniform(key, (n, d))
-    y = jnp.sin(X[:, 0]) + 0.2 * jr.normal(jr.key(32), (n,))
+    y = jnp.sin(X[:, 0])
 
     em = DSPGPEmulator(input_shape=(d,)).fit(X, y)
+    # Crank cache.noise_var up to a known appreciable value so
+    # `latent` and `latent + noise_var` differ by ~0.5 in standardized
+    # space, well above fp slop. This isolates the convention test
+    # from whatever the MAP optimizer found. _PredictCache is a plain
+    # frozen dataclass (not eqx.Module) so we use dataclasses.replace.
+    import dataclasses
 
-    # Reach into the cache: predict the raw latent variance (no noise),
-    # then assert that predict_variance matches `latent + sigma^2`
-    # in the standardized space.
+    em._predict_cache = dataclasses.replace(
+        em._predict_cache, noise_var=jnp.asarray(0.5)
+    )
+
     X_test = jr.uniform(jr.key(33), (6, d))
     Xs_test = em._x_scaler.transform(X_test).astype(jnp.float64)
     _, latent_var_std = em._predict_cache.predict_latent(Xs_test)
 
-    obs_stddev = float(paramax.unwrap(em._opt_posterior).likelihood.obs_stddev)
-    # In the (still standardized) y-space:
-    expected_obs_var_std = latent_var_std + obs_stddev ** 2
-    # Bring back to original output space:
-    expected_obs_var = em._y_scaler.inverse_var(expected_obs_var_std)
-    assert jnp.allclose(em.predict_variance(X_test), expected_obs_var, rtol=1e-9, atol=1e-12)
+    expected_latent_var = em._y_scaler.inverse_var(latent_var_std)
+    expected_obs_var = em._y_scaler.inverse_var(
+        latent_var_std + em._predict_cache.noise_var
+    )
+
+    pred_var = em.predict_variance(X_test)
+    # Latent: matches.
+    assert jnp.allclose(pred_var, expected_latent_var, rtol=1e-9, atol=1e-12)
+    # Obs: deliberately doesn't match — we'd be off by `noise_var * scale²`.
+    noise_gap = float(em._predict_cache.noise_var * em._y_scaler.scale ** 2)
+    assert noise_gap > 1e-3
+    assert jnp.max(jnp.abs(pred_var - expected_obs_var)) > 0.5 * noise_gap
+
+
+def test_dspgp_predict_covariance_is_latent_only_not_observation():
+    """Companion to the variance check: ``predict_covariance(joint_inputs=True)``
+    must return latent covariance. Diagonal of the joint covariance
+    must equal ``predict_variance`` (so neither has obs noise added)."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    key = jr.key(34)
+    n, d = 16, 2
+    X = jr.uniform(key, (n, d))
+    y = jnp.sin(X[:, 0]) + 0.4 * jr.normal(jr.key(35), (n,))
+
+    em = DSPGPEmulator(input_shape=(d,)).fit(X, y)
+
+    X_test = jr.uniform(jr.key(36), (5, d))
+    cov = em.predict_covariance(X_test, joint_inputs=True)
+    var = em.predict_variance(X_test)
+    # Latent convention: diag(cov) == var. Both are latent.
+    assert jnp.allclose(jnp.diag(cov), var, rtol=1e-9, atol=1e-12)
 
 
 # --- predict_covariance ------------------------------------------------------
@@ -274,10 +318,9 @@ def test_dspgp_predict_covariance_shape_joint_inputs():
 
 
 def test_dspgp_predict_covariance_matches_naive_gpjax_dense():
-    """The cached joint-input covariance must match the gpjax
-    `posterior.predict + likelihood` dense path: same numerical model,
-    just routed through the cache. Inflate jitter to put any layering
-    error well above fp slop.
+    """The cached joint-input latent covariance must match gpjax's
+    ``posterior.predict`` (latent path) dense covariance, output-scaled.
+    Inflate jitter to put any layering error well above fp slop.
     """
     pytest.importorskip("gpjax")
     _enable_x64()
@@ -296,11 +339,11 @@ def test_dspgp_predict_covariance_matches_naive_gpjax_dense():
 
     cached = em.predict_covariance(X_test, joint_inputs=True)
 
-    # Naive gpjax dense path.
+    # Naive gpjax dense path — latent only (do NOT call likelihood
+    # on top), to match the sabi latent convention.
     Xs_test = em._x_scaler.transform(X_test).astype(jnp.float64)
     latent = em._opt_posterior.predict(Xs_test, train_data=em._train_dataset)
-    pred = em._opt_posterior.likelihood(latent)
-    naive_cov_std = pred.covariance_matrix
+    naive_cov_std = latent.covariance_matrix
     # Apply the y-standardizer's inverse_var (scales by scale²) to bring
     # back to the original output space.
     naive_cov = naive_cov_std * (em._y_scaler.scale ** 2)

@@ -115,15 +115,31 @@ verbose: false
 
 Select via Hydra override: `python -m sabi.runner.main emulator=dsp_gp`.
 
+## Latent vs. observation predictive
+
+Sabi emulators report the **latent** posterior (no observation noise):
+
+- `predict_mean(X)`: posterior mean of the latent function `f(X)`.
+- `predict_variance(X)`: marginal posterior variance of `f(X)`, with
+  no observation noise added.
+- `predict_covariance(X, joint_inputs=True)`: full posterior
+  covariance of `f(X)`, with no observation noise added. Diagonal
+  equals `predict_variance(X)`.
+
+This convention is documented at the `Emulator` base class. Both
+`GPEmulator` and `DSPGPEmulator` follow it. Callers that want the
+observation-predictive distribution build it explicitly:
+`Var[y* | data] = predict_variance(X) + sigma_n²` for whatever obs-
+noise model the application has.
+
 ## Joint-mode predictions
 
 `DSPGPEmulator` supports joint-input covariance via
 `predict_covariance(X, joint_inputs=True)`, which returns the full
-`(n, n)` predictive covariance with observation noise on the diagonal.
-The joint-output case is trivially supported for the scalar-output
-case (returns `(n, 1, 1)`). Use `predict(X, joint_inputs=True)` to get
-a `MultivariateNormal` directly via the `GaussianRandomFunction`
-assembly path.
+`(n, n)` latent covariance. The joint-output case is trivially
+supported for the scalar-output case (returns `(n, 1, 1)`). Use
+`predict(X, joint_inputs=True)` to get a `MultivariateNormal`
+directly via the `GaussianRandomFunction` assembly path.
 
 `GPEmulator` (tinygp) is still marginal-mode only; joint covariance
 will land there when a benchmark needs it.
@@ -154,8 +170,3 @@ will land there when a benchmark needs it.
 
 - ProbPipe `condition_on` integration replaces the bespoke `fit` once the
   primitive lands.
-- Decide whether `GPEmulator.predict_variance` should match
-  `DSPGPEmulator.predict_variance`'s observation-noise-inclusive
-  convention (currently the tinygp emulator returns latent variance
-  only). Pre-existing inconsistency, not introduced here, but worth
-  resolving before emulator metrics ship.

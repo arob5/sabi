@@ -37,15 +37,48 @@ Caveats:
 - Joint inputs and (trivially) joint outputs are supported via
   ``predict_covariance``; both flags default to True at the class
   level.
-- gpjax stores jitter in two places: ``posterior.prior.jitter`` (used
-  by ``conjugate_mll`` and ``posterior.predict``'s test-side
-  covariance) and ``posterior.jitter`` (used by
-  ``posterior.predict``'s training-side Cholesky). Defaults are
-  independent; ``prior * lik`` does not propagate the prior's jitter
-  into the posterior. ``DSPGPEmulator`` constructs ``ConjugatePosterior``
-  directly so both fields take the same user-supplied value — this
-  keeps the optimized model and the predictive distribution
-  numerically identical.
+
+How gpjax handles jitter, and what we do
+----------------------------------------
+
+gpjax 0.14 stores **two independent** jitter values on a
+``ConjugatePosterior`` and uses them in different places. Concretely:
+
+- ``posterior.prior.jitter`` (the prior's jitter field) is used by:
+    * ``gpjax.objectives.conjugate_mll`` for the training-side Sigma
+      Cholesky, and
+    * ``ConjugatePosterior.predict`` for the **test-side** covariance
+      (added to ``K(Xt, Xt) - L⁻¹Kxt^T L⁻¹Kxt`` to keep it PSD).
+- ``posterior.jitter`` (the posterior's own jitter field, default
+  ``1e-6``) is used by:
+    * ``ConjugatePosterior.predict`` for the **training-side** Sigma
+      Cholesky.
+
+These two values are independent at construction. The ``prior * lik``
+shortcut (i.e., ``construct_posterior(prior, likelihood)``) creates the
+posterior with its own default ``jitter=1e-6``; it does **not** copy
+``prior.jitter`` into the posterior. So passing ``Prior(jitter=X)``
+alone leaves the posterior using a different jitter at predict time
+than the MLL used at fit time — the optimized hyperparameters are not
+the MAP of the model that ``posterior.predict`` evaluates, and a
+strict equivalence comparison (cached vs naive predict path) catches
+the mismatch immediately.
+
+We follow the gpjax convention of having both fields, but pin them to
+the same user-supplied value. ``_build_dsp_posterior`` constructs
+``ConjugatePosterior`` directly with ``jitter=jitter``, so both
+``posterior.jitter`` and ``posterior.prior.jitter`` agree. The
+training-side jitter in ``_PredictCache`` is sourced from
+``posterior.jitter`` (matching ``ConjugatePosterior.predict``); the
+test-side jitter is sourced from ``posterior.prior.jitter`` (matching
+the same gpjax method). With both fields aligned at construction, the
+two paths are bit-equivalent — but the cache deliberately mirrors the
+gpjax dispatch so that any future divergence between the two fields
+would surface as a test failure rather than a silent numerical drift.
+
+Convention: ``predict_variance`` / ``predict_covariance`` return the
+**latent** posterior (no observation noise). See the ``Emulator`` base
+class for the rationale.
 """
 
 from __future__ import annotations
@@ -532,12 +565,13 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         return self._y_scaler.inverse_mean(mean_latent)  # type: ignore[union-attr]
 
     def predict_variance(self, X: Array) -> Array:
-        """Return the marginal predictive variance at each row of `X`.
+        """Return the marginal posterior variance of the **latent** function.
 
-        Variance includes the observation noise (matches what
-        ``posterior.likelihood(latent).variance`` returns in gpjax) so
-        downstream code that expects "predictive variance with noise"
-        sees the same number.
+        Per the sabi `Emulator` convention, this is the variance of the
+        latent function value f(x*) under the posterior — observation
+        noise is **not** added. Equivalent to
+        ``posterior.predict(Xt).variance`` in gpjax (the latent path),
+        not ``posterior.likelihood(posterior.predict(Xt)).variance``.
 
         Args:
             X: shape ``(n, d)`` (raw, pre-scaled).
@@ -549,8 +583,7 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         self._require_fit()
         Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
         _, latent_var = self._predict_cache.predict_latent(Xs)  # type: ignore[union-attr]
-        obs_var = latent_var + self._predict_cache.noise_var  # type: ignore[union-attr]
-        return self._y_scaler.inverse_var(jnp.maximum(obs_var, 0.0))  # type: ignore[union-attr]
+        return self._y_scaler.inverse_var(jnp.maximum(latent_var, 0.0))  # type: ignore[union-attr]
 
     def predict_covariance(
         self,
@@ -559,21 +592,25 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         joint_inputs: bool = False,
         joint_outputs: bool = False,
     ) -> Array:
-        """Predictive covariance, observation-noise-inclusive.
+        """Posterior covariance of the **latent** function (no obs noise).
 
-        Reuses the Cholesky cache: the joint case adds a single
-        ``K(Xt, Xt)`` evaluation and one ``triangular_solve`` over the
-        cached ``L_sigma`` on top of what ``predict_mean`` already does.
+        Per the sabi `Emulator` convention, observation noise is not
+        included on the diagonal — the diagonal of the returned matrix
+        equals ``predict_variance(X)`` exactly. Reuses the Cholesky
+        cache: the joint case adds one ``K(Xt, Xt)`` evaluation and one
+        triangular solve over the cached ``L_sigma`` on top of what
+        ``predict_mean`` already does.
 
         For the scalar-output case (``output_shape=()``) the returned
         shapes per the GaussianRandomFunction contract are:
 
         - ``joint_inputs=True`` (regardless of ``joint_outputs``):
-          ``(n, n)`` — full cross-input covariance with observation
-          noise on the diagonal.
+          ``(n, n)`` — full cross-input latent covariance with prior
+          jitter on the diagonal (matches ``posterior.predict``'s
+          dense covariance).
         - ``joint_inputs=False, joint_outputs=True``: ``(n, 1, 1)`` —
-          the marginal variance at each input, reshaped (joint over
-          outputs is vacuous when the output is scalar).
+          the marginal latent variance at each input, reshaped (joint
+          over outputs is vacuous when the output is scalar).
         - ``joint_inputs=False, joint_outputs=False``: not implemented;
           callers should use ``predict_variance``.
 
@@ -584,7 +621,7 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
                 scalar output).
 
         Returns:
-            Covariance array in the original (pre-standardization)
+            Latent covariance array in the original (pre-standardization)
             output space; ``y_scaler.scale²`` is folded in here.
         """
         self._require_fit()
@@ -602,17 +639,13 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         # joint_inputs=True (joint_outputs is trivial here): full (n, n).
         Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
         _, latent_cov = self._predict_cache.predict_latent_joint(Xs)  # type: ignore[union-attr]
-        n_test = latent_cov.shape[0]
-        obs_cov = latent_cov + self._predict_cache.noise_var * jnp.eye(  # type: ignore[union-attr]
-            n_test, dtype=latent_cov.dtype
-        )
         # Defensive symmetrization: floating-point asymmetry in
         # `K(Xt, Xt) - A.T @ A` can cause downstream Choleskys to fail
         # on otherwise PSD matrices. Negligible cost, stable result.
-        obs_cov = 0.5 * (obs_cov + obs_cov.T)
+        latent_cov = 0.5 * (latent_cov + latent_cov.T)
         # Bring back to original output space. y_scaler.scale is scalar
         # for our scalar-output case, so `scale²` multiplies elementwise.
-        return obs_cov * (self._y_scaler.scale ** 2)  # type: ignore[union-attr]
+        return latent_cov * (self._y_scaler.scale ** 2)  # type: ignore[union-attr]
 
     def _require_fit(self) -> None:
         if self._opt_posterior is None or self._predict_cache is None:
