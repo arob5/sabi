@@ -19,8 +19,9 @@ Use submodule paths for everything:
 .. code-block:: python
 
     from sabi.problems.forms import LogDensityForm, Identity, LogLikPlusPrior
-    from sabi.problems.base import Problem
+    from sabi.problems.base import Problem, BenchmarkProblem
     from sabi.problems.gaussian2d import gaussian2d
     from sabi.problems.banana import banana
     from sabi.problems.neals_funnel import neals_funnel
+    from sabi.problems.benchmarks import banana_2d, banana_10d
 """

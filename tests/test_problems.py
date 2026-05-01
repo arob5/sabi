@@ -1,3 +1,5 @@
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -9,6 +11,7 @@ from probpipe.core.protocols import SupportsSampling
 from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.problems.banana import banana
+from sabi.problems.base import BenchmarkProblem, Problem
 from sabi.problems.gaussian2d import gaussian2d
 
 
@@ -68,6 +71,55 @@ def test_banana_log_prob_integrates_to_one():
     dx = float((xs[1] - xs[0]) * (ys[1] - ys[0]))
     total = float(jnp.sum(jnp.exp(log_probs))) * dx
     assert total == pytest.approx(1.0, abs=5e-3)
+
+
+def test_benchmark_problem_requires_reference_distribution():
+    """Constructing a BenchmarkProblem without a reference must fail —
+    the validated tier exists exactly to guarantee one is present."""
+    base = banana()
+    with pytest.raises(ValueError, match="reference_distribution"):
+        BenchmarkProblem(
+            target_distribution=base.target_distribution,
+            reference_distribution=None,
+            name="missing_ref",
+        )
+
+
+def test_benchmark_problem_requires_name():
+    """The benchmark's name is its identity; empty names are rejected."""
+    base = banana()
+    with pytest.raises(ValueError, match="name"):
+        BenchmarkProblem(
+            target_distribution=base.target_distribution,
+            reference_distribution=base.reference_distribution,
+            name="",
+        )
+
+
+def test_benchmark_problem_is_frozen():
+    """Frozen dataclass: instances cannot be mutated after construction."""
+    base = banana()
+    bp = BenchmarkProblem(
+        target_distribution=base.target_distribution,
+        reference_distribution=base.reference_distribution,
+        name="banana_2d",
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        bp.name = "renamed"  # type: ignore[misc]
+
+
+def test_benchmark_problem_isinstance_of_problem():
+    """A BenchmarkProblem IS-A Problem — every Problem-consuming caller
+    accepts it without changes (loop, build.py, metrics, ...)."""
+    base = banana()
+    bp = BenchmarkProblem(
+        target_distribution=base.target_distribution,
+        reference_distribution=base.reference_distribution,
+        name="banana_2d",
+    )
+    assert isinstance(bp, Problem)
+    assert bp.input_shape == base.input_shape
+    assert bp.artifact_version == "v1"
 
 
 def test_banana_reference_samples_satisfy_constraint():
