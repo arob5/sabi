@@ -28,7 +28,7 @@ from sabi.metrics.base import PosteriorMetric
 from sabi.metrics.posterior_mmd import ReferenceMMD
 from sabi.problems.banana import banana
 from sabi.problems.base import Problem
-from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.gaussian import gaussian2d
 from sabi.problems.neals_funnel import neals_funnel
 from sabi.emulators import TinyGPEmulator
 

@@ -12,7 +12,7 @@ from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.problems.banana import banana
 from sabi.problems.base import BenchmarkProblem, Problem
-from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.gaussian import gaussian2d
 
 
 def test_gaussian2d_has_expected_shapes_and_types():

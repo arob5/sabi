@@ -21,7 +21,7 @@ from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.acquisitions.base import AcquisitionTarget
 from sabi.algorithms import Algorithm, run
 from sabi.emulators import TinyGPEmulator
-from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.gaussian import gaussian2d
 from sabi.tempering.likelihood import LikelihoodTemperingViaForm
 from sabi.tempering.schedule import (
     FixedSchedule,

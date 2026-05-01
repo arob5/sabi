@@ -28,7 +28,7 @@ from sabi.acquisitions.optim import (
     _make_bijector,
 )
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
-from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.gaussian import gaussian2d
 from sabi.emulators import TinyGPEmulator
 
 
