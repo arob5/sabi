@@ -27,6 +27,10 @@ probpipe = ["probpipe"]
 dev = ["pytest>=8", "pytest-xdist", "ruff>=0.5", "mypy>=1.10"]
 wandb = ["wandb>=0.17"]
 pyvbmc = ["pyvbmc"]
+# gpjax-backed emulators (e.g. DSPGPEmulator). Pinned tight on the 0.14
+# minor — gpjax 0.x has had API churn across minor versions, so any move
+# off 0.14 should be a deliberate compatibility audit.
+gpjax = ["gpjax>=0.14,<0.15"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sabi"]

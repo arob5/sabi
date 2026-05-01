@@ -1,23 +1,24 @@
 """gpjax-backed `Emulator` implementations.
 
-Wraps the `gpjax` library for use as a sabi `Emulator`. Heavier
-than the `tinygp` siblings — pulls `numpyro`, `paramax`, `optimistix`,
-`lineax`, `tensorstore` (mac), etc. — but provides full hyperparameter
+Wraps the `gpjax` library for use as a sabi `Emulator`. Heavier than the
+`tinygp` siblings — pulls `numpyro`, `paramax`, `optimistix`, `lineax`,
+`tensorstore` (mac), etc. — but provides full hyperparameter
 optimization, ARD kernels, and the dimension-scaled lengthscale priors
 that perform well in higher dimensions.
 
-**gpjax is an optional dependency.** Install with:
+**gpjax is an optional dependency.** Install with one of:
 
 .. code-block:: bash
 
-    pip install 'sabi[gpjax]'   # via pyproject extras
-    # or
+    pip install 'sabi[gpjax]'
     uv sync --extra gpjax
+    uv pip install 'gpjax>=0.14,<0.15'
 
-Importing this package without ``gpjax`` installed will raise a clear
-`ImportError` with the install command. Imports inside this package are
-deferred (lazy) where possible so that touching the parent
-`sabi.emulators` namespace doesn't fail when the extra isn't installed.
+Importing concrete emulators from this package without `gpjax` installed
+raises a helpful `ImportError` with the install command. Imports inside
+this package are deferred (lazy) via ``__getattr__`` so that touching
+the parent ``sabi.emulators`` namespace doesn't fail when the extra
+isn't installed.
 
 Available (when the extra is installed):
 
@@ -29,7 +30,24 @@ Available (when the extra is installed):
   standardized to zero-mean unit-variance.
 """
 
-# Public exports are populated lazily inside each submodule's import
-# guard so that a missing `gpjax` install fails with a clear message
-# only when a concrete emulator is referenced — not on package touch.
-__all__: list[str] = []
+from __future__ import annotations
+
+__all__ = ["DSPGPEmulator"]
+
+
+def __getattr__(name: str):
+    """Lazy-load gpjax-backed emulators on first access.
+
+    Defers the gpjax import (and its dependency stack) until a concrete
+    class is referenced. Touching ``sabi.emulators.gpjax`` with no
+    attribute access — e.g., during ``import sabi.emulators`` — does
+    NOT trigger gpjax loading.
+    """
+    if name == "DSPGPEmulator":
+        from sabi.emulators.gpjax.dsp_gp import DSPGPEmulator as _DSPGPEmulator
+
+        return _DSPGPEmulator
+    raise AttributeError(
+        f"module 'sabi.emulators.gpjax' has no attribute '{name}'. "
+        f"Available: {__all__}"
+    )
