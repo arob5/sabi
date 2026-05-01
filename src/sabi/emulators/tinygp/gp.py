@@ -1,24 +1,25 @@
 """tinygp-backed GP emulator with a Matern-5/2 kernel.
 
-Inherits from both `Emulator` (sabi-side fittable random function marker)
-and ProbPipe's `GaussianRandomFunction`. Diamond inheritance over
-`ArrayRandomFunction`, resolved cleanly by Python's C3 MRO.
+Inherits from :class:`sabi.emulators.gp.GPEmulator`, which provides
+the predict pipeline, ``condition_on``, ``_replace``, and the cheap-
+update dispatch. ``TinyGPEmulator`` itself owns:
 
-The class implements the two abstract methods required by
-`GaussianRandomFunction`: `predict_mean(X)` and `predict_variance(X)`.
-The full `predict` / `__call__` machinery (assembling these into a `Normal`
-for marginal mode, `MultivariateNormal` for joint modes) comes from
-`GaussianRandomFunction`. v1.2 supports only marginal mode
-(`joint_inputs=False, joint_outputs=False`); joint covariance lands in
-v1.5 when emulator metrics need it.
+- The data-adaptive heuristic for the lengthscale (median nearest-
+  neighbor distance × ``ls_factor``, floored). No optimization at
+  fit time; a principled hyperparameter search is deferred to v1.4+.
+- A :class:`_TinyGPCache` populated at fit time. The cache exposes
+  the same ``predict_latent`` / ``predict_latent_joint`` /
+  ``append_rows`` surface as the gpjax cache, so the
+  ``GPEmulator`` base treats them interchangeably.
 
-Hyperparameter strategy is unchanged from v1.x: data-adaptive lengthscale
-(median nearest-neighbor distance × ls_factor, floored), unit amplitude on
-standardized outputs, fixed small noise + Cholesky jitter. A principled
-hyperparameter search is deferred to v1.4+ (with the optimization module).
+After the v1.5 migration to ``GPEmulator``, ``TinyGPEmulator``
+supports joint-input covariance via ``predict_covariance(X,
+joint_inputs=True)`` and fixed-hyperparameter conditioning via
+``condition_on(X_new, Y_new)``.
 
-v1.2 supports `X.shape == (n,) + input_shape` only (no extra leading batch
-axes). Add vmap-over-extra-batch support in v1.5+ if needed.
+v1.2 supports ``X.shape == (n,) + input_shape`` only (no extra
+leading batch axes). Add vmap-over-extra-batch support in v1.5+ if
+needed.
 """
 
 from __future__ import annotations
@@ -27,11 +28,11 @@ from typing import Self
 
 import jax.numpy as jnp
 from jax import Array
-from probpipe.distributions.gaussian_random_function import GaussianRandomFunction
-from tinygp import GaussianProcess, kernels
+from tinygp import kernels
 
 from sabi.emulators._scalers import ZScoreScaler
-from sabi.emulators.base import Emulator
+from sabi.emulators.gp import GPEmulator
+from sabi.emulators.tinygp._cache import _TinyGPCache
 
 
 def _median_nn_distance(X: Array) -> Array:
@@ -51,22 +52,28 @@ def _choose_lengthscale(X: Array, factor: float, floor: float) -> Array:
     return jnp.maximum(ls, floor)
 
 
-def _build_gp(X: Array, lengthscale: Array, noise: float, jitter: float) -> GaussianProcess:
-    kernel = kernels.Matern52(scale=lengthscale)
-    return GaussianProcess(kernel, X, diag=noise + jitter)
-
-
-class TinyGPEmulator(Emulator, GaussianRandomFunction):
+class TinyGPEmulator(GPEmulator):
     """GP emulator with Matern-5/2 isotropic kernel.
 
-    `predict_mean` / `predict_variance` implement the abstract `GaussianRandomFunction`
-    interface; `predict` / `__call__` come for free from the parent. `fit(X, Y)`
-    returns a new `TinyGPEmulator` carrying the conditioned state.
+    Constructor args:
+        input_shape: input dimensionality.
+        output_shape: must be ``()`` (scalar output) in v1.2.
+        name: optional emulator name (used for repr).
+        ls_factor: multiplier on the median nearest-neighbor distance
+            for the data-adaptive lengthscale.
+        ls_floor: hard floor on the chosen lengthscale.
+        noise: observation-noise *variance* (not stddev), added to
+            the diagonal of the gram at fit time. Fixed; not learned.
+        jitter: Cholesky-stability jitter, also added to the
+            diagonal. Distinct from ``noise`` so callers can crank it
+            without pretending the data is noisier than it is.
     """
 
-    # Marginal-only in v1.2 — joint covariance lands when emulator metrics need it.
-    supports_joint_inputs: bool = False
-    supports_joint_outputs: bool = False
+    # Joint-input covariance and (trivially for scalar output)
+    # joint-output mode are now supported via the cache's
+    # ``predict_latent_joint`` and the base's ``predict_covariance``.
+    supports_joint_inputs: bool = True
+    supports_joint_outputs: bool = True
 
     def __init__(
         self,
@@ -78,17 +85,11 @@ class TinyGPEmulator(Emulator, GaussianRandomFunction):
         ls_floor: float = 0.05,
         noise: float = 1e-4,
         jitter: float = 1e-3,
-        # Internal conditioned-on-training state. Users don't pass these on
-        # construction; `fit` populates them on the returned instance.
+        # Internal post-fit state (callers don't pass these).
         _x_scaler: ZScoreScaler | None = None,
         _y_scaler: ZScoreScaler | None = None,
-        _X_train: Array | None = None,
-        _Y_train: Array | None = None,
-        _lengthscale: Array | None = None,
+        _predict_cache: _TinyGPCache | None = None,
     ):
-        # Diamond inheritance: super().__init__ walks the MRO
-        # (Surrogate → GaussianRandomFunction → ArrayRandomFunction) until it
-        # finds `__init__`. ArrayRandomFunction's `__init__` accepts the args.
         super().__init__(
             input_shape=input_shape,
             output_shape=output_shape,
@@ -100,13 +101,19 @@ class TinyGPEmulator(Emulator, GaussianRandomFunction):
         self.jitter = jitter
         self._x_scaler = _x_scaler
         self._y_scaler = _y_scaler
-        self._X_train = _X_train
-        self._Y_train = _Y_train
-        self._lengthscale = _lengthscale
+        self._predict_cache = _predict_cache
 
     @property
     def lengthscale(self) -> Array | None:
-        return self._lengthscale
+        """Fitted isotropic lengthscale, or ``None`` if not yet fit.
+
+        Read back from the cache's kernel — preserved as a public
+        attribute for backwards-compatibility (some tests
+        introspect it). Pre-fit returns ``None``.
+        """
+        if self._predict_cache is None:
+            return None
+        return self._predict_cache.kernel.scale
 
     @property
     def obs_noise_variance(self) -> Array:
@@ -120,72 +127,41 @@ class TinyGPEmulator(Emulator, GaussianRandomFunction):
         return jnp.asarray(self.noise)
 
     def fit(self, X: Array, Y: Array) -> Self:
+        """Fit on ``(X, Y)``. Standardizes both, picks an isotropic
+        lengthscale heuristically, and builds the Cholesky cache.
+
+        Args:
+            X: shape ``(n,) + input_shape``.
+            Y: shape ``(n,) + output_shape``. For sabi's scalar-output
+                benchmarks this is ``(n,)``.
+
+        Returns:
+            A new ``TinyGPEmulator`` carrying the conditioned state.
+        """
         if X.ndim != 1 + len(self.input_shape):
             raise ValueError(
                 f"TinyGPEmulator.fit: expected X.shape == (n,) + input_shape="
                 f"{self.input_shape}, got {tuple(X.shape)}."
             )
-        if Y.shape != X.shape[: -len(self.input_shape) or None]:
-            # For our scalar output case (output_shape=()), Y must be shape (n,).
-            expected_y_shape = X.shape[: -len(self.input_shape)] + self.output_shape
-            if Y.shape != expected_y_shape:
-                raise ValueError(
-                    f"TinyGPEmulator.fit: expected Y.shape={expected_y_shape}, "
-                    f"got {tuple(Y.shape)}."
-                )
+        expected_y_shape = X.shape[: -len(self.input_shape)] + self.output_shape
+        if Y.shape != expected_y_shape:
+            raise ValueError(
+                f"TinyGPEmulator.fit: expected Y.shape={expected_y_shape}, "
+                f"got {tuple(Y.shape)}."
+            )
 
         x_std = ZScoreScaler.fit(X, axis=0)
         y_std = ZScoreScaler.fit(Y, axis=0)
         Xs = x_std.transform(X)
         Ys = y_std.transform(Y)
         lengthscale = _choose_lengthscale(Xs, self.ls_factor, self.ls_floor)
+        kernel = kernels.Matern52(scale=lengthscale)
 
-        return type(self)(
-            input_shape=self.input_shape,
-            output_shape=self.output_shape,
-            name=self.name,
-            ls_factor=self.ls_factor,
-            ls_floor=self.ls_floor,
-            noise=self.noise,
-            jitter=self.jitter,
+        cache = _TinyGPCache.build(
+            kernel, Xs, Ys, noise=self.noise, jitter=self.jitter
+        )
+        return self._replace(
             _x_scaler=x_std,
             _y_scaler=y_std,
-            _X_train=Xs,
-            _Y_train=Ys,
-            _lengthscale=lengthscale,
+            _predict_cache=cache,
         )
-
-    # --- GaussianRandomFunction abstract methods --------------------------
-
-    def predict_mean(self, X: Array) -> Array:
-        """Return the predictive mean at each row of `X`.
-
-        Args:
-            X: shape `(n,) + input_shape`. (v1.2 doesn't support extra leading
-                batch axes.)
-
-        Returns:
-            Shape `(n,) + output_shape`. For sabi's scalar-output benchmarks
-            this is `(n,)`.
-        """
-        self._require_fit()
-        Xs = self._x_scaler.transform(X)  # type: ignore[union-attr]
-        gp = _build_gp(self._X_train, self._lengthscale, self.noise, self.jitter)  # type: ignore[arg-type]
-        cond = gp.condition(self._Y_train, Xs).gp  # type: ignore[arg-type]
-        return self._y_scaler.inverse_mean(cond.mean)  # type: ignore[union-attr]
-
-    def predict_variance(self, X: Array) -> Array:
-        """Return the marginal predictive variance at each row of `X`."""
-        self._require_fit()
-        Xs = self._x_scaler.transform(X)  # type: ignore[union-attr]
-        gp = _build_gp(self._X_train, self._lengthscale, self.noise, self.jitter)  # type: ignore[arg-type]
-        cond = gp.condition(self._Y_train, Xs).gp  # type: ignore[arg-type]
-        # Clip tiny-negative variances that arise from Cholesky roundoff.
-        return self._y_scaler.inverse_var(jnp.maximum(cond.variance, 0.0))  # type: ignore[union-attr]
-
-    def _require_fit(self) -> None:
-        if self._X_train is None:
-            raise RuntimeError(
-                f"{type(self).__name__} called before fit; conditioning "
-                "state is unset."
-            )

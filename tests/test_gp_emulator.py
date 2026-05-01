@@ -90,3 +90,178 @@ def test_tinygp_obs_noise_variance_returns_constructor_value():
     post = em_post.obs_noise_variance
     assert post is not None
     assert float(post) == pytest.approx(2.5e-3)
+
+
+# --- Post-GPEmulator-migration: joint covariance + condition_on -------------
+
+
+def test_tinygp_supports_joint_inputs():
+    """``TinyGPEmulator`` advertises joint-input support after the
+    GPEmulator migration."""
+    assert TinyGPEmulator.supports_joint_inputs is True
+    assert TinyGPEmulator.supports_joint_outputs is True
+
+
+def test_tinygp_predict_covariance_joint_inputs_shape_and_diag_matches_variance():
+    """``predict_covariance(X, joint_inputs=True)`` returns an
+    (n, n) symmetric PSD matrix whose diagonal equals
+    ``predict_variance(X)``."""
+    X, Y = _sample_2d_gp_data(n=30)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_test = jax.random.uniform(
+        jax.random.key(99), shape=(7, 2), minval=-2.0, maxval=2.0
+    )
+    cov = em.predict_covariance(X_test, joint_inputs=True)
+    assert cov.shape == (7, 7)
+    assert jnp.allclose(cov, cov.T, atol=1e-12)
+    assert jnp.allclose(jnp.diag(cov), em.predict_variance(X_test), rtol=1e-9, atol=1e-12)
+    w = jnp.linalg.eigvalsh(cov)
+    assert float(jnp.min(w)) >= -1e-9
+
+
+def test_tinygp_predict_joint_assembles_multivariate_normal():
+    """End-to-end: ``predict(X, joint_inputs=True)`` (the parent's
+    assembly path) returns a MultivariateNormal whose Cholesky
+    matches ``predict_covariance(...)``."""
+    X, Y = _sample_2d_gp_data(n=20)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_test = jax.random.uniform(
+        jax.random.key(101), shape=(5, 2), minval=-2.0, maxval=2.0
+    )
+    dist = em.predict(X_test, joint_inputs=True)
+    cov_from_dist = dist.scale_tril @ dist.scale_tril.T
+    cov_from_predict = em.predict_covariance(X_test, joint_inputs=True)
+    assert jnp.allclose(cov_from_dist, cov_from_predict, rtol=1e-9, atol=1e-12)
+    assert jnp.allclose(dist.loc, em.predict_mean(X_test), rtol=1e-9, atol=1e-12)
+
+
+def test_tinygp_predict_covariance_joint_outputs_only_returns_n_1_1():
+    """For scalar output, joint over outputs is trivial — reshape of
+    the marginal variance to (n, 1, 1)."""
+    X, Y = _sample_2d_gp_data(n=15)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_test = jax.random.uniform(
+        jax.random.key(110), shape=(4, 2), minval=-2.0, maxval=2.0
+    )
+    cov = em.predict_covariance(X_test, joint_inputs=False, joint_outputs=True)
+    assert cov.shape == (4, 1, 1)
+    expected = em.predict_variance(X_test)[:, None, None]
+    assert jnp.allclose(cov, expected, rtol=1e-12, atol=1e-14)
+
+
+def test_tinygp_condition_on_interpolates_through_appended_training_data():
+    """After ``condition_on(X_new, Y_new)``, the new points are
+    training data, so the latent posterior mean at those inputs
+    passes approximately through ``Y_new`` (within obs_stddev — for
+    TinyGPEmulator's tiny default noise, the fit is near-perfect)."""
+    X, Y = _sample_2d_gp_data(n=20)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    key = jax.random.key(120)
+    X_extra = jax.random.uniform(key, shape=(4, 2), minval=-2.0, maxval=2.0)
+    Y_extra = jnp.sum(jnp.sin(X_extra), axis=-1) + 0.5 * X_extra[:, 0] * X_extra[:, 1]
+
+    em_cond = em.condition_on(X_extra, Y_extra)
+    pred = em_cond.predict_mean(X_extra)
+    assert jnp.max(jnp.abs(pred - Y_extra)) < 5e-2
+
+
+def test_tinygp_condition_on_partition_then_condition_matches_full_fit():
+    """Cache equivalence: building from full data vs. from a prefix +
+    conditioning on the rest must produce the same L_sigma, alpha,
+    and predictions."""
+    X, Y = _sample_2d_gp_data(n=24)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    Xs = em._x_scaler.transform(X)
+    Ys = em._y_scaler.transform(Y)
+
+    from sabi.emulators.tinygp._cache import _TinyGPCache
+
+    full = _TinyGPCache.build(
+        em._predict_cache.kernel, Xs, Ys, noise=em.noise, jitter=em.jitter
+    )
+
+    n_part = 14
+    partial = _TinyGPCache.build(
+        em._predict_cache.kernel,
+        Xs[:n_part],
+        Ys[:n_part],
+        noise=em.noise,
+        jitter=em.jitter,
+    )
+    appended = partial.append_rows(Xs[n_part:], Ys[n_part:])
+
+    assert jnp.allclose(full.L_sigma, appended.L_sigma, rtol=1e-9, atol=1e-12)
+    assert jnp.allclose(full.alpha, appended.alpha, rtol=1e-9, atol=1e-12)
+
+    # And predictions match.
+    Xt = jax.random.uniform(
+        jax.random.key(130), shape=(6, 2), minval=-2.0, maxval=2.0
+    )
+    m_full, v_full = full.predict_latent(Xt)
+    m_app, v_app = appended.predict_latent(Xt)
+    assert jnp.allclose(m_full, m_app, rtol=1e-9, atol=1e-12)
+    assert jnp.allclose(v_full, v_app, rtol=1e-9, atol=1e-12)
+
+
+def test_tinygp_dispatch_handler_fires_for_append_rows():
+    """The shared ``GPEmulator``-typed dispatch handlers should now
+    fire for ``TinyGPEmulator`` automatically — verifying the Tier B
+    promise that backend migration to ``GPEmulator`` is enough to
+    inherit cheap-path dispatch."""
+    X, Y = _sample_2d_gp_data(n=16)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.updates import AppendRows
+
+    key = jax.random.key(140)
+    X_new = jax.random.uniform(key, shape=(3, 2), minval=-2.0, maxval=2.0)
+    Y_new = jnp.sum(jnp.sin(X_new), axis=-1)
+    plan = AppendRows(X_new=X_new, Y_new=Y_new)
+
+    def _exploding_factory():
+        raise AssertionError("cheap path should fire; factory should not be called")
+
+    out = update_emulator(
+        em,
+        plan,
+        factory=_exploding_factory,
+        X_full=jnp.concatenate([X, X_new], axis=0),
+        Y_full=jnp.concatenate([Y, Y_new], axis=0),
+    )
+    assert isinstance(out, TinyGPEmulator)
+    assert out._predict_cache.Xs_train.shape == (19, 2)
+
+
+def test_tinygp_dispatch_handler_fires_for_rescale_outputs():
+    """``RescaleOutputs(factor=β)`` should rescale the y-scaler in
+    O(1); ``predict_mean`` should return β times the original
+    predictions."""
+    X, Y = _sample_2d_gp_data(n=16)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.updates import RescaleOutputs
+
+    X_test = jax.random.uniform(
+        jax.random.key(150), shape=(5, 2), minval=-2.0, maxval=2.0
+    )
+    pred_before = em.predict_mean(X_test)
+
+    beta = 2.0
+    em_b = update_emulator(
+        em,
+        RescaleOutputs(factor=beta),
+        factory=lambda: TinyGPEmulator(input_shape=(2,)),
+        X_full=X,
+        Y_full=Y,
+    )
+    pred_after = em_b.predict_mean(X_test)
+    assert jnp.allclose(pred_after, beta * pred_before, rtol=1e-12, atol=1e-14)
+    # Cache untouched: L_sigma reused.
+    assert em_b._predict_cache.L_sigma is em._predict_cache.L_sigma

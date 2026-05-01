@@ -93,13 +93,15 @@ def test_update_emulator_with_plan_none_falls_back_to_fit():
     assert jnp.allclose(out.predict_mean(test_X), expected.predict_mean(test_X))
 
 
-def test_update_emulator_with_plan_no_registered_handler_falls_back_to_fit():
-    em, _X, _Y = _fit_emulator()
+def test_update_emulator_with_unfitted_emulator_falls_back_to_fit():
+    """An unfitted emulator has no cache, so the registered handlers
+    report ``feasible=False`` (no Cholesky to update) and dispatch
+    falls back to ``factory().fit(X_full, Y_full)``."""
+    em_unfit = _gp_factory()  # not yet fit; _predict_cache is None.
     X_full = jnp.asarray([[0.5, 0.5], [1.5, 1.5]])
     Y_full = jnp.asarray([2.0, 3.0])
     plan = AppendRows(X_new=jnp.asarray([[1.5, 1.5]]), Y_new=jnp.asarray([3.0]))
-    # No TinyGPEmulator handlers are registered for AppendRows out-of-the-box.
-    out = update_emulator(em, plan, factory=_gp_factory, X_full=X_full, Y_full=Y_full)
+    out = update_emulator(em_unfit, plan, factory=_gp_factory, X_full=X_full, Y_full=Y_full)
     expected = _gp_factory().fit(X_full, Y_full)
     test_X = jnp.asarray([[0.0, 0.0], [1.0, 0.0]])
     assert jnp.allclose(out.predict_mean(test_X), expected.predict_mean(test_X))
@@ -164,7 +166,13 @@ def test_registered_handler_is_dispatched_and_short_circuits_refit(monkeypatch):
 
 
 def test_registered_handler_check_returning_infeasible_falls_back_to_refit():
-    """A handler whose `check` reports `feasible=False` must not run; dispatch falls back."""
+    """A handler whose ``check`` reports ``feasible=False`` must not
+    run; dispatch falls back to refit. We use an *unfitted* emulator
+    so all GPEmulator-typed handlers also report infeasible — the
+    only feasible candidate would be a custom one, and our test
+    custom handler always reports infeasible too. With everyone
+    infeasible, dispatch falls back to ``factory().fit(...)``.
+    """
 
     class _NeverFeasible(EmulatorUpdateMethod):
         def __init__(self):
@@ -187,10 +195,15 @@ def test_registered_handler_check_returning_infeasible_falls_back_to_refit():
     handler = _NeverFeasible()
     emulator_update_registry.register(handler)
     try:
-        em, X, Y = _fit_emulator()
+        # Unfitted emulator → built-in GP handlers also report
+        # infeasible (cache absent), so the only feasibility decision
+        # left is the custom handler's, which is always False →
+        # dispatch falls back to refit.
+        em_unfit = _gp_factory()
+        X = jnp.asarray([[0.0, 0.0], [1.0, 1.0], [2.0, -1.0]])
+        Y = jnp.asarray([0.0, 1.0, 0.5])
         plan = RescaleOutputs(factor=0.5)
-        # Should fall back to refit since handler.check returns infeasible.
-        out = update_emulator(em, plan, factory=_gp_factory, X_full=X, Y_full=Y)
+        out = update_emulator(em_unfit, plan, factory=_gp_factory, X_full=X, Y_full=Y)
         assert handler.execute_calls == 0
         # Fallback gives the same predictions as a direct refit.
         expected = _gp_factory().fit(X, Y)
