@@ -115,21 +115,47 @@ verbose: false
 
 Select via Hydra override: `python -m sabi.runner.main emulator=dsp_gp`.
 
+## Joint-mode predictions
+
+`DSPGPEmulator` supports joint-input covariance via
+`predict_covariance(X, joint_inputs=True)`, which returns the full
+`(n, n)` predictive covariance with observation noise on the diagonal.
+The joint-output case is trivially supported for the scalar-output
+case (returns `(n, 1, 1)`). Use `predict(X, joint_inputs=True)` to get
+a `MultivariateNormal` directly via the `GaussianRandomFunction`
+assembly path.
+
+`GPEmulator` (tinygp) is still marginal-mode only; joint covariance
+will land there when a benchmark needs it.
+
 ## Performance notes
 
 - `DSPGPEmulator` caches the Cholesky factor `L = chol(K + diag(noise) +
   jitter·I)` and pre-solved `alpha = L⁻¹(y - m(X))` at fit time, so
   each `predict_*` call is `O(n²·m + n·m)` rather than rebuilding the
-  factor at `O(n³)`. Refitting (calling `fit` again, which returns a
-  new emulator instance) invalidates the cache; predicting on the
+  factor at `O(n³)`. The joint-input covariance path adds one
+  `K(Xt, Xt)` evaluation and one triangular solve over the cached
+  factor on top of that. Refitting (calling `fit` again, which returns
+  a new emulator instance) invalidates the cache; predicting on the
   unfitted instance raises.
-- `GPEmulator` (tinygp) currently rebuilds the gram per call. Adding
-  the same caching is straightforward but has not been a bottleneck
-  in the benchmarks we run.
+- gpjax stores two independent jitter values on a `ConjugatePosterior`:
+  `posterior.prior.jitter` (used by `conjugate_mll` and by
+  `posterior.predict`'s test-side covariance) and `posterior.jitter`
+  (used by `posterior.predict`'s training-side Cholesky). The
+  `prior * likelihood` constructor does not propagate the prior's
+  jitter into the posterior. `DSPGPEmulator` constructs the posterior
+  directly so both fields take the same user-supplied value — without
+  this, the optimized model and the predictive distribution use
+  slightly different numerical models, and a strict equivalence
+  comparison between the cached and naive predict paths catches the
+  divergence.
 
 ## Forward-look
 
-- v1.5: joint covariance support so emulator-level metrics (e.g.,
-  posterior MMD with GP-uncertainty propagation) can run.
 - ProbPipe `condition_on` integration replaces the bespoke `fit` once the
   primitive lands.
+- Decide whether `GPEmulator.predict_variance` should match
+  `DSPGPEmulator.predict_variance`'s observation-noise-inclusive
+  convention (currently the tinygp emulator returns latent variance
+  only). Pre-existing inconsistency, not introduced here, but worth
+  resolving before emulator metrics ship.

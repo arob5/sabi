@@ -27,14 +27,25 @@ unit-variance. ``DSPGPEmulator.fit(X, Y)`` applies these transforms
 internally (min-max for X, z-score for Y) and stores the inverse
 transforms for prediction time. Callers do NOT need to pre-scale.
 
-v1.2 caveats:
-- Marginal mode only (``supports_joint_inputs=False,
-  supports_joint_outputs=False``). Joint covariance lands when emulator
-  metrics need it.
+Caveats:
 - Scalar-output only (``output_shape=()``).
-- ``predict_mean`` / ``predict_variance`` reuse a Cholesky cache built
-  at fit time (see ``_PredictCache``), so per-call cost is O(n²·m +
-  n·m) rather than O(n³). Refit invalidates the cache.
+- ``predict_mean``, ``predict_variance``, ``predict_covariance`` all
+  reuse a single Cholesky cache built at fit time (see
+  ``_PredictCache``). Per-call marginal cost is O(n²·m + n·m), and
+  the joint-input case adds one ``K(Xt, Xt)`` and a triangular solve.
+  Refit returns a new instance with a fresh cache.
+- Joint inputs and (trivially) joint outputs are supported via
+  ``predict_covariance``; both flags default to True at the class
+  level.
+- gpjax stores jitter in two places: ``posterior.prior.jitter`` (used
+  by ``conjugate_mll`` and ``posterior.predict``'s test-side
+  covariance) and ``posterior.jitter`` (used by
+  ``posterior.predict``'s training-side Cholesky). Defaults are
+  independent; ``prior * lik`` does not propagate the prior's jitter
+  into the posterior. ``DSPGPEmulator`` constructs ``ConjugatePosterior``
+  directly so both fields take the same user-supplied value — this
+  keeps the optimized model and the predictive distribution
+  numerically identical.
 """
 
 from __future__ import annotations
@@ -148,12 +159,23 @@ class _PredictCache:
         y_flat = jnp.atleast_1d(y_flat.squeeze())
         mx_flat = jnp.atleast_1d(mx_flat.squeeze())
 
-        # K(X, X) + diag(noise) + jitter·I — same construction as the
-        # gpjax `predict` function we're shadowing.
+        # K(X, X) + diag(noise) + train_jitter·I.
+        #
+        # gpjax keeps two separate jitter values: `posterior.jitter` is
+        # used by `posterior.predict` on the training-side Cholesky;
+        # `posterior.prior.jitter` is used by `conjugate_mll` on the
+        # same Cholesky AND by `posterior.predict` on the test-side
+        # covariance. `_build_dsp_posterior` aligns them so they match,
+        # but we still source the training jitter from
+        # `posterior.jitter` here to mirror gpjax's `predict` exactly —
+        # so that an equivalence test against the naive path would
+        # catch any future divergence the moment a future change
+        # decoupled the two.
         Kxx = unwrapped.prior.kernel.gram(Xs_train).as_matrix()
         from gpjax.linalg.utils import add_jitter
 
-        Kxx = add_jitter(Kxx, unwrapped.prior.jitter)
+        train_jitter = unwrapped.jitter
+        Kxx = add_jitter(Kxx, train_jitter)
         noise_diag = unwrapped.likelihood.noise_vector(n)
         Sigma = Kxx + jnp.diag(noise_diag)
         L_sigma = jnp.linalg.cholesky(Sigma)
@@ -182,11 +204,15 @@ class _PredictCache:
         Returns:
             ``(mean, var)`` each of shape ``(m,)``. Variance is the
             diagonal of the latent covariance with prior jitter folded
-            in (matching gpjax's diagonal-covariance branch).
+            in (matching gpjax's diagonal-covariance branch in
+            ``posterior.predict``).
         """
         kernel = self.unwrapped_posterior.prior.kernel
         mean_fn = self.unwrapped_posterior.prior.mean_function
-        prior_jitter = self.unwrapped_posterior.prior.jitter
+        # Test-side jitter matches gpjax `posterior.predict`'s
+        # `_return_diagonal_covariance` branch, which uses
+        # `posterior.prior.jitter` on the test-point covariance.
+        test_jitter = self.unwrapped_posterior.prior.jitter
 
         Kxt = kernel.cross_covariance(self.Xs_train, Xt)  # (n, m)
         L_inv_Kxt = jsp.linalg.solve_triangular(self.L_sigma, Kxt, lower=True)
@@ -197,8 +223,41 @@ class _PredictCache:
 
         Ktt_diag = lx.diagonal(kernel.diagonal(Xt))  # (m,)
         var = Ktt_diag - jnp.einsum("ij,ij->j", L_inv_Kxt, L_inv_Kxt)
-        var = var + prior_jitter
+        var = var + test_jitter
         return mean, var
+
+    def predict_latent_joint(self, Xt: Array) -> tuple[Array, Array]:
+        """Latent (noiseless) joint mean and full covariance at test inputs.
+
+        Used by `DSPGPEmulator.predict_covariance` for the
+        ``joint_inputs=True`` mode. Mirrors gpjax's
+        ``posterior.predict(...).covariance_matrix`` (the
+        ``return_covariance_type='dense'`` branch): the full latent
+        covariance with prior jitter on the diagonal.
+
+        Args:
+            Xt: ``(m, d)`` test inputs in scaled coordinates.
+
+        Returns:
+            ``(mean, cov)`` with shapes ``(m,)`` and ``(m, m)``. Cov is
+            symmetric PSD (latent + prior_jitter·I); add ``noise_var·I``
+            for the observation-noise-inclusive predictive covariance.
+        """
+        kernel = self.unwrapped_posterior.prior.kernel
+        mean_fn = self.unwrapped_posterior.prior.mean_function
+        test_jitter = self.unwrapped_posterior.prior.jitter
+
+        Kxt = kernel.cross_covariance(self.Xs_train, Xt)  # (n, m)
+        L_inv_Kxt = jsp.linalg.solve_triangular(self.L_sigma, Kxt, lower=True)
+
+        mean_t_raw = mean_fn(Xt)  # (m, 1) for Constant
+        mean_t = jnp.atleast_1d(mean_t_raw.squeeze())
+        mean = mean_t + L_inv_Kxt.T @ self.alpha  # (m,)
+
+        Ktt = kernel.gram(Xt).as_matrix()  # (m, m)
+        cov = Ktt - L_inv_Kxt.T @ L_inv_Kxt
+        cov = cov + test_jitter * jnp.eye(cov.shape[0], dtype=cov.dtype)
+        return mean, cov
 
 
 @dataclass(frozen=True)
@@ -274,7 +333,16 @@ def _build_dsp_posterior(
         BoundedPositive(init_obs_stddev, lower=DSP_NOISE_FLOOR),
     )
 
-    return prior * lik
+    # gpjax stores jitter on BOTH `posterior.prior.jitter` (used by
+    # `conjugate_mll` for the training Cholesky and by `posterior.predict`
+    # for the test-side covariance) and `posterior.jitter` (used by
+    # `posterior.predict` for the training Cholesky). Defaults are
+    # independent — `prior * lik` (i.e. `construct_posterior`) does not
+    # propagate `prior.jitter` into the posterior. We construct
+    # `ConjugatePosterior` directly so both jitters take the same
+    # user-supplied value and the MLL we optimize matches the predictive
+    # distribution numerically.
+    return gpx.gps.ConjugatePosterior(prior=prior, likelihood=lik, jitter=jitter)
 
 
 class DSPGPEmulator(Emulator, GaussianRandomFunction):
@@ -300,9 +368,11 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         verbose: passed through to ``gpx.fit_scipy``.
     """
 
-    # Marginal-only in v1.2.
-    supports_joint_inputs: bool = False
-    supports_joint_outputs: bool = False
+    # Joint inputs supported via `predict_covariance`. Joint outputs are
+    # trivially supported for the scalar-output case (returns the
+    # marginal variance reshaped to (n, 1, 1)).
+    supports_joint_inputs: bool = True
+    supports_joint_outputs: bool = True
 
     def __init__(
         self,
@@ -481,6 +551,68 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         _, latent_var = self._predict_cache.predict_latent(Xs)  # type: ignore[union-attr]
         obs_var = latent_var + self._predict_cache.noise_var  # type: ignore[union-attr]
         return self._y_scaler.inverse_var(jnp.maximum(obs_var, 0.0))  # type: ignore[union-attr]
+
+    def predict_covariance(
+        self,
+        X: Array,
+        *,
+        joint_inputs: bool = False,
+        joint_outputs: bool = False,
+    ) -> Array:
+        """Predictive covariance, observation-noise-inclusive.
+
+        Reuses the Cholesky cache: the joint case adds a single
+        ``K(Xt, Xt)`` evaluation and one ``triangular_solve`` over the
+        cached ``L_sigma`` on top of what ``predict_mean`` already does.
+
+        For the scalar-output case (``output_shape=()``) the returned
+        shapes per the GaussianRandomFunction contract are:
+
+        - ``joint_inputs=True`` (regardless of ``joint_outputs``):
+          ``(n, n)`` — full cross-input covariance with observation
+          noise on the diagonal.
+        - ``joint_inputs=False, joint_outputs=True``: ``(n, 1, 1)`` —
+          the marginal variance at each input, reshaped (joint over
+          outputs is vacuous when the output is scalar).
+        - ``joint_inputs=False, joint_outputs=False``: not implemented;
+          callers should use ``predict_variance``.
+
+        Args:
+            X: shape ``(n, d)`` (raw, pre-scaled).
+            joint_inputs: include cross-input covariance.
+            joint_outputs: include cross-output covariance (trivial for
+                scalar output).
+
+        Returns:
+            Covariance array in the original (pre-standardization)
+            output space; ``y_scaler.scale²`` is folded in here.
+        """
+        self._require_fit()
+        if not joint_inputs and not joint_outputs:
+            raise NotImplementedError(
+                "predict_covariance with joint_inputs=False, "
+                "joint_outputs=False is not implemented; "
+                "use predict_variance for the marginal case."
+            )
+
+        if not joint_inputs:
+            # joint_outputs only: scalar output → reshape variance to (n, 1, 1).
+            return self.predict_variance(X)[:, None, None]
+
+        # joint_inputs=True (joint_outputs is trivial here): full (n, n).
+        Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
+        _, latent_cov = self._predict_cache.predict_latent_joint(Xs)  # type: ignore[union-attr]
+        n_test = latent_cov.shape[0]
+        obs_cov = latent_cov + self._predict_cache.noise_var * jnp.eye(  # type: ignore[union-attr]
+            n_test, dtype=latent_cov.dtype
+        )
+        # Defensive symmetrization: floating-point asymmetry in
+        # `K(Xt, Xt) - A.T @ A` can cause downstream Choleskys to fail
+        # on otherwise PSD matrices. Negligible cost, stable result.
+        obs_cov = 0.5 * (obs_cov + obs_cov.T)
+        # Bring back to original output space. y_scaler.scale is scalar
+        # for our scalar-output case, so `scale²` multiplies elementwise.
+        return obs_cov * (self._y_scaler.scale ** 2)  # type: ignore[union-attr]
 
     def _require_fit(self) -> None:
         if self._opt_posterior is None or self._predict_cache is None:
