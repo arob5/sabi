@@ -805,6 +805,283 @@ def test_dspgp_update_emulator_falls_back_to_refit_when_unfitted():
     assert out._predict_cache.Xs_train.shape == (8, 2)
 
 
+# --- RescaleOutputs / RescaleThenAppend handlers -----------------------------
+
+
+def test_dspgp_rescale_outputs_handler_is_registered():
+    pytest.importorskip("gpjax")
+    from sabi.emulators.gpjax import DSPGPEmulator  # noqa: F401
+    from sabi.emulators.dispatch import emulator_update_registry
+
+    assert "dspgp_rescale_outputs_yscaler_only" in emulator_update_registry._name_index
+    assert "dspgp_rescale_then_append_chol_update" in emulator_update_registry._name_index
+
+
+def test_dspgp_rescale_outputs_dispatch_predicts_beta_times_original():
+    """``RescaleOutputs(factor=β)`` should make predictions in the new
+    state come out exactly β times the predictions in the old state.
+    The cheap-path handler does this in O(1) by rescaling the y-scaler;
+    the cache stays unchanged."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import RescaleOutputs
+
+    key = jr.key(401)
+    X = jr.uniform(key, (15, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_test = jr.uniform(jr.key(402), (8, 2))
+    pred_a = em.predict_mean(X_test)
+    var_a = em.predict_variance(X_test)
+    cov_a = em.predict_covariance(X_test, joint_inputs=True)
+
+    beta = 3.0
+    plan = RescaleOutputs(factor=beta)
+
+    def _exploding_factory():
+        raise AssertionError("cheap path should fire; factory should not be called")
+
+    em_b = update_emulator(em, plan, factory=_exploding_factory, X_full=X, Y_full=Y)
+
+    pred_b = em_b.predict_mean(X_test)
+    var_b = em_b.predict_variance(X_test)
+    cov_b = em_b.predict_covariance(X_test, joint_inputs=True)
+
+    assert jnp.allclose(pred_b, beta * pred_a, rtol=1e-12, atol=1e-14)
+    assert jnp.allclose(var_b, (beta ** 2) * var_a, rtol=1e-12, atol=1e-14)
+    assert jnp.allclose(cov_b, (beta ** 2) * cov_a, rtol=1e-12, atol=1e-14)
+    # Cache untouched: same _opt_posterior, same Cholesky factor.
+    assert em_b._opt_posterior is em._opt_posterior
+    assert em_b._predict_cache.L_sigma is em._predict_cache.L_sigma
+
+
+def test_dspgp_rescale_outputs_factor_one_is_exact_no_op():
+    """``RescaleOutputs(factor=1.0)`` should return the input emulator
+    object unchanged — the handler short-circuits on the trivial case."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import RescaleOutputs
+
+    key = jr.key(411)
+    X = jr.uniform(key, (10, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    out = update_emulator(
+        em,
+        RescaleOutputs(factor=1.0),
+        factory=lambda: DSPGPEmulator(input_shape=(2,)),
+        X_full=X,
+        Y_full=Y,
+    )
+    assert out is em
+
+
+def test_dspgp_rescale_outputs_rejects_nonpositive_factor():
+    """Negative or zero factor breaks z-scoring — handler reports
+    infeasible, dispatch falls back to refit."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import RescaleOutputs
+
+    key = jr.key(421)
+    X = jr.uniform(key, (8, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    factory_calls = {"n": 0}
+
+    def _counting_factory():
+        factory_calls["n"] += 1
+        return DSPGPEmulator(input_shape=(2,))
+
+    out = update_emulator(
+        em, RescaleOutputs(factor=0.0), factory=_counting_factory, X_full=X, Y_full=Y
+    )
+    assert factory_calls["n"] == 1, "should have fallen back to refit"
+    assert out._predict_cache is not None  # refitted
+
+
+def test_dspgp_rescale_then_append_dispatch_matches_compose_of_steps():
+    """``RescaleThenAppend(factor=β, X_new, Y_new)`` should produce the
+    same predictions as: rescale by β, then condition_on Y_new (in new
+    units). Verifies the composition is correct."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import RescaleOutputs, RescaleThenAppend
+
+    key = jr.key(431)
+    X = jr.uniform(key, (12, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_new = jr.uniform(jr.key(432), (3, 2))
+    beta = 2.5
+    Y_new_at_new_state = beta * jnp.sin(X_new[:, 0])  # Y_new in state b's units
+
+    # Direct composite path.
+    plan = RescaleThenAppend(factor=beta, X_new=X_new, Y_new=Y_new_at_new_state)
+
+    def _exploding_factory():
+        raise AssertionError("cheap path should fire; factory should not be called")
+
+    em_after = update_emulator(
+        em,
+        plan,
+        factory=_exploding_factory,
+        X_full=jnp.concatenate([X, X_new], axis=0),
+        Y_full=jnp.concatenate([beta * Y, Y_new_at_new_state], axis=0),
+    )
+
+    # Two-step path: rescale, then append.
+    em_rescaled = update_emulator(
+        em,
+        RescaleOutputs(factor=beta),
+        factory=_exploding_factory,
+        X_full=X,
+        Y_full=beta * Y,
+    )
+    em_two_step = em_rescaled.condition_on(X_new, Y_new_at_new_state)
+
+    X_test = jr.uniform(jr.key(433), (6, 2))
+    assert jnp.allclose(
+        em_after.predict_mean(X_test),
+        em_two_step.predict_mean(X_test),
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    assert jnp.allclose(
+        em_after.predict_variance(X_test),
+        em_two_step.predict_variance(X_test),
+        rtol=1e-10,
+        atol=1e-12,
+    )
+
+
+def test_dspgp_rescale_then_append_predicts_in_new_state_units():
+    """End-to-end: at the new training inputs, predictions should
+    interpolate near-exactly through the appended Y_new (which is in
+    state b's units)."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import RescaleThenAppend
+
+    key = jr.key(441)
+    X = jr.uniform(key, (12, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_new = jr.uniform(jr.key(442), (4, 2))
+    beta = 1.7
+    Y_new_at_new_state = beta * jnp.sin(X_new[:, 0])
+    plan = RescaleThenAppend(factor=beta, X_new=X_new, Y_new=Y_new_at_new_state)
+
+    em_b = update_emulator(
+        em,
+        plan,
+        factory=lambda: DSPGPEmulator(input_shape=(2,)),
+        X_full=jnp.concatenate([X, X_new], axis=0),
+        Y_full=jnp.concatenate([beta * Y, Y_new_at_new_state], axis=0),
+    )
+    pred_at_new = em_b.predict_mean(X_new)
+    assert jnp.max(jnp.abs(pred_at_new - Y_new_at_new_state)) < 1e-2
+
+
+def test_dspgp_rescale_then_append_rejects_nonpositive_factor():
+    """Factor ≤ 0 is infeasible → dispatch falls back to refit."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import RescaleThenAppend
+
+    key = jr.key(451)
+    X = jr.uniform(key, (8, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_new = jr.uniform(jr.key(452), (2, 2))
+    Y_new = -jnp.sin(X_new[:, 0])
+
+    factory_calls = {"n": 0}
+
+    def _counting_factory():
+        factory_calls["n"] += 1
+        return DSPGPEmulator(input_shape=(2,))
+
+    out = update_emulator(
+        em,
+        RescaleThenAppend(factor=-1.0, X_new=X_new, Y_new=Y_new),
+        factory=_counting_factory,
+        X_full=jnp.concatenate([X, X_new], axis=0),
+        Y_full=jnp.concatenate([-Y, Y_new], axis=0),
+    )
+    assert factory_calls["n"] == 1
+    assert out._predict_cache is not None
+
+
+# --- Multi-output safety on covariance scaling ------------------------------
+
+
+def test_scale_cov_to_output_space_scalar_output_matches_simple_broadcast():
+    """For scalar output, the helper just multiplies cov by scale²."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+
+    from sabi.emulators.gpjax.dsp_gp import _ZScoreScaler, _scale_cov_to_output_space
+
+    cov = jnp.eye(4) * 2.5
+    scaler = _ZScoreScaler(loc=jnp.array(0.0), scale=jnp.array(3.0))
+    out = _scale_cov_to_output_space(cov, scaler, output_shape=())
+    assert jnp.allclose(out, cov * 9.0, rtol=1e-12, atol=1e-14)
+
+
+def test_scale_cov_to_output_space_multi_output_raises():
+    """Multi-output (non-empty output_shape) raises NotImplementedError
+    — the safe helper refuses to silently miscalibrate when the
+    Kronecker structure isn't accounted for."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+
+    from sabi.emulators.gpjax.dsp_gp import _ZScoreScaler, _scale_cov_to_output_space
+
+    cov = jnp.eye(4)
+    scaler = _ZScoreScaler(loc=jnp.zeros(2), scale=jnp.ones(2))
+    with pytest.raises(NotImplementedError, match="multi-output"):
+        _scale_cov_to_output_space(cov, scaler, output_shape=(2,))
+
+
 # --- Multi-restart MAP -------------------------------------------------------
 
 

@@ -118,7 +118,7 @@ from sabi.emulators.gpjax._dsp import (
     BoundedPositive,
     dsp_map_objective,
 )
-from sabi.emulators.updates import AppendRows
+from sabi.emulators.updates import AppendRows, RescaleOutputs, RescaleThenAppend
 
 
 __all__ = ["DSPGPEmulator"]
@@ -145,6 +145,56 @@ class _MinMaxScaler:
 
     def transform(self, X: Array) -> Array:
         return (X - self.lo) / (self.hi - self.lo)
+
+
+def _scale_cov_to_output_space(
+    cov: Array, y_scaler: "_ZScoreScaler", *, output_shape: tuple[int, ...]
+) -> Array:
+    """Bring a covariance from standardized-y space back to the original
+    output space, scaling by ``y_scaler.scale²``.
+
+    Multi-output safety
+    -------------------
+    For the **scalar-output** case (``output_shape == ()``), ``y_scaler.scale``
+    is a 0-d array and the multiplication is a clean elementwise scalar
+    broadcast against ``cov`` (shape ``(n, n)`` for joint inputs, or
+    ``(n,)`` / ``(n, 1, 1)`` for marginals).
+
+    For multi-output (output_shape ≠ ()), the right thing depends on which
+    cross-axes are joint:
+
+    - ``joint_inputs=False, joint_outputs=True`` → cov shape
+      ``(n, prod(out), prod(out))``: scaling is a Kronecker outer of
+      ``scale ⊗ scale`` along the (prod(out), prod(out)) trailing block.
+      Per-output diagonal becomes ``scale²``; off-diagonal cross-output
+      scales become ``scale_i · scale_j``.
+    - ``joint_inputs=True, joint_outputs=False`` → cov shape
+      ``(*out, n, n)``: each output's (n, n) block scales by its own
+      ``scale²``; outputs don't mix. So broadcasting ``scale²`` of
+      shape ``out`` against the leading ``out`` axes is correct.
+    - ``joint_inputs=True, joint_outputs=True`` → cov shape
+      ``(n*prod(out), n*prod(out))``: needs the full Kronecker; a plain
+      elementwise multiply is *wrong*.
+
+    DSPGPEmulator is scalar-output in v1 (the constructor rejects
+    non-empty ``output_shape``), so this helper currently asserts that
+    invariant and uses the simple scalar broadcast. Multi-output support
+    will need to fan out to the per-mode logic above. Keeping the
+    helper centralized here so the change is a single-file edit when
+    that lands.
+    """
+    if output_shape != ():
+        # Defensive: even though DSPGPEmulator's __init__ rejects
+        # non-empty output_shape today, this helper is the place where
+        # a multi-output extension would need a careful refactor. Fail
+        # loud here so a future "I'll just lift the output_shape check"
+        # change doesn't silently miscalibrate covariances.
+        raise NotImplementedError(
+            f"_scale_cov_to_output_space: multi-output (output_shape="
+            f"{output_shape}) requires axis-aware Kronecker scaling; "
+            f"see this helper's docstring for the per-mode contract."
+        )
+    return cov * (y_scaler.scale ** 2)
 
 
 @dataclass(frozen=True)
@@ -915,9 +965,9 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         # `K(Xt, Xt) - A.T @ A` can cause downstream Choleskys to fail
         # on otherwise PSD matrices. Negligible cost, stable result.
         latent_cov = 0.5 * (latent_cov + latent_cov.T)
-        # Bring back to original output space. y_scaler.scale is scalar
-        # for our scalar-output case, so `scale²` multiplies elementwise.
-        return latent_cov * (self._y_scaler.scale ** 2)  # type: ignore[union-attr]
+        return _scale_cov_to_output_space(
+            latent_cov, self._y_scaler, output_shape=self.output_shape  # type: ignore[arg-type]
+        )
 
     def _require_fit(self) -> None:
         if self._opt_posterior is None or self._predict_cache is None:
@@ -1052,11 +1102,224 @@ class _DSPGPAppendRowsHandler(EmulatorUpdateMethod):
         return emulator.condition_on(plan.X_new, plan.Y_new)
 
 
+def _rescale_y_scaler(scaler: "_ZScoreScaler", factor: float) -> "_ZScoreScaler":
+    r"""Apply a multiplicative rescale to a ``_ZScoreScaler``.
+
+    Setting ``loc' = β·loc`` and ``scale' = β·scale`` makes
+    ``new_scaler.transform(β·Y) == old_scaler.transform(Y)``: the
+    standardized y values stay the same under a uniform rescale,
+    because z-scoring is scale-invariant. Predictions in the original
+    space rescale by ``β`` (mean) and ``β²`` (variance), via
+    ``new_scaler.inverse_*``, so the model's output is correctly in
+    the new state's units.
+
+    Args:
+        scaler: existing y-scaler.
+        factor: positive multiplicative factor.
+
+    Returns:
+        New ``_ZScoreScaler`` whose loc and scale are ``factor`` times
+        those of ``scaler``.
+    """
+    if not (factor > 0):
+        raise ValueError(
+            f"_rescale_y_scaler: factor must be > 0, got {factor!r}."
+        )
+    return _ZScoreScaler(loc=scaler.loc * factor, scale=scaler.scale * factor)
+
+
+class _DSPGPRescaleOutputsHandler(EmulatorUpdateMethod):
+    r"""Cheap-path ``RescaleOutputs`` handler for ``DSPGPEmulator``.
+
+    A pure rescale ``Y_b = β · Y_a`` is essentially a no-op on the
+    cache because z-scoring is scale-invariant:
+
+    .. math::
+
+        \text{loc}_b = \beta \cdot \text{loc}_a, \quad
+        \text{scale}_b = \beta \cdot \text{scale}_a
+        \;\Longrightarrow\;
+        \frac{\beta Y_a - \text{loc}_b}{\text{scale}_b}
+        = \frac{Y_a - \text{loc}_a}{\text{scale}_a}.
+
+    Standardized y is unchanged, so the cached ``L_sigma`` (depends only
+    on x and hyperparameters), ``alpha = L^{-1}(y_\text{std} - m(X))``,
+    ``Xs_train``, and ``noise_var`` are all invariant. The only thing
+    that needs updating is the y-scaler — predictions in the original
+    space then come out at the new state's units automatically:
+    ``mean_b = β·mean_a``, ``var_b = β²·var_a``.
+
+    Cost: O(1) — construct a new y-scaler.
+    """
+
+    @property
+    def name(self) -> str:
+        return "dspgp_rescale_outputs_yscaler_only"
+
+    def supported_types(self) -> tuple[type, ...]:
+        return (DSPGPEmulator,)
+
+    def check(self, emulator, plan) -> MethodInfo:
+        if not isinstance(plan, RescaleOutputs):
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description="plan is not RescaleOutputs",
+            )
+        if emulator._predict_cache is None:
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description="emulator not yet fitted; cache absent",
+            )
+        if not (plan.factor > 0):
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description=(
+                    f"RescaleOutputs(factor={plan.factor!r}) is not positive; "
+                    "z-scoring requires positive scale."
+                ),
+            )
+        return MethodInfo(feasible=True, method_name=self.name)
+
+    def execute(
+        self, emulator: "DSPGPEmulator", plan: RescaleOutputs
+    ) -> "DSPGPEmulator":
+        if plan.factor == 1.0:
+            return emulator  # exact no-op
+        new_y_scaler = _rescale_y_scaler(emulator._y_scaler, plan.factor)
+        return type(emulator)(
+            input_shape=emulator.input_shape,
+            output_shape=emulator.output_shape,
+            name=emulator.name,
+            kernel=emulator.kernel_name,
+            max_iters=emulator.max_iters,
+            jitter=emulator.jitter,
+            verbose=emulator.verbose,
+            n_starts=emulator.n_starts,
+            restart_seed=emulator.restart_seed,
+            _x_scaler=emulator._x_scaler,
+            _y_scaler=new_y_scaler,
+            _opt_posterior=emulator._opt_posterior,
+            _train_dataset=emulator._train_dataset,
+            _predict_cache=emulator._predict_cache,
+        )
+
+
+class _DSPGPRescaleThenAppendHandler(EmulatorUpdateMethod):
+    r"""Cheap-path ``RescaleThenAppend`` handler for ``DSPGPEmulator``.
+
+    Composite of the two single-op handlers, applied in order so the
+    new rows are standardized in the new state's coordinate system:
+
+    1. **Rescale step** (O(1)): build ``y_scaler_b`` with
+       ``loc_b = β·loc_a, scale_b = β·scale_a``. Cache untouched
+       (standardized y is invariant under uniform rescale).
+    2. **Append step** (O(n²m + m³)): standardize ``Y_new`` (already
+       given at state b) with ``y_scaler_b``, then call
+       ``_PredictCache.append_rows`` for the block-Cholesky update.
+
+    Total cost matches a single ``condition_on`` (the rescale step is
+    free) — so a tempering round with new rows costs the same as a
+    no-tempering round with new rows.
+
+    Note: the rescale step assumes a uniform multiplicative rescale of
+    Y (the only shape ``RescaleOutputs`` carries). State-shaped
+    transforms with shift terms or per-coordinate scales would need a
+    different cheap path.
+    """
+
+    @property
+    def name(self) -> str:
+        return "dspgp_rescale_then_append_chol_update"
+
+    def supported_types(self) -> tuple[type, ...]:
+        return (DSPGPEmulator,)
+
+    def check(self, emulator, plan) -> MethodInfo:
+        if not isinstance(plan, RescaleThenAppend):
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description="plan is not RescaleThenAppend",
+            )
+        if emulator._predict_cache is None:
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description="emulator not yet fitted; cache absent",
+            )
+        if not (plan.factor > 0):
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description=(
+                    f"RescaleThenAppend(factor={plan.factor!r}) is not "
+                    "positive; z-scoring requires positive scale."
+                ),
+            )
+        return MethodInfo(feasible=True, method_name=self.name)
+
+    def execute(
+        self, emulator: "DSPGPEmulator", plan: RescaleThenAppend
+    ) -> "DSPGPEmulator":
+        # Step 1: rescale the y-scaler (free).
+        new_y_scaler = _rescale_y_scaler(emulator._y_scaler, plan.factor)
+
+        # Step 2: standardize new rows in the *new* coordinate system,
+        # then rank-one append. ``Y_new`` is already at state b per the
+        # ``RescaleThenAppend`` contract, so the new scaler is the
+        # right one to apply.
+        d = emulator.input_shape[0]
+        if plan.X_new.ndim != 2 or plan.X_new.shape[1] != d:
+            raise ValueError(
+                f"RescaleThenAppend handler: expected X_new.shape=(m, {d}), "
+                f"got {tuple(plan.X_new.shape)}."
+            )
+        if plan.Y_new.shape != (plan.X_new.shape[0],):
+            raise ValueError(
+                f"RescaleThenAppend handler: expected Y_new.shape="
+                f"({plan.X_new.shape[0]},), got {tuple(plan.Y_new.shape)}."
+            )
+
+        Xs_new = emulator._x_scaler.transform(plan.X_new).astype(jnp.float64)
+        Ys_new_std = new_y_scaler.transform(plan.Y_new).astype(jnp.float64)
+        new_cache = emulator._predict_cache.append_rows(Xs_new, Ys_new_std)
+
+        new_dataset = gpx.Dataset(
+            X=new_cache.Xs_train,
+            y=jnp.concatenate(
+                [emulator._train_dataset.y, Ys_new_std.reshape(-1, 1)], axis=0
+            ),
+        )
+        return type(emulator)(
+            input_shape=emulator.input_shape,
+            output_shape=emulator.output_shape,
+            name=emulator.name,
+            kernel=emulator.kernel_name,
+            max_iters=emulator.max_iters,
+            jitter=emulator.jitter,
+            verbose=emulator.verbose,
+            n_starts=emulator.n_starts,
+            restart_seed=emulator.restart_seed,
+            _x_scaler=emulator._x_scaler,
+            _y_scaler=new_y_scaler,
+            _opt_posterior=emulator._opt_posterior,
+            _train_dataset=new_dataset,
+            _predict_cache=new_cache,
+        )
+
+
 # Register at module import time. The gpjax package's lazy
 # ``__getattr__`` defers loading this module until ``DSPGPEmulator``
 # is referenced, so registration only happens when the optional
 # extra is actually in use — sabi installs without ``gpjax`` are
 # unaffected.
-_dspgp_append_rows_handler = _DSPGPAppendRowsHandler()
-if _dspgp_append_rows_handler.name not in emulator_update_registry._name_index:
-    emulator_update_registry.register(_dspgp_append_rows_handler)
+for _h in (
+    _DSPGPAppendRowsHandler(),
+    _DSPGPRescaleOutputsHandler(),
+    _DSPGPRescaleThenAppendHandler(),
+):
+    if _h.name not in emulator_update_registry._name_index:
+        emulator_update_registry.register(_h)

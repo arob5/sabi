@@ -204,16 +204,31 @@ Use `fit` when:
 - You haven't fitted yet, or want to refresh the hyperparameter
   estimate.
 
-`DSPGPEmulator` registers an `AppendRows` handler with the cheap-update
-dispatch (`sabi.emulators.dispatch.emulator_update_registry`), so loop
-code that calls `update_emulator(em, AppendRows(X_new, Y_new), ...)`
-takes the rank-one path automatically when the emulator is already
-fitted. Unfitted emulators fall through to the refit fallback.
+`DSPGPEmulator` registers three cheap-update handlers with
+`sabi.emulators.dispatch.emulator_update_registry`:
+
+- `AppendRows(X_new, Y_new)` — rank-one Cholesky update via
+  `condition_on`. O(n²m + m³).
+- `RescaleOutputs(factor=β)` — rescales the y-scaler to
+  `(loc·β, scale·β)`. The cache is unchanged because z-scoring is
+  scale-invariant: standardized y is identical, so `alpha` and
+  `L_sigma` carry over verbatim. Predictions in the original output
+  space rescale by β (mean) and β² (variance) automatically. O(1).
+- `RescaleThenAppend(factor=β, X_new, Y_new)` — composite: rescale
+  y-scaler (free), then standardize `Y_new` (already in the new
+  state's units) with the new scaler and rank-one append. Total cost
+  matches a single append.
+
+All three require the emulator to have been fitted; unfitted
+emulators fall through to the refit fallback. Negative or zero
+`factor` is reported as infeasible (z-scoring requires positive
+scale) and also falls back to refit.
 
 ## Forward-look
 
 - ProbPipe `condition_on` integration replaces the bespoke `fit` once
   the primitive lands.
-- `RescaleThenAppend` dispatch handler that fuses the rescale step
-  with the rank-one update — currently `RescaleOutputs` and
-  `RescaleThenAppend` plans hit the refit fallback.
+- `_scale_cov_to_output_space` is currently scalar-output only;
+  multi-output support requires per-mode Kronecker scaling (the
+  helper raises `NotImplementedError` to make this explicit). When
+  multi-output emulators ship, that helper is the single edit-site.
