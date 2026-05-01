@@ -45,10 +45,10 @@ def _gaussian_target() -> TargetDistribution:
     )
 
 
-def test_target_function_derived_via_vmap():
+def test_target_map_derived_via_vmap():
     td = _gaussian_target()
     X = jnp.asarray([[0.0, 0.0], [1.0, -1.0], [2.0, 0.5]])
-    Y_batched = td.target_function(X)
+    Y_batched = td.target_map(X)
     Y_single = jnp.asarray([td.target_single(x) for x in X])
     assert jnp.allclose(Y_batched, Y_single)
 

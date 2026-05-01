@@ -140,7 +140,7 @@ def _flatten_diag_dataarray(da) -> dict[str, float]:
 
 def generate_via_nuts(
     *,
-    target_function: Callable[[Array], Array],
+    target_map: Callable[[Array], Array],
     log_density_form: LogDensityForm,
     prior: Distribution,
     input_shape: tuple[int, ...],
@@ -154,7 +154,7 @@ def generate_via_nuts(
     """Run NUTS via ProbPipe `condition_on` against the problem's
     unnormalized posterior.
 
-    `target_function` is the **single-point** target callable (shape
+    `target_map` is the **single-point** target callable (shape
     ``input_shape -> output_shape``) — that's what NUTS evaluates
     pointwise. The function builds a `TargetDistribution` from this
     (the constructor `jax.vmap`s the single-point callable for the
@@ -172,7 +172,7 @@ def generate_via_nuts(
         divergence counts.
     """
     target = TargetDistribution(
-        target_single=target_function,
+        target_single=target_map,
         name=name or "reference_target",
         input_shape=input_shape,
         output_shape=output_shape,

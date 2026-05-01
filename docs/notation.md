@@ -59,7 +59,7 @@ like `unnormalized_log_prob`).
 | `Emulator` | `__call__(X) -> Distribution` | inherited `predict_*` from `GaussianRandomFunction`, etc. |
 | `PointwiseScoredAcquisition` | `score(X, state) -> (n,)` | `_score_single(x, state) -> scalar` |
 | `LogDensityForm` | `__call__(X, Y, *, prior) -> (n,)` | `_call_single(x, y, *, prior) -> scalar` |
-| `TargetDistribution` | `target_function(X) -> (n,) + output_shape` | `_target_single(x) -> output_shape` (constructed via `from_target_single`) |
+| `TargetDistribution` | `target_map(X) -> (n,) + output_shape` | `_target_single(x) -> output_shape` (constructed via `from_target_single`) |
 
 Subclasses override the single-point hook; the batched method is
 provided by the base class via `jax.vmap` (or directly when a
@@ -103,7 +103,7 @@ def f(x: Array) -> Array:    # x.shape == (2,), returns scalar
     return -0.5 * x @ Sigma_inv @ x
 
 X = PriorSampler().sample(problem, key, n=16)  # X.shape == (16, 2)
-Y = problem.target_function(X)                 # Y.shape == (16,) — already batched
+Y = problem.target_map(X)                 # Y.shape == (16,) — already batched
 ```
 
 Forward-model benchmark with 5 observables (`input_shape=(3,)`, `output_shape=(5,)`):

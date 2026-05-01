@@ -9,7 +9,7 @@ intermediate distribution :math:`\ell_t(x) = \log\pi_0(x) + \lambda_t
 - `LikelihoodTemperingViaForm`: emulator target :math:`f` is unchanged
   across rounds; the log-density form is rebuilt per round so the
   likelihood term is scaled by :math:`\lambda_t`. The emulator can be
-  reused across all states with no refit (``is_invariant_target_function``
+  reused across all states with no refit (``is_invariant_target_map``
   returns True). Compatible with any base form: dispatches on form type
   (`LogLikPlusPrior`, `ForwardModel`, `Identity`) to scale the right
   part.
@@ -144,7 +144,7 @@ class LikelihoodTemperingViaForm(TemperingScheme):
 
     The log-density form scales the likelihood term by :math:`\beta_t`;
     the emulator's training target is unchanged across rounds (so
-    ``is_invariant_target_function`` returns True and the loop can
+    ``is_invariant_target_map`` returns True and the loop can
     reuse the same fitted emulator across states).
 
     Per-form-type math (dispatch internal):
@@ -174,11 +174,11 @@ class LikelihoodTemperingViaForm(TemperingScheme):
             log_density_form=tempered_form,
             state=state,
             output_transform=IdentityTransform(),
-            base_target_function=base.target_function,
+            base_target_map=base.target_map,
             prior=base.prior,
         )
 
-    def is_invariant_target_function(self, state_a: Any, state_b: Any) -> bool:
+    def is_invariant_target_map(self, state_a: Any, state_b: Any) -> bool:
         return True  # emulator target is invariant under state changes
 
     def is_invariant_form(self, state_a: Any, state_b: Any) -> bool:
@@ -230,7 +230,7 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
                 "use `LikelihoodTemperingViaForm` instead."
             )
         beta = jnp.asarray(state)
-        base_target_function = base.target_function
+        base_target_map = base.target_map
         base_target_single = base.target_single
 
         def tempered_target_single(x):
@@ -244,11 +244,11 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
             log_density_form=base.log_density_form,  # unchanged
             state=state,
             output_transform=RescaleTransform(),
-            base_target_function=base_target_function,
+            base_target_map=base_target_map,
             prior=base.prior,
         )
 
-    def is_invariant_target_function(self, state_a: Any, state_b: Any) -> bool:
+    def is_invariant_target_map(self, state_a: Any, state_b: Any) -> bool:
         return state_a == state_b
 
     def is_invariant_form(self, state_a: Any, state_b: Any) -> bool:

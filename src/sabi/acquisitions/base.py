@@ -124,7 +124,7 @@ class AcquisitionState:
     Two `Y` arrays are exposed:
 
     - ``Y_raw``: the un-transformed evaluations of
-      ``problem.target_function``. Always present, regardless of any
+      ``problem.target_map``. Always present, regardless of any
       tempering scheme.
     - ``Y_train``: the values the round's emulator was actually trained
       on. Under no tempering this equals ``Y_raw``. Under the upcoming

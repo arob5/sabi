@@ -17,7 +17,7 @@ def _state(problem, key_seed=0, n=20):
     where acquisition candidates will also be drawn from, so the GP gets
     trained on the same support."""
     X = PriorSampler().sample(problem, jax.random.key(key_seed), n)
-    Y = problem.target_function(X)
+    Y = problem.target_map(X)
     gp = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(
         emulator=gp,
@@ -86,6 +86,6 @@ def test_ei_average_best_beats_random_average_best_across_seeds():
             state, q=8, key=jax.random.key(100 + seed)
         )
         rand_batch = PriorSampling().select_batch(state, q=8, key=jax.random.key(200 + seed))
-        ei_bests.append(float(jnp.max(problem.target_function(ei_batch))))
-        rand_bests.append(float(jnp.max(problem.target_function(rand_batch))))
+        ei_bests.append(float(jnp.max(problem.target_map(ei_batch))))
+        rand_bests.append(float(jnp.max(problem.target_map(rand_batch))))
     assert sum(ei_bests) / len(ei_bests) > sum(rand_bests) / len(rand_bests)

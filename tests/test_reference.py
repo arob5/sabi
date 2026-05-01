@@ -80,14 +80,14 @@ def test_cache_hit_skips_nuts(tmp_path):
     write_samples_parquet(samples, problem_dir / f"{fname}.parquet")
     write_metadata_json({"problem_name": "fake_problem"}, problem_dir / f"{fname}.json")
 
-    # Pass deliberately-broken target_function — if it gets called, the test fails.
+    # Pass deliberately-broken target_map — if it gets called, the test fails.
     def bad_target(theta):
         raise AssertionError("NUTS must not run on a cache hit.")
 
     ref = load_or_generate_reference_samples(
         problem_name="fake_problem",
         cache_key="k1",
-        target_function=bad_target,
+        target_map=bad_target,
         log_density_form=Identity(),
         prior=_box_prior(),
         input_shape=(2,),
@@ -122,7 +122,7 @@ def test_cache_keys_disambiguate_by_params(tmp_path):
     ref_a = load_or_generate_reference_samples(
         problem_name="fake_problem",
         cache_key="kA",
-        target_function=_bad,
+        target_map=_bad,
         log_density_form=Identity(),
         prior=_box_prior(),
         input_shape=(2,),
@@ -135,7 +135,7 @@ def test_cache_keys_disambiguate_by_params(tmp_path):
     ref_b = load_or_generate_reference_samples(
         problem_name="fake_problem",
         cache_key="kB",
-        target_function=_bad,
+        target_map=_bad,
         log_density_form=Identity(),
         prior=_box_prior(),
         input_shape=(2,),
@@ -158,7 +158,7 @@ def test_quality_threshold_failure_raises(tmp_path):
         load_or_generate_reference_samples(
             problem_name="bad_quality",
             cache_key="k",
-            target_function=_scalar_normal_target,
+            target_map=_scalar_normal_target,
             log_density_form=Identity(),
             prior=_box_prior(),
             input_shape=(2,),

@@ -47,14 +47,14 @@ def test_no_tempering_returns_intermediate_target_subclass():
     assert isinstance(intermediate, TargetDistribution)
 
 
-def test_no_tempering_preserves_target_function_and_form():
+def test_no_tempering_preserves_target_map_and_form():
     target = _target()
     intermediate = NoTempering().intermediate_target(target, state=0.5)
-    # target_single is reused by reference; target_function is re-vmapped
+    # target_single is reused by reference; target_map is re-vmapped
     # in the constructor (same outputs, distinct closure).
     assert intermediate.target_single is target.target_single
     X = jnp.asarray([[0.5, -0.3], [1.0, 1.0]])
-    assert jnp.allclose(intermediate.target_function(X), target.target_function(X))
+    assert jnp.allclose(intermediate.target_map(X), target.target_map(X))
     assert intermediate.log_density_form is target.log_density_form
     assert intermediate.prior is target.prior
     assert intermediate.support is target.support
@@ -84,8 +84,8 @@ def test_no_tempering_output_transform_is_identity():
 def test_no_tempering_invariance_flags_are_true():
     """Both axes are invariant under any state change."""
     scheme = NoTempering()
-    assert scheme.is_invariant_target_function("a", "b")
-    assert scheme.is_invariant_target_function(0.1, 0.9)
+    assert scheme.is_invariant_target_map("a", "b")
+    assert scheme.is_invariant_target_map(0.1, 0.9)
     assert scheme.is_invariant_form("a", "b")
 
 
@@ -113,8 +113,8 @@ def test_tempering_scheme_default_invariance_uses_equality():
             return NoTempering().intermediate_target(base, state)
 
     scheme = _NullScheme()
-    assert scheme.is_invariant_target_function(0.5, 0.5)
-    assert not scheme.is_invariant_target_function(0.5, 0.6)
+    assert scheme.is_invariant_target_map(0.5, 0.5)
+    assert not scheme.is_invariant_target_map(0.5, 0.6)
     assert scheme.is_invariant_form(None, None)
     assert not scheme.is_invariant_form(None, "a")
 

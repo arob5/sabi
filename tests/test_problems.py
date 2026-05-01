@@ -29,7 +29,7 @@ def test_gaussian2d_log_prob_integrates_to_one():
     xs = jnp.linspace(-6.0, 6.0, 300)
     ys = jnp.linspace(-6.0, 6.0, 300)
     grid = jnp.stack(jnp.meshgrid(xs, ys, indexing="ij"), axis=-1).reshape(-1, 2)
-    log_probs = problem.target_function(grid)
+    log_probs = problem.target_map(grid)
     dx = float((xs[1] - xs[0]) * (ys[1] - ys[0]))
     total = float(jnp.sum(jnp.exp(log_probs))) * dx
     assert total == pytest.approx(1.0, abs=1e-3)
@@ -127,7 +127,7 @@ def test_banana_log_prob_integrates_to_one():
     xs = jnp.linspace(-4.0, 4.0, 300)
     ys = jnp.linspace(-10.0, 4.0, 300)
     grid = jnp.stack(jnp.meshgrid(xs, ys, indexing="ij"), axis=-1).reshape(-1, 2)
-    log_probs = problem.target_function(grid)
+    log_probs = problem.target_map(grid)
     dx = float((xs[1] - xs[0]) * (ys[1] - ys[0]))
     total = float(jnp.sum(jnp.exp(log_probs))) * dx
     assert total == pytest.approx(1.0, abs=5e-3)

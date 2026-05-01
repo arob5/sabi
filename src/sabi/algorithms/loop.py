@@ -195,7 +195,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     # Round 0: initial-design round. Draw n_initial points, evaluate
     # target, fit emulator at the schedule's round-0 state.
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
-    Y_raw = problem.target_function(X)
+    Y_raw = problem.target_map(X)
 
     state_0, _ = algorithm.schedule.at(0)
     target_0 = algorithm.tempering_scheme.intermediate_target(target, state_0)
@@ -242,10 +242,10 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
         # Path 1: Y_train and emulator the acquisition sees, derived at
         # target_state. When target_state == emulator_state for the Y
-        # axis (`invariance.target_function`), reuse directly. Otherwise
+        # axis (`invariance.target_map`), reuse directly. Otherwise
         # dispatch a state-only cheap update (no new rows yet); the
         # dispatcher falls back to refit when no fast path is registered.
-        if invariance.target_function:
+        if invariance.target_map:
             Y_train_for_acq = Y_train
             emulator_for_acq = emulator
         else:
@@ -291,7 +291,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             target_tempering_state=target_state,
         )
         x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key_acq)
-        y_new_raw = problem.target_function(x_new)
+        y_new_raw = problem.target_map(x_new)
 
         X = jnp.concatenate([X, x_new], axis=0)
         Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)

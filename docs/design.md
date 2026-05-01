@@ -55,7 +55,7 @@ Problem:
   support: Constraint                          # required (ProbPipe Constraint)
   prior: Distribution | None                   # optional but preferred
   sampling_bounds: tuple[Array, Array] | None  # fallback for initial design; each has shape input_shape
-  target_function: Callable[[x], y]            # the expensive thing being emulated; f(x) = y
+  target_map: Callable[[x], y]            # the expensive thing being emulated; f(x) = y
   log_density_form: LogDensityForm             # (x, y) → log_unnorm_posterior
   reference_posterior: ReferencePosterior | None
 ```
@@ -74,7 +74,7 @@ Deterministic function `φ(x, y) → log_unnorm_posterior(x)` mapping a single t
 - `LogLikPlusPrior` — `φ(x, y) = y + log_prior(x)`. Emulator learns log-likelihood only.
 - `ForwardModel` — `φ(x, y) = log_lik_from_outputs(data, y) + log_prior(x)`. Emulator learns a multi-output forward model; observation model is supplied separately.
 
-### 4.3 `Emulator` — stochastic predictive model of `target_function`
+### 4.3 `Emulator` — stochastic predictive model of `target_map`
 
 `Emulator` IS-A ProbPipe `ArrayRandomFunction`. It inherits the full random-function shape contract (`input_shape`, `output_shape`, `batch_shape`, joint-input / joint-output flags) and the `__call__(X, joint_inputs, joint_outputs) -> Distribution` predictive interface. The only sabi-specific addition is an abstract `fit(X, Y) -> Self` that captures the algorithmic role (a fittable predictive process). Future migration: `condition_on(prior_rf, X=X_train, y=Y_train)` is the natural ProbPipe-native pattern; sabi's `fit` is a v1.x bridge that does the same conceptual work without requiring full ProbPipe conditioning machinery.
 
@@ -82,7 +82,7 @@ Concrete Gaussian emulators inherit from both `Emulator` and `GaussianRandomFunc
 
 Naming: in sabi, "emulator" is reserved for the predictive model fit to evaluations of the target function. The broader word "surrogate" denotes any approximate quantity replacing its exact analog (hence `SurrogatePosterior` for the surrogate of the *true* posterior).
 
-**The `Emulator` is tempering-agnostic.** It emulates `target_function` — a raw function of `x` — and never sees a tempering state. Tempering is applied downstream in `LogDensityForm` (via `Tempering`, §4.11) and, if an algorithm wants to fit on tempered values instead of raw ones, through a future `EmulatorTarget` adapter that transforms `(x, y, state, prior)` into training values before `fit`. Keeping tempering out of the emulator lets the same emulator be reused across tempering states and lets forward-model emulation work unchanged under tempering.
+**The `Emulator` is tempering-agnostic.** It emulates `target_map` — a raw function of `x` — and never sees a tempering state. Tempering is applied downstream in `LogDensityForm` (via `Tempering`, §4.11) and, if an algorithm wants to fit on tempered values instead of raw ones, through a future `EmulatorTarget` adapter that transforms `(x, y, state, prior)` into training values before `fit`. Keeping tempering out of the emulator lets the same emulator be reused across tempering states and lets forward-model emulation work unchanged under tempering.
 
 **v0/v1.2 concrete implementation:** `TinyGPEmulator(Emulator, GaussianRandomFunction)` — thin tinygp wrapper with data-adaptive fixed hyperparameters; `predict_mean` / `predict_variance` only (no `predict_covariance` until v1.5 emulator metrics). **v1.6:** proper GP via gpjax or a ProbPipe-native `GaussianRandomFunction` subclass; no hand-rolled hyperparameter optimization code in sabi.
 
@@ -210,7 +210,7 @@ metadata:
   training data from cached raw evaluations of the *base* target
   function — the loop uses this instead of evaluating the (possibly
   expensive) base target afresh.
-- `base_target_function`: the un-tempered base target (for reference;
+- `base_target_map`: the un-tempered base target (for reference;
   the loop typically already has it via the base `TargetDistribution`).
 
 Two orthogonal axes can be tempered:
@@ -223,7 +223,7 @@ Two orthogonal axes can be tempered:
 
 Concrete schemes pick one axis at a time. The scheme advertises
 which axis is invariant via
-`is_invariant_target_function(state_a, state_b)` and
+`is_invariant_target_map(state_a, state_b)` and
 `is_invariant_form(state_a, state_b)`; the loop uses these to skip
 redundant emulator refits / form rebuilds.
 
@@ -336,7 +336,7 @@ Per round (loop sketch):
    will replace the full refit.
 6. `SurrogatePosterior` for acquisition = `(emulator_for_acq,
    target_intermediate.log_density_form, ...)`. Acquisition picks
-   `x_new`, loop appends `y_new_raw = problem.target_function(x_new)`
+   `x_new`, loop appends `y_new_raw = problem.target_map(x_new)`
    to `Y_raw`.
 7. Round-end emulator + SP at the *current* state for metrics:
    `Y_train = current_intermediate.output_transform(current_state, X, Y_raw)`;

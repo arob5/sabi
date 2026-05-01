@@ -44,7 +44,7 @@ def _state(n: int = 30, seed: int = 0):
     X = lower + (upper - lower) * jax.random.uniform(
         key, shape=(n,) + problem.input_shape
     )
-    Y = problem.target_function(X)
+    Y = problem.target_map(X)
     emulator = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(
         emulator=emulator,

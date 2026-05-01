@@ -140,7 +140,7 @@ def neals_funnel(
     reference = load_or_generate_reference_samples(
         problem_name="neals_funnel",
         cache_key=cache_key,
-        target_function=log_prob_single,
+        target_map=log_prob_single,
         log_density_form=Identity(),
         prior=prior,
         input_shape=(p,),
