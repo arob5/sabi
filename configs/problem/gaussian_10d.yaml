@@ -1,0 +1,4 @@
+name: gaussian
+d: 10
+# mean / cov omitted — defaults to zero mean, identity covariance.
+bounds_radius: 5.0

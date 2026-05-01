@@ -12,7 +12,7 @@ from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.problems.banana import banana
 from sabi.problems.base import BenchmarkProblem, Problem
-from sabi.problems.gaussian import gaussian2d
+from sabi.problems.gaussian import gaussian, gaussian2d
 
 
 def test_gaussian2d_has_expected_shapes_and_types():
@@ -50,6 +50,66 @@ def test_gaussian2d_reference_distribution_samples_match_moments():
     emp_cov = jnp.cov(samples, rowvar=False)
     assert jnp.allclose(emp_mean, jnp.asarray([1.0, -0.5]), atol=0.1)
     assert jnp.allclose(emp_cov, jnp.asarray([[2.0, 0.3], [0.3, 1.5]]), atol=0.2)
+
+
+def test_gaussian_d_default_recovers_2d_shape():
+    """`gaussian()` defaults to d=2; isotropic identity covariance."""
+    p = gaussian()
+    assert p.input_shape == (2,)
+    assert isinstance(p.reference_distribution, MultivariateNormal)
+
+
+def test_gaussian_higher_d_shapes_and_log_prob():
+    """`gaussian(d=5)` exposes a 5-D Problem; log-density agrees with the
+    underlying MultivariateNormal for the same x."""
+    p = gaussian(d=5)
+    assert p.input_shape == (5,)
+    x = jnp.zeros(5)
+    # At x=0 with mean=0, cov=I_5, log p = -0.5 * 5 * log(2π).
+    expected = -0.5 * 5.0 * float(jnp.log(2 * jnp.pi))
+    assert float(p.log_posterior(x)) == pytest.approx(expected, abs=1e-6)
+
+
+def test_gaussian_rejects_d_less_than_1():
+    with pytest.raises(ValueError, match="d must be"):
+        gaussian(d=0)
+
+
+def test_gaussian_rejects_mean_shape_mismatch():
+    with pytest.raises(ValueError, match="mean must have shape"):
+        gaussian(d=3, mean=(0.0, 0.0))  # only 2 entries for d=3
+
+
+def test_gaussian_rejects_cov_shape_mismatch():
+    with pytest.raises(ValueError, match="cov must be"):
+        gaussian(d=3, cov=((1.0, 0.0), (0.0, 1.0)))  # 2x2 for d=3
+
+
+def test_gaussian_rejects_non_pd_cov():
+    with pytest.raises(ValueError, match="positive-definite"):
+        # 2x2 matrix with negative determinant.
+        gaussian(d=2, cov=((1.0, 2.0), (2.0, 1.0)))
+
+
+def test_gaussian_rejects_invalid_bounds_radius():
+    with pytest.raises(ValueError, match="bounds_radius"):
+        gaussian(bounds_radius=0.0)
+
+
+def test_gaussian2d_alias_preserves_correlated_default():
+    """`gaussian2d()` (the back-compat wrapper) keeps the historical
+    correlated-covariance default — sampling from its reference
+    reproduces those moments."""
+    problem = gaussian2d()
+    samples = jnp.asarray(
+        sample(
+            problem.reference_distribution,
+            key=jax.random.key(0),
+            sample_shape=(4096,),
+        )
+    )
+    emp_cov = jnp.cov(samples, rowvar=False)
+    assert jnp.allclose(emp_cov, jnp.asarray([[1.0, 0.5], [0.5, 1.0]]), atol=0.1)
 
 
 def test_banana_has_expected_shapes_and_types():

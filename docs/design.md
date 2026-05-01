@@ -366,9 +366,9 @@ Each `Acquisition` declares which optimizer modes it supports. Must ship with be
 Two tiers:
 
 **Tier A (local, CI-runnable):** Analytic or very short NUTS.
-- 2-D Gaussian (analytic marginals)
+- Gaussian(d) — analytic `MultivariateNormal` reference (e.g. `gaussian_2d()`, `gaussian_10d()`)
 - Banana(d) — Haario twisted Gaussian, analytic reference at any d (e.g. `banana_2d()`, `banana_10d()`)
-- Neal's funnel
+- Neal's funnel — cached NUTS reference under `reference_posteriors/neals_funnel/` (e.g. `neals_funnel_3d()`)
 - (Add as needed)
 
 **Tier B (cluster):** Realistic problems with long-running MCMC. Same artifact infrastructure as Tier A (Parquet samples + JSON metadata under `reference_posteriors/<problem>/`); large Tier-B artifacts will use git-lfs when the first such benchmark lands. Sampler is ProbPipe's `condition_on` → `tfp_nuts` (with ArviZ diagnostics embedded in metadata); `scripts/regenerate_references` regenerates in place.

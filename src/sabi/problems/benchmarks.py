@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from sabi.problems.banana import banana
 from sabi.problems.base import BenchmarkProblem
+from sabi.problems.gaussian import gaussian
+from sabi.problems.neals_funnel import neals_funnel
 
 
 def banana_2d() -> BenchmarkProblem:
@@ -54,5 +56,66 @@ def banana_10d() -> BenchmarkProblem:
         target_distribution=p.target_distribution,
         reference_distribution=p.reference_distribution,
         name="banana_10d",
+        artifact_version="v1",
+    )
+
+
+def gaussian_2d() -> BenchmarkProblem:
+    """Validated 2-D Gaussian benchmark (mean=0, cov=[[1, 0.5], [0.5, 1]]).
+
+    Preserves the historical `gaussian2d` defaults from the pre-refactor
+    factory: zero mean, unit marginal variances, off-diagonal correlation
+    0.5. Reference is the analytic ProbPipe `MultivariateNormal` itself.
+    """
+    p = gaussian(d=2, mean=(0.0, 0.0), cov=((1.0, 0.5), (0.5, 1.0)))
+    return BenchmarkProblem(
+        target_distribution=p.target_distribution,
+        reference_distribution=p.reference_distribution,
+        name="gaussian_2d",
+        artifact_version="v1",
+    )
+
+
+def gaussian_10d() -> BenchmarkProblem:
+    """Validated 10-D Gaussian benchmark (mean=0, cov=I_10).
+
+    Isotropic moderate-d Gaussian — a sanity benchmark whose analytic
+    posterior is trivially samplable. Useful for emulator-fidelity
+    ablations where the curse of dimension matters but the geometry
+    doesn't.
+    """
+    p = gaussian(d=10)
+    return BenchmarkProblem(
+        target_distribution=p.target_distribution,
+        reference_distribution=p.reference_distribution,
+        name="gaussian_10d",
+        artifact_version="v1",
+    )
+
+
+def neals_funnel_3d() -> BenchmarkProblem:
+    """Validated 3-D Neal's funnel (1 v dim + 2 x dims; sigma_v=3).
+
+    Reference samples are loaded from the committed on-disk artifact at
+    `reference_posteriors/neals_funnel/d2_sv3.0_vb9.0_xb30.0_*.parquet`,
+    generated under the canonical NUTS configuration and the funnel's
+    relaxed quality thresholds (max_rhat=1.15, min_ess=30,
+    max_divergence_rate=0.10). Those sampler-side knobs are part of the
+    benchmark's identity and are pinned here.
+    """
+    p = neals_funnel(
+        d=2,
+        sigma_v=3.0,
+        v_bound=9.0,
+        x_bound=30.0,
+        num_results=2000,
+        num_warmup=2000,
+        num_chains=4,
+        random_seed=0,
+    )
+    return BenchmarkProblem(
+        target_distribution=p.target_distribution,
+        reference_distribution=p.reference_distribution,
+        name="neals_funnel_3d",
         artifact_version="v1",
     )
