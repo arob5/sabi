@@ -94,7 +94,7 @@ class ZScoreScaler:
         Cross-input or cross-output covariances scale by the same
         ``scale²`` for the scalar-output case; for multi-output a
         Kronecker structure is required (see
-        ``sabi.emulators.gpjax.dsp_gp._scale_cov_to_output_space``).
+        ``sabi.emulators.gp._scale_cov_to_output_space``).
         """
         return v * (self.scale ** 2)
 

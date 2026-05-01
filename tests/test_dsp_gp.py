@@ -1091,7 +1091,7 @@ def test_scale_cov_to_output_space_scalar_output_matches_simple_broadcast():
     import jax.numpy as jnp
 
     from sabi.emulators._scalers import ZScoreScaler
-    from sabi.emulators.gpjax.dsp_gp import _scale_cov_to_output_space
+    from sabi.emulators.gp import _scale_cov_to_output_space
 
     cov = jnp.eye(4) * 2.5
     scaler = ZScoreScaler(loc=jnp.array(0.0), scale=jnp.array(3.0))
@@ -1108,7 +1108,7 @@ def test_scale_cov_to_output_space_multi_output_raises():
     import jax.numpy as jnp
 
     from sabi.emulators._scalers import ZScoreScaler
-    from sabi.emulators.gpjax.dsp_gp import _scale_cov_to_output_space
+    from sabi.emulators.gp import _scale_cov_to_output_space
 
     cov = jnp.eye(4)
     scaler = ZScoreScaler(loc=jnp.zeros(2), scale=jnp.ones(2))

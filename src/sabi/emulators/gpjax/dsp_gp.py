@@ -104,33 +104,28 @@ import gpjax as gpx
 import jax
 import jax.numpy as jnp
 from jax import Array
-from probpipe.distributions.gaussian_random_function import GaussianRandomFunction
 
 from sabi.emulators._scalers import MinMaxScaler, ZScoreScaler
-from sabi.emulators.base import Emulator
+from sabi.emulators.gp import GPEmulator
 from sabi.emulators.gpjax._cache import _PredictCache
 from sabi.emulators.gpjax._dsp import (
     DSP_LENGTHSCALE_FLOOR,
     DSP_NOISE_FLOOR,
     dsp_map_objective,
 )
-from sabi.emulators.gpjax._posterior import (
-    _build_dsp_posterior,
-    _scale_cov_to_output_space,
-)
+from sabi.emulators.gpjax._posterior import _build_dsp_posterior
 
 
 __all__ = ["DSPGPEmulator"]
 
 
-class DSPGPEmulator(Emulator, GaussianRandomFunction):
+class DSPGPEmulator(GPEmulator):
     """Dimension-scaled-prior GP emulator (Hvarfner et al. 2024).
 
-    Backed by ``gpjax`` for full hyperparameter optimization (MAP via
-    ``fit_scipy``) with ARD lengthscales. ``predict_mean`` and
-    ``predict_variance`` implement the abstract `GaussianRandomFunction`
-    interface; ``predict`` / ``__call__`` come for free from the
-    parent.
+    Inherits the predict pipeline, ``condition_on``, and ``_replace``
+    machinery from :class:`sabi.emulators.gp.GPEmulator`. This class
+    only owns the DSP-specific bits: the kernel/prior construction
+    and the multi-restart MAP fit.
 
     Constructor args:
         input_shape: ``(d,)`` — input dimensionality. Multi-output
@@ -157,11 +152,12 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             ``n_starts > 1``.
     """
 
-    # Joint inputs supported via `predict_covariance`. Joint outputs
-    # are trivially supported for the scalar-output case (returns the
-    # marginal variance reshaped to (n, 1, 1)).
-    supports_joint_inputs: bool = True
-    supports_joint_outputs: bool = True
+    # Constructor takes ``kernel: str``; we store it as ``kernel_name``
+    # to leave ``kernel`` available for any future "the actual kernel
+    # object" attribute. ``GPEmulator._replace`` uses this map to
+    # bridge constructor-arg ↔ attribute-name when reflecting on
+    # ``__init__``.
+    _replace_field_map = {"kernel": "kernel_name"}
 
     def __init__(
         self,
@@ -209,34 +205,6 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         self._y_scaler = _y_scaler
         self._opt_posterior = _opt_posterior
         self._predict_cache = _predict_cache
-
-    def _replace(self, **overrides) -> Self:
-        """Return a copy of this emulator with the given fields replaced.
-
-        Centralizes the "rebuild emulator with replacements" pattern
-        that ``fit``, ``condition_on``, and the dispatch handlers
-        all use. Adding a new constructor arg means updating one
-        site (the ``__init__`` and this helper's defaults block)
-        rather than four. Callers pass keyword overrides; everything
-        else carries from ``self``.
-        """
-        defaults = {
-            "input_shape": self.input_shape,
-            "output_shape": self.output_shape,
-            "name": self.name,
-            "kernel": self.kernel_name,
-            "max_iters": self.max_iters,
-            "jitter": self.jitter,
-            "verbose": self.verbose,
-            "n_starts": self.n_starts,
-            "restart_seed": self.restart_seed,
-            "_x_scaler": self._x_scaler,
-            "_y_scaler": self._y_scaler,
-            "_opt_posterior": self._opt_posterior,
-            "_predict_cache": self._predict_cache,
-        }
-        defaults.update(overrides)
-        return type(self)(**defaults)
 
     # --- fit ---------------------------------------------------------------
 
@@ -407,115 +375,6 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             inits.append((ls, noise))
         return inits
 
-    # --- GaussianRandomFunction abstract methods --------------------------
-
-    def predict_mean(self, X: Array) -> Array:
-        """Return the predictive mean at each row of `X`.
-
-        Uses the Cholesky cache built at fit time, so cost is
-        O(n²·m + n·m) rather than re-Cholesky-ing per call.
-
-        Args:
-            X: shape ``(n, d)`` (raw, pre-scaled).
-
-        Returns:
-            Shape ``(n,)``. Mean is in the original
-            (pre-standardization) output space.
-        """
-        self._require_fit()
-        Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
-        mean_latent, _ = self._predict_cache.predict_latent(Xs)  # type: ignore[union-attr]
-        # Gaussian observation noise has zero mean, so latent and
-        # observation predictive means coincide.
-        return self._y_scaler.inverse_mean(mean_latent)  # type: ignore[union-attr]
-
-    def predict_variance(self, X: Array) -> Array:
-        """Return the marginal posterior variance of the **latent** function.
-
-        Per the sabi `Emulator` convention, this is the variance of
-        the latent function value f(x*) under the posterior —
-        observation noise is **not** added. Equivalent to
-        ``posterior.predict(Xt).variance`` in gpjax (the latent path),
-        not ``posterior.likelihood(posterior.predict(Xt)).variance``.
-
-        Args:
-            X: shape ``(n, d)`` (raw, pre-scaled).
-
-        Returns:
-            Shape ``(n,)``. Variance is in the original
-            (pre-standardization) output space.
-        """
-        self._require_fit()
-        Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
-        _, latent_var = self._predict_cache.predict_latent(Xs)  # type: ignore[union-attr]
-        return self._y_scaler.inverse_var(jnp.maximum(latent_var, 0.0))  # type: ignore[union-attr]
-
-    def predict_covariance(
-        self,
-        X: Array,
-        *,
-        joint_inputs: bool = False,
-        joint_outputs: bool = False,
-    ) -> Array:
-        """Posterior covariance of the **latent** function (no obs noise).
-
-        Per the sabi `Emulator` convention, observation noise is not
-        included on the diagonal — the diagonal of the returned
-        matrix equals ``predict_variance(X)`` exactly. Reuses the
-        Cholesky cache: the joint case adds one ``K(Xt, Xt)``
-        evaluation and one triangular solve over the cached
-        ``L_sigma`` on top of what ``predict_mean`` already does.
-
-        For the scalar-output case (``output_shape=()``) the
-        returned shapes per the GaussianRandomFunction contract are:
-
-        - ``joint_inputs=True`` (regardless of ``joint_outputs``):
-          ``(n, n)`` — full cross-input latent covariance with prior
-          jitter on the diagonal (matches ``posterior.predict``'s
-          dense covariance).
-        - ``joint_inputs=False, joint_outputs=True``: ``(n, 1, 1)``
-          — the marginal latent variance at each input, reshaped
-          (joint over outputs is vacuous when the output is scalar).
-        - ``joint_inputs=False, joint_outputs=False``: not
-          implemented; callers should use ``predict_variance``.
-
-        Args:
-            X: shape ``(n, d)`` (raw, pre-scaled).
-            joint_inputs: include cross-input covariance.
-            joint_outputs: include cross-output covariance (trivial
-                for scalar output).
-
-        Returns:
-            Latent covariance array in the original
-            (pre-standardization) output space; ``y_scaler.scale²``
-            is folded in here.
-        """
-        self._require_fit()
-        if not joint_inputs and not joint_outputs:
-            raise NotImplementedError(
-                "predict_covariance with joint_inputs=False, "
-                "joint_outputs=False is not implemented; "
-                "use predict_variance for the marginal case."
-            )
-
-        if not joint_inputs:
-            # joint_outputs only: scalar output → reshape variance to (n, 1, 1).
-            return self.predict_variance(X)[:, None, None]
-
-        # joint_inputs=True (joint_outputs is trivial here): full (n, n).
-        Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
-        _, latent_cov = self._predict_cache.predict_latent_joint(Xs)  # type: ignore[union-attr]
-        return _scale_cov_to_output_space(
-            latent_cov, self._y_scaler, output_shape=self.output_shape  # type: ignore[arg-type]
-        )
-
-    def _require_fit(self) -> None:
-        if self._opt_posterior is None or self._predict_cache is None:
-            raise RuntimeError(
-                f"{type(self).__name__} called before fit; conditioning "
-                "state is unset."
-            )
-
     @property
     def obs_noise_variance(self) -> Array | None:
         """MAP-fitted observation-noise variance (``obs_stddev²``).
@@ -530,59 +389,6 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         if self._predict_cache is None:
             return None
         return self._predict_cache.noise_var
-
-    # --- Fixed-hyperparameter conditioning ---------------------------------
-
-    def condition_on(self, X_new: Array, Y_new: Array) -> Self:
-        """Append ``(X_new, Y_new)`` to the training set without refitting.
-
-        Returns a new emulator that conditions on the augmented data
-        with **frozen** hyperparameters and **frozen** input/output
-        scalers (i.e., the kernel lengthscales, observation noise,
-        x-scaler, and y-scaler all carry over from the current fit).
-        Internally uses ``_PredictCache.append_rows``, which updates
-        the cached Cholesky factor via a block update — see that
-        method's docstring for the math and cost analysis.
-
-        Crucially this does **not** re-run hyperparameter
-        optimization; callers wanting refit semantics should call
-        ``fit`` on the concatenated data instead. Loop code should
-        prefer ``update_emulator(em, AppendRows(X_new, Y_new), ...)``,
-        which dispatches through this method via the registered
-        ``AppendRows`` handler.
-
-        Args:
-            X_new: ``(m, d)`` new training inputs in the original
-                (raw) input space — they are passed through the same
-                ``x-scaler`` used at fit time, so callers don't need
-                to pre-scale.
-            Y_new: ``(m,)`` new training outputs in the original
-                (raw) output space — passed through the same
-                ``y-scaler`` used at fit time.
-
-        Returns:
-            A new ``DSPGPEmulator`` with the augmented training data
-            and an updated cache; the same hyperparameters and
-            scalers.
-        """
-        self._require_fit()
-        d = self.input_shape[0]
-        if X_new.ndim != 2 or X_new.shape[1] != d:
-            raise ValueError(
-                f"DSPGPEmulator.condition_on: expected X_new.shape=(m, {d}), "
-                f"got {tuple(X_new.shape)}."
-            )
-        if Y_new.shape != (X_new.shape[0],):
-            raise ValueError(
-                f"DSPGPEmulator.condition_on: expected Y_new.shape="
-                f"({X_new.shape[0]},), got {tuple(Y_new.shape)}."
-            )
-
-        Xs_new = self._x_scaler.transform(X_new).astype(jnp.float64)  # type: ignore[union-attr]
-        Ys_new = self._y_scaler.transform(Y_new).astype(jnp.float64)  # type: ignore[union-attr]
-
-        new_cache = self._predict_cache.append_rows(Xs_new, Ys_new)  # type: ignore[union-attr]
-        return self._replace(_predict_cache=new_cache)
 
 
 # Trigger handler registration when this module is imported. Module
