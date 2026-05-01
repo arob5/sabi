@@ -31,9 +31,10 @@ v1.2 caveats:
 - Marginal mode only (``supports_joint_inputs=False,
   supports_joint_outputs=False``). Joint covariance lands when emulator
   metrics need it.
-- ``predict_mean`` / ``predict_variance`` rebuild the gram matrix on
-  each call. Cholesky caching is a v1.5+ optimization.
 - Scalar-output only (``output_shape=()``).
+- ``predict_mean`` / ``predict_variance`` reuse a Cholesky cache built
+  at fit time (see ``_PredictCache``), so per-call cost is O(n²·m +
+  n·m) rather than O(n³). Refit invalidates the cache.
 """
 
 from __future__ import annotations
@@ -56,6 +57,8 @@ import equinox as eqx
 import gpjax as gpx
 import jax
 import jax.numpy as jnp
+import jax.scipy as jsp
+import lineax as lx
 from jax import Array
 from probpipe.distributions.gaussian_random_function import GaussianRandomFunction
 
@@ -92,6 +95,110 @@ class _MinMaxScaler:
 
     def transform(self, X: Array) -> Array:
         return (X - self.lo) / (self.hi - self.lo)
+
+
+@dataclass(frozen=True)
+class _PredictCache:
+    """Pre-solved prediction state for an optimized ConjugatePosterior.
+
+    Caches the bits of the posterior predictive that depend only on the
+    training data and fitted hyperparameters — i.e., are constant across
+    test inputs:
+
+    - ``L_sigma``: lower Cholesky factor of ``K(X, X) + diag(noise) +
+      jitter·I``, shape ``(n, n)``.
+    - ``alpha``: ``L_sigma⁻¹ (y - m(X))``, shape ``(n,)``. Combines with
+      ``L_sigma⁻¹ K(X, X*)`` to give the predictive mean shift.
+    - ``unwrapped_posterior``: the gpjax posterior with paramax
+      unwrappables resolved to plain arrays. Stored so we can call
+      ``.prior.kernel.cross_covariance``, ``.prior.mean_function``,
+      ``.prior.kernel.diagonal``, and ``.likelihood`` without redoing
+      the unwrap on every call.
+    - ``Xs_train``: training inputs (in scaled coords), shape ``(n, d)``.
+    - ``noise_var``: scalar observation noise variance (``obs_stddev²``).
+
+    With this cache, ``predict_*`` cost drops from O(n³) (rebuilding the
+    Cholesky every call) to O(n²·m + n·m) per batch of m test points.
+    """
+
+    unwrapped_posterior: object
+    L_sigma: Array
+    alpha: Array
+    Xs_train: Array
+    noise_var: Array
+
+    @classmethod
+    def build(cls, opt_posterior, Xs_train: Array, Ys_train: Array) -> "_PredictCache":
+        """Compute the cache from a fitted gpjax posterior + training data.
+
+        ``Ys_train`` must be the (already-standardized) target column of
+        shape ``(n,)``; we reshape it to match gpjax's internal
+        (n, 1) convention.
+        """
+        import paramax
+
+        unwrapped = paramax.unwrap(opt_posterior)
+        n = Xs_train.shape[0]
+
+        # Mean function over training inputs (Constant returns shape (n, 1)).
+        mx = unwrapped.prior.mean_function(Xs_train)
+        y_flat, mx_flat = unwrapped.likelihood.prepare_targets(
+            Ys_train.reshape(-1, 1), mx
+        )
+        y_flat = jnp.atleast_1d(y_flat.squeeze())
+        mx_flat = jnp.atleast_1d(mx_flat.squeeze())
+
+        # K(X, X) + diag(noise) + jitter·I — same construction as the
+        # gpjax `predict` function we're shadowing.
+        Kxx = unwrapped.prior.kernel.gram(Xs_train).as_matrix()
+        from gpjax.linalg.utils import add_jitter
+
+        Kxx = add_jitter(Kxx, unwrapped.prior.jitter)
+        noise_diag = unwrapped.likelihood.noise_vector(n)
+        Sigma = Kxx + jnp.diag(noise_diag)
+        L_sigma = jnp.linalg.cholesky(Sigma)
+
+        alpha = jsp.linalg.solve_triangular(L_sigma, y_flat - mx_flat, lower=True)
+
+        # Gaussian likelihood: noise_vector returns obs_stddev² · 1ₙ; a
+        # single scalar suffices for adding observation noise to test
+        # marginal variances.
+        noise_var = jnp.asarray(unwrapped.likelihood.obs_stddev) ** 2
+
+        return cls(
+            unwrapped_posterior=unwrapped,
+            L_sigma=L_sigma,
+            alpha=alpha,
+            Xs_train=Xs_train,
+            noise_var=noise_var,
+        )
+
+    def predict_latent(self, Xt: Array) -> tuple[Array, Array]:
+        """Latent (noiseless) marginal mean and variance at test inputs.
+
+        Args:
+            Xt: ``(m, d)`` test inputs in scaled coordinates.
+
+        Returns:
+            ``(mean, var)`` each of shape ``(m,)``. Variance is the
+            diagonal of the latent covariance with prior jitter folded
+            in (matching gpjax's diagonal-covariance branch).
+        """
+        kernel = self.unwrapped_posterior.prior.kernel
+        mean_fn = self.unwrapped_posterior.prior.mean_function
+        prior_jitter = self.unwrapped_posterior.prior.jitter
+
+        Kxt = kernel.cross_covariance(self.Xs_train, Xt)  # (n, m)
+        L_inv_Kxt = jsp.linalg.solve_triangular(self.L_sigma, Kxt, lower=True)
+
+        mean_t_raw = mean_fn(Xt)  # (m, 1) for Constant
+        mean_t = jnp.atleast_1d(mean_t_raw.squeeze())
+        mean = mean_t + L_inv_Kxt.T @ self.alpha  # (m,)
+
+        Ktt_diag = lx.diagonal(kernel.diagonal(Xt))  # (m,)
+        var = Ktt_diag - jnp.einsum("ij,ij->j", L_inv_Kxt, L_inv_Kxt)
+        var = var + prior_jitter
+        return mean, var
 
 
 @dataclass(frozen=True)
@@ -212,6 +319,7 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         _y_scaler: _ZScoreScaler | None = None,
         _opt_posterior=None,
         _train_dataset=None,
+        _predict_cache: _PredictCache | None = None,
     ):
         if output_shape != ():
             raise ValueError(
@@ -235,6 +343,7 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         self._y_scaler = _y_scaler
         self._opt_posterior = _opt_posterior
         self._train_dataset = _train_dataset
+        self._predict_cache = _predict_cache
 
     # --- fit ---------------------------------------------------------------
 
@@ -311,6 +420,10 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             verbose=self.verbose,
         )
 
+        # Pre-solve the Cholesky + alpha vector once. predict_* will
+        # reuse these instead of redoing them on every call.
+        predict_cache = _PredictCache.build(opt_posterior, Xs, Ys)
+
         return type(self)(
             input_shape=self.input_shape,
             output_shape=self.output_shape,
@@ -323,12 +436,16 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             _y_scaler=y_scaler,
             _opt_posterior=opt_posterior,
             _train_dataset=data,
+            _predict_cache=predict_cache,
         )
 
     # --- GaussianRandomFunction abstract methods --------------------------
 
     def predict_mean(self, X: Array) -> Array:
         """Return the predictive mean at each row of `X`.
+
+        Uses the Cholesky cache built at fit time, so cost is O(n²·m +
+        n·m) rather than re-Cholesky-ing per call.
 
         Args:
             X: shape ``(n, d)`` (raw, pre-scaled).
@@ -339,12 +456,18 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         """
         self._require_fit()
         Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
-        latent = self._opt_posterior.predict(Xs, train_data=self._train_dataset)
-        pred = self._opt_posterior.likelihood(latent)
-        return self._y_scaler.inverse_mean(pred.mean)  # type: ignore[union-attr]
+        mean_latent, _ = self._predict_cache.predict_latent(Xs)  # type: ignore[union-attr]
+        # Gaussian observation noise has zero mean, so latent and
+        # observation predictive means coincide.
+        return self._y_scaler.inverse_mean(mean_latent)  # type: ignore[union-attr]
 
     def predict_variance(self, X: Array) -> Array:
         """Return the marginal predictive variance at each row of `X`.
+
+        Variance includes the observation noise (matches what
+        ``posterior.likelihood(latent).variance`` returns in gpjax) so
+        downstream code that expects "predictive variance with noise"
+        sees the same number.
 
         Args:
             X: shape ``(n, d)`` (raw, pre-scaled).
@@ -355,12 +478,12 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         """
         self._require_fit()
         Xs = self._x_scaler.transform(X).astype(jnp.float64)  # type: ignore[union-attr]
-        latent = self._opt_posterior.predict(Xs, train_data=self._train_dataset)
-        pred = self._opt_posterior.likelihood(latent)
-        return self._y_scaler.inverse_var(jnp.maximum(pred.variance, 0.0))  # type: ignore[union-attr]
+        _, latent_var = self._predict_cache.predict_latent(Xs)  # type: ignore[union-attr]
+        obs_var = latent_var + self._predict_cache.noise_var  # type: ignore[union-attr]
+        return self._y_scaler.inverse_var(jnp.maximum(obs_var, 0.0))  # type: ignore[union-attr]
 
     def _require_fit(self) -> None:
-        if self._opt_posterior is None:
+        if self._opt_posterior is None or self._predict_cache is None:
             raise RuntimeError(
                 f"{type(self).__name__} called before fit; conditioning "
                 "state is unset."

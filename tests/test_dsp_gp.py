@@ -122,6 +122,46 @@ def test_dspgp_fit_rejects_wrong_x_shape():
         em.fit(X, Y)
 
 
+# --- Cholesky cache equivalence ----------------------------------------------
+
+
+def test_dspgp_cached_predict_matches_naive_gpjax_predict():
+    """The Cholesky-cached predict path should be numerically equivalent
+    (within fp slop) to the naive ``posterior.predict + likelihood``
+    path that gpjax exposes. The cache only changes *how much work*
+    happens per call, not *what it computes*."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import gpjax as gpx
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    key = jr.key(11)
+    n, d = 25, 3
+    X = jr.uniform(key, (n, d))
+    y = jnp.sin(2 * X[:, 0]) + 0.3 * X[:, 1] - 0.1 * X[:, 2]
+
+    em = DSPGPEmulator(input_shape=(d,)).fit(X, y)
+
+    X_test = jr.uniform(jr.key(12), (8, d))
+    cached_mean = em.predict_mean(X_test)
+    cached_var = em.predict_variance(X_test)
+
+    # Recompute the naive way: scale X_test, run posterior.predict +
+    # likelihood, undo the y standardization. This is what predict_*
+    # used to do before caching.
+    Xs_test = em._x_scaler.transform(X_test).astype(jnp.float64)
+    latent = em._opt_posterior.predict(Xs_test, train_data=em._train_dataset)
+    pred = em._opt_posterior.likelihood(latent)
+    naive_mean = em._y_scaler.inverse_mean(pred.mean)
+    naive_var = em._y_scaler.inverse_var(jnp.maximum(pred.variance, 0.0))
+
+    assert jnp.allclose(cached_mean, naive_mean, rtol=1e-6, atol=1e-8)
+    assert jnp.allclose(cached_var, naive_var, rtol=1e-5, atol=1e-7)
+
+
 # --- Sample efficiency at high d ---------------------------------------------
 
 

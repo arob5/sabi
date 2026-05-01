@@ -115,11 +115,20 @@ verbose: false
 
 Select via Hydra override: `python -m sabi.runner.main emulator=dsp_gp`.
 
+## Performance notes
+
+- `DSPGPEmulator` caches the Cholesky factor `L = chol(K + diag(noise) +
+  jitter·I)` and pre-solved `alpha = L⁻¹(y - m(X))` at fit time, so
+  each `predict_*` call is `O(n²·m + n·m)` rather than rebuilding the
+  factor at `O(n³)`. Refitting (calling `fit` again, which returns a
+  new emulator instance) invalidates the cache; predicting on the
+  unfitted instance raises.
+- `GPEmulator` (tinygp) currently rebuilds the gram per call. Adding
+  the same caching is straightforward but has not been a bottleneck
+  in the benchmarks we run.
+
 ## Forward-look
 
-- v1.5: Cholesky caching for `predict_*`. Currently both emulators
-  rebuild the gram per call; the DSP variant especially benefits because
-  fit_scipy already produces a converged decomposition that's discarded.
 - v1.5: joint covariance support so emulator-level metrics (e.g.,
   posterior MMD with GP-uncertainty propagation) can run.
 - ProbPipe `condition_on` integration replaces the bespoke `fit` once the
