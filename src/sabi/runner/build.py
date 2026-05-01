@@ -75,6 +75,20 @@ def _build_emulator_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
                 jitter=float(cfg.get("jitter", 1e-3)),
             )
         return factory
+    if name == "dsp_gp":
+        # Imported lazily so the gpjax extra is only required when the
+        # config actually selects the DSP-prior emulator.
+        from sabi.emulators.gpjax import DSPGPEmulator
+
+        def factory() -> "DSPGPEmulator":
+            return DSPGPEmulator(
+                input_shape=input_shape,
+                kernel=str(cfg.get("kernel", "rbf")),
+                max_iters=int(cfg.get("max_iters", 500)),
+                jitter=float(cfg.get("jitter", 1e-6)),
+                verbose=bool(cfg.get("verbose", False)),
+            )
+        return factory
     raise ValueError(f"Unknown emulator.name={name!r}.")
 
 

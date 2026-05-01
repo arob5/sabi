@@ -1,0 +1,5 @@
+name: dsp_gp
+kernel: rbf
+max_iters: 500
+jitter: 1.0e-6
+verbose: false
