@@ -20,7 +20,7 @@ from sabi.algorithms import (
 from sabi.metrics.posterior_mmd import ReferenceMMD
 from sabi.problems.banana import banana
 from sabi.problems.gaussian2d import gaussian2d
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators import GPEmulator
 
 
 def _algorithm(

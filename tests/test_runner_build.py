@@ -42,7 +42,7 @@ def test_build_algorithm_wires_components():
     assert isinstance(alg, Algorithm)
     assert alg.n_initial == 4
     assert alg.n_rounds == 2
-    from sabi.emulators.gp import GPEmulator
+    from sabi.emulators import GPEmulator
 
     assert isinstance(alg.emulator_factory(), GPEmulator)
     assert len(alg.metrics) == 1

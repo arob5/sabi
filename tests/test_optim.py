@@ -29,7 +29,7 @@ from sabi.acquisitions.optim import (
 )
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators import GPEmulator
 
 
 # -------------------------------------------------------------------------

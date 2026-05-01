@@ -30,7 +30,7 @@ from sabi.problems.banana import banana
 from sabi.problems.base import Problem
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.problems.neals_funnel import neals_funnel
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators import GPEmulator
 
 
 def build_problem(cfg: DictConfig) -> Problem:

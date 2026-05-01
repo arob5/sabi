@@ -4,7 +4,7 @@ import pytest
 from probpipe import mean, variance
 from probpipe.distributions.continuous import Normal
 
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators import GPEmulator
 
 
 def _sample_2d_gp_data(n: int = 40, key_seed: int = 0):

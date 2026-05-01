@@ -20,7 +20,7 @@ import pytest
 from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.acquisitions.base import AcquisitionTarget
 from sabi.algorithms import Algorithm, run
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators import GPEmulator
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.tempering.likelihood import LikelihoodTemperingViaForm
 from sabi.tempering.schedule import (

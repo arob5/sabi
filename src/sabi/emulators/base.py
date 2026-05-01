@@ -10,7 +10,7 @@ evaluations of the target.
 
 Concrete Gaussian emulators inherit from both `Emulator` and
 `GaussianRandomFunction` (diamond inheritance over `ArrayRandomFunction`,
-resolved by Python's C3 MRO). See `sabi.emulators.gp.GPEmulator`.
+resolved by Python's C3 MRO). See `sabi.emulators.tinygp.gp.GPEmulator`.
 
 Forward-look (post-v1.2): ProbPipe's `condition_on(prior_rf, X=X, y=Y)` is
 the natural way to build a posterior random function from training data.

@@ -1,10 +1,26 @@
+"""Emulators: fittable predictive models for the target map.
+
+Subpackage layout — emulators live under per-backend subdirectories so
+that backend-specific dependencies stay scoped:
+
+- `sabi.emulators.tinygp`: lightweight tinygp-backed emulators. Always
+  available.
+- `sabi.emulators.gpjax`: gpjax-backed emulators (DSP-prior GP, etc.).
+  Requires the optional ``gpjax`` extra.
+
+Top-level convenience re-exports are kept for the always-available
+backends (`GPEmulator` here is the tinygp-backed one); gpjax-backed
+emulators are imported from their full path so that touching this
+namespace doesn't trigger a missing-optional-dep error.
+"""
+
 from sabi.emulators.base import Emulator
 from sabi.emulators.dispatch import (
     EmulatorUpdateMethod,
     emulator_update_registry,
     update_emulator,
 )
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators.tinygp.gp import GPEmulator
 from sabi.emulators.updates import (
     AppendRows,
     EmulatorUpdate,

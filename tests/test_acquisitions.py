@@ -9,7 +9,7 @@ from sabi.acquisitions.random import PriorSampling
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.sampling import PriorSampler
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators import GPEmulator
 
 
 def _state(problem, key_seed=0, n=20):

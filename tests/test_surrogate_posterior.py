@@ -48,7 +48,7 @@ from sabi.posterior import (
 )
 from sabi.posterior._pushforward import pushforward_marginal
 from sabi.problems.forms import ForwardModel, Identity, LogLikPlusPrior
-from sabi.emulators.gp import GPEmulator
+from sabi.emulators import GPEmulator
 
 
 # -------------------------------------------------------------------------
