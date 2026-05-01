@@ -20,6 +20,7 @@ from sabi.emulators.dispatch import (
     emulator_update_registry,
     update_emulator,
 )
+from sabi.emulators.gp import GPEmulator
 from sabi.emulators.tinygp.gp import TinyGPEmulator
 from sabi.emulators.updates import (
     AppendRows,
@@ -33,6 +34,7 @@ __all__ = [
     "Emulator",
     "EmulatorUpdate",
     "EmulatorUpdateMethod",
+    "GPEmulator",
     "TinyGPEmulator",
     "RescaleOutputs",
     "RescaleThenAppend",
