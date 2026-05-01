@@ -87,6 +87,8 @@ def _build_emulator_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
                 max_iters=int(cfg.get("max_iters", 500)),
                 jitter=float(cfg.get("jitter", 1e-6)),
                 verbose=bool(cfg.get("verbose", False)),
+                n_starts=int(cfg.get("n_starts", 1)),
+                restart_seed=int(cfg.get("restart_seed", 0)),
             )
         return factory
     raise ValueError(f"Unknown emulator.name={name!r}.")

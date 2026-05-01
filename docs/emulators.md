@@ -69,6 +69,20 @@ Fit runs MAP via `gpx.fit_scipy` minimizing
 - You're willing to pay the extra fit-time cost (L-BFGS-B sweep over
   d+1 hyperparameters; typically dozens of iterations).
 
+### Multi-restart MAP
+
+`DSPGPEmulator(..., n_starts=k, restart_seed=s)` runs `k` MAP
+optimizations and keeps the one with the highest objective. The
+first start uses the deterministic prior-mode init; the remaining
+`k−1` starts sample lengthscale and noise from the priors. With
+`n_starts=1` (default) the behavior is bit-equivalent to the
+pre-multistart single fit.
+
+Useful when noisier data risks the optimizer settling on a
+boundary solution at the noise floor — common in small-n / high-d
+benchmarks where the data-likelihood gradient is shallow. Cost
+scales linearly: 4 restarts ≈ 4× one fit.
+
 ### When NOT to prefer DSP
 
 - d ≤ 2 with dense data — the tinygp default is competitive and 5–10×
@@ -111,6 +125,8 @@ kernel: rbf       # or matern52
 max_iters: 500    # L-BFGS-B max iterations
 jitter: 1.0e-6
 verbose: false
+n_starts: 1       # multi-restart MAP; 1 = single deterministic fit
+restart_seed: 0
 ```
 
 Select via Hydra override: `python -m sabi.runner.main emulator=dsp_gp`.

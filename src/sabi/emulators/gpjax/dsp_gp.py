@@ -573,6 +573,17 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             stability (separate from the noise floor, which lives on
             ``obs_stddev``).
         verbose: passed through to ``gpx.fit_scipy``.
+        n_starts: number of MAP optimization runs to launch. The first
+            run uses the deterministic prior-mode init; subsequent runs
+            sample lengthscale and noise from their priors and run the
+            same optimizer. The result with the highest MAP objective
+            is kept. Default ``1`` is equivalent to the single-fit
+            behavior; increase when the LogNormal prior surface might
+            trap L-BFGS-B at the floor on noisy data.
+        restart_seed: PRNG seed used to draw the random restart inits.
+            Determinism is preserved when ``n_starts == 1`` (no
+            sampling happens) — this seed only matters when
+            ``n_starts > 1``.
     """
 
     # Joint inputs supported via `predict_covariance`. Joint outputs are
@@ -591,6 +602,8 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         max_iters: int = 500,
         jitter: float = 1e-6,
         verbose: bool = False,
+        n_starts: int = 1,
+        restart_seed: int = 0,
         # Internal post-fit state (callers don't pass these).
         _x_scaler: _MinMaxScaler | None = None,
         _y_scaler: _ZScoreScaler | None = None,
@@ -607,6 +620,10 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             raise ValueError(
                 f"DSPGPEmulator expects input_shape=(d,); got {input_shape}."
             )
+        if n_starts < 1:
+            raise ValueError(
+                f"DSPGPEmulator: n_starts must be >= 1, got {n_starts}."
+            )
         super().__init__(
             input_shape=input_shape,
             output_shape=output_shape,
@@ -616,6 +633,8 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
         self.max_iters = max_iters
         self.jitter = jitter
         self.verbose = verbose
+        self.n_starts = n_starts
+        self.restart_seed = restart_seed
         self._x_scaler = _x_scaler
         self._y_scaler = _y_scaler
         self._opt_posterior = _opt_posterior
@@ -627,6 +646,13 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
     def fit(self, X: Array, Y: Array) -> Self:
         """Fit the DSP-prior GP to ``(X, Y)`` via MAP optimization.
 
+        With ``n_starts == 1`` (default), runs a single ``gpx.fit_scipy``
+        from the deterministic prior-mode initialization. With
+        ``n_starts > 1``, the first run uses the prior-mode init and
+        each subsequent run samples the lengthscale and noise stddev
+        from their respective priors. The optimized posterior with
+        the highest MAP objective is kept.
+
         Args:
             X: shape ``(n, d)``. Internally rescaled to ``[0, 1]^d`` via
                 min-max scaling on the training set.
@@ -634,8 +660,9 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
                 unit-variance.
 
         Returns:
-            A new ``DSPGPEmulator`` carrying the optimized posterior
-            and the input/output scaling state needed for prediction.
+            A new ``DSPGPEmulator`` carrying the best optimized
+            posterior across all starts, plus the input/output
+            scaling state needed for prediction.
         """
         # gpjax requires float64 throughout — its parameter wrappers
         # default to float64 internally and mismatched dtypes break
@@ -665,41 +692,58 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
 
         data = gpx.Dataset(X=Xs, y=Ys.reshape(-1, 1))
 
-        # Initialize lengthscales and noise stddev at the prior modes.
-        # mode of LogNormal(loc, scale) = exp(loc - scale^2)
-        # Lengthscale: loc = √2 + 0.5·log(d), scale = √3
-        ls_loc = jnp.sqrt(jnp.asarray(2.0)) + 0.5 * jnp.log(jnp.asarray(float(d)))
-        ls_mode = jnp.exp(ls_loc - 3.0)  # exp(loc - scale^2) with scale=√3
-        ls_init = jnp.maximum(
-            jnp.full((d,), ls_mode, dtype=jnp.float64),
-            jnp.asarray(DSP_LENGTHSCALE_FLOOR + 1e-6, dtype=jnp.float64),
-        )
-        # Noise: loc = -4, scale = 1 → mode = exp(-4 - 1) = exp(-5) ≈ 6.7e-3
-        noise_init = jnp.maximum(
-            jnp.asarray(jnp.exp(-5.0), dtype=jnp.float64),
-            jnp.asarray(DSP_NOISE_FLOOR + 1e-6, dtype=jnp.float64),
-        )
+        # Generate (n_starts) initialization tuples (ls_init, noise_init).
+        inits = self._restart_inits(d)
 
-        posterior = _build_dsp_posterior(
-            d=d,
-            n=data.n,
-            kernel_name=self.kernel_name,
-            init_lengthscale=ls_init,
-            init_obs_stddev=noise_init,
-            jitter=self.jitter,
-        )
+        # Run each start, score by the MAP objective on the optimized
+        # posterior, keep the best.
+        import paramax
 
-        opt_posterior, _history = gpx.fit_scipy(
-            model=posterior,
-            objective=lambda p, dat: -dsp_map_objective(p, dat),
-            train_data=data,
-            max_iters=self.max_iters,
-            verbose=self.verbose,
-        )
+        best_posterior = None
+        best_obj: float = -float("inf")
+        for ls_init, noise_init in inits:
+            posterior = _build_dsp_posterior(
+                d=d,
+                n=data.n,
+                kernel_name=self.kernel_name,
+                init_lengthscale=ls_init,
+                init_obs_stddev=noise_init,
+                jitter=self.jitter,
+            )
+            try:
+                opt_posterior, _history = gpx.fit_scipy(
+                    model=posterior,
+                    objective=lambda p, dat: -dsp_map_objective(p, dat),
+                    train_data=data,
+                    max_iters=self.max_iters,
+                    # Only chatter on the first start when verbose; otherwise
+                    # the scipy progress bar floods stderr per restart.
+                    verbose=self.verbose and best_posterior is None,
+                )
+            except Exception:
+                # A bad random init can occasionally produce a
+                # non-PSD Sigma during fit_scipy — skip and let
+                # another start succeed. If they all fail, the
+                # final `best_posterior is None` check raises with a
+                # clear message.
+                continue
+
+            unwrapped = paramax.unwrap(opt_posterior)
+            obj = float(dsp_map_objective(unwrapped, data))
+            if obj > best_obj:
+                best_obj = obj
+                best_posterior = opt_posterior
+
+        if best_posterior is None:
+            raise RuntimeError(
+                f"DSPGPEmulator.fit: all {self.n_starts} restart(s) failed "
+                "to produce a usable posterior. Inspect the data for "
+                "near-collinear inputs or try a larger jitter."
+            )
 
         # Pre-solve the Cholesky + alpha vector once. predict_* will
         # reuse these instead of redoing them on every call.
-        predict_cache = _PredictCache.build(opt_posterior, Xs, Ys)
+        predict_cache = _PredictCache.build(best_posterior, Xs, Ys)
 
         return type(self)(
             input_shape=self.input_shape,
@@ -709,12 +753,66 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             max_iters=self.max_iters,
             jitter=self.jitter,
             verbose=self.verbose,
+            n_starts=self.n_starts,
+            restart_seed=self.restart_seed,
             _x_scaler=x_scaler,
             _y_scaler=y_scaler,
-            _opt_posterior=opt_posterior,
+            _opt_posterior=best_posterior,
             _train_dataset=data,
             _predict_cache=predict_cache,
         )
+
+    def _restart_inits(self, d: int) -> list[tuple[Array, Array]]:
+        """Yield the (lengthscale, noise_stddev) init tuples for each start.
+
+        The first tuple is the deterministic prior-mode init — so a
+        fit with ``n_starts=1`` is bit-equivalent to the pre-multistart
+        behavior. Subsequent tuples are samples from the DSP priors,
+        clamped to the floors. The PRNG is seeded from
+        ``self.restart_seed``; a fixed seed makes restarts
+        reproducible.
+        """
+        from sabi.emulators.gpjax._dsp import (
+            dsp_lengthscale_prior,
+            dsp_noise_prior,
+        )
+
+        # First start: deterministic prior-mode init (mode of
+        # LogNormal(loc, scale) is exp(loc - scale^2)).
+        ls_loc = jnp.sqrt(jnp.asarray(2.0)) + 0.5 * jnp.log(jnp.asarray(float(d)))
+        ls_mode = jnp.exp(ls_loc - 3.0)  # scale = √3 → scale² = 3
+        ls_floor = DSP_LENGTHSCALE_FLOOR + 1e-6
+        noise_floor = DSP_NOISE_FLOOR + 1e-6
+        ls_init0 = jnp.maximum(
+            jnp.full((d,), ls_mode, dtype=jnp.float64),
+            jnp.asarray(ls_floor, dtype=jnp.float64),
+        )
+        noise_init0 = jnp.maximum(
+            jnp.asarray(jnp.exp(-5.0), dtype=jnp.float64),
+            jnp.asarray(noise_floor, dtype=jnp.float64),
+        )
+        inits: list[tuple[Array, Array]] = [(ls_init0, noise_init0)]
+
+        if self.n_starts == 1:
+            return inits
+
+        # Random restarts: per-start, draw d IID lengthscale samples
+        # and a single noise-stddev sample from the priors. Floors
+        # are applied so the optimizer's initial state is in the
+        # bounded-positive region.
+        import jax.random as jr
+
+        ls_prior = dsp_lengthscale_prior(d)
+        noise_prior = dsp_noise_prior()
+        keys = jr.split(jr.key(self.restart_seed), self.n_starts - 1)
+        for k in keys:
+            k_ls, k_noise = jr.split(k)
+            ls = ls_prior.sample(k_ls, sample_shape=(d,)).astype(jnp.float64)
+            ls = jnp.maximum(ls, jnp.asarray(ls_floor, dtype=jnp.float64))
+            noise = noise_prior.sample(k_noise).astype(jnp.float64)
+            noise = jnp.maximum(noise, jnp.asarray(noise_floor, dtype=jnp.float64))
+            inits.append((ls, noise))
+        return inits
 
     # --- GaussianRandomFunction abstract methods --------------------------
 

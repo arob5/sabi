@@ -805,6 +805,141 @@ def test_dspgp_update_emulator_falls_back_to_refit_when_unfitted():
     assert out._predict_cache.Xs_train.shape == (8, 2)
 
 
+# --- Multi-restart MAP -------------------------------------------------------
+
+
+def test_dspgp_n_starts_1_is_deterministic_and_matches_single_fit():
+    """``n_starts=1`` (the default) reuses the deterministic prior-mode
+    init and runs exactly one ``fit_scipy`` — equivalent to the
+    pre-multistart behavior. Two emulators built with ``n_starts=1``
+    must therefore produce identical predictions on the same data."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    key = jr.key(301)
+    X = jr.uniform(key, (15, 2))
+    Y = jnp.sin(X[:, 0]) + 0.2 * X[:, 1]
+
+    em_a = DSPGPEmulator(input_shape=(2,), n_starts=1).fit(X, Y)
+    em_b = DSPGPEmulator(input_shape=(2,), n_starts=1).fit(X, Y)
+
+    X_test = jr.uniform(jr.key(302), (8, 2))
+    assert jnp.allclose(em_a.predict_mean(X_test), em_b.predict_mean(X_test), rtol=1e-12, atol=1e-14)
+    assert jnp.allclose(em_a.predict_variance(X_test), em_b.predict_variance(X_test), rtol=1e-12, atol=1e-14)
+
+
+def test_dspgp_n_starts_yields_better_or_equal_objective():
+    """``n_starts > 1`` keeps the best MAP objective across runs, so
+    the achieved objective should be ≥ the single-fit objective."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+    import paramax
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.gpjax._dsp import dsp_map_objective
+
+    key = jr.key(311)
+    X = jr.uniform(key, (20, 3))
+    # Noisy target — this is the regime where multi-restart is supposed to help.
+    Y = jnp.sin(2 * X[:, 0]) + 0.5 * jr.normal(jr.key(312), (20,))
+
+    em_1 = DSPGPEmulator(input_shape=(3,), n_starts=1).fit(X, Y)
+    em_4 = DSPGPEmulator(input_shape=(3,), n_starts=4, restart_seed=42).fit(X, Y)
+
+    obj_1 = float(
+        dsp_map_objective(paramax.unwrap(em_1._opt_posterior), em_1._train_dataset)
+    )
+    obj_4 = float(
+        dsp_map_objective(paramax.unwrap(em_4._opt_posterior), em_4._train_dataset)
+    )
+    # Multi-restart can only do >= (it considers the same start at i=0).
+    # Allow a tiny fp slop.
+    assert obj_4 >= obj_1 - 1e-9
+
+
+def test_dspgp_n_starts_reproducible_with_same_seed():
+    """Same ``restart_seed`` → same restart inits → same best-of-k
+    posterior → identical predictions."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    key = jr.key(321)
+    X = jr.uniform(key, (12, 2))
+    Y = jnp.sin(X[:, 0])
+
+    em_a = DSPGPEmulator(input_shape=(2,), n_starts=3, restart_seed=7).fit(X, Y)
+    em_b = DSPGPEmulator(input_shape=(2,), n_starts=3, restart_seed=7).fit(X, Y)
+
+    X_test = jr.uniform(jr.key(322), (6, 2))
+    assert jnp.allclose(em_a.predict_mean(X_test), em_b.predict_mean(X_test), rtol=1e-10, atol=1e-12)
+
+
+def test_dspgp_n_starts_different_seeds_can_differ():
+    """With different ``restart_seed``s, the best-of-k may pick a
+    different mode → predictions can differ. We assert only that the
+    SEEDS made it through (different sets of inits were tried) — not
+    that predictions necessarily diverge in any specific test case."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    em = DSPGPEmulator(input_shape=(2,), n_starts=3, restart_seed=1)
+    inits_1 = em._restart_inits(d=2)
+    em = DSPGPEmulator(input_shape=(2,), n_starts=3, restart_seed=2)
+    inits_2 = em._restart_inits(d=2)
+    # First init is the deterministic prior-mode — same for both.
+    import jax.numpy as jnp
+
+    assert jnp.allclose(inits_1[0][0], inits_2[0][0])
+    assert jnp.allclose(inits_1[0][1], inits_2[0][1])
+    # Subsequent inits are seeded → different.
+    assert not jnp.allclose(inits_1[1][0], inits_2[1][0])
+
+
+def test_dspgp_n_starts_zero_or_negative_rejected():
+    pytest.importorskip("gpjax")
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    with pytest.raises(ValueError, match="n_starts must be"):
+        DSPGPEmulator(input_shape=(2,), n_starts=0)
+    with pytest.raises(ValueError, match="n_starts must be"):
+        DSPGPEmulator(input_shape=(2,), n_starts=-1)
+
+
+def test_dspgp_restart_inits_first_is_prior_mode():
+    """The first init in any ``_restart_inits`` sequence is the
+    deterministic prior-mode — guarantees that ``n_starts > 1`` is
+    a strict generalization of ``n_starts == 1``."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.gpjax._dsp import DSP_LENGTHSCALE_FLOOR, DSP_NOISE_FLOOR
+
+    em = DSPGPEmulator(input_shape=(5,), n_starts=4)
+    (ls0, noise0), *_ = em._restart_inits(d=5)
+    # Lengthscale prior mode = exp(loc - 3) where loc = √2 + 0.5·log(d).
+    expected_ls_mode = float(
+        jnp.exp(jnp.sqrt(jnp.asarray(2.0)) + 0.5 * jnp.log(jnp.asarray(5.0)) - 3.0)
+    )
+    expected_ls_init = max(expected_ls_mode, DSP_LENGTHSCALE_FLOOR + 1e-6)
+    assert ls0.shape == (5,)
+    assert jnp.allclose(ls0, expected_ls_init)
+    expected_noise = max(float(jnp.exp(-5.0)), DSP_NOISE_FLOOR + 1e-6)
+    assert jnp.allclose(noise0, expected_noise)
+
+
 # --- Sample efficiency at high d ---------------------------------------------
 
 

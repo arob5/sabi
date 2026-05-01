@@ -3,3 +3,8 @@ kernel: rbf
 max_iters: 500
 jitter: 1.0e-6
 verbose: false
+# Multi-restart MAP. n_starts=1 is the deterministic single-fit
+# behavior; bump to 4-8 for noisier data where the optimizer might
+# settle on a noise-floor solution.
+n_starts: 1
+restart_seed: 0
