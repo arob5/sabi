@@ -20,8 +20,12 @@ Use submodule paths for everything:
 
     from sabi.problems.forms import LogDensityForm, Identity, LogLikPlusPrior
     from sabi.problems.base import Problem, BenchmarkProblem
-    from sabi.problems.gaussian2d import gaussian2d
+    from sabi.problems.gaussian import gaussian, gaussian2d
     from sabi.problems.banana import banana
     from sabi.problems.neals_funnel import neals_funnel
-    from sabi.problems.benchmarks import banana_2d, banana_10d
+    from sabi.problems.benchmarks import (
+        banana_2d, banana_10d,
+        gaussian_2d, gaussian_10d,
+        neals_funnel_3d,
+    )
 """

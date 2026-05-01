@@ -11,7 +11,7 @@ from probpipe.core.protocols import SupportsLogProb, SupportsSampling
 
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
 from sabi.metrics.posterior_mmd import ReferenceMMD
-from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.gaussian import gaussian2d
 
 
 def _problem_no_ref():

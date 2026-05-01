@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import pytest
 
 from sabi.problems.forms import Identity
-from sabi.problems.gaussian2d import gaussian2d
+from sabi.problems.gaussian import gaussian2d
 from sabi.target_distribution import TargetDistribution
 from sabi.sampling import PriorSampler
 

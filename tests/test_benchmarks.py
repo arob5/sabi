@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
+from probpipe import sample
 from probpipe.core._empirical import NumericEmpiricalDistribution
+from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.problems.base import BenchmarkProblem, Problem
-from sabi.problems.benchmarks import banana_2d, banana_10d
+from sabi.problems.benchmarks import (
+    banana_2d,
+    banana_10d,
+    gaussian_2d,
+    gaussian_10d,
+    neals_funnel_3d,
+)
 
 
 def test_banana_2d_is_a_benchmark_problem():
@@ -65,3 +74,91 @@ def test_benchmark_factories_are_pure():
     assert float(a.log_posterior(x)) == float(b.log_posterior(x))
     assert a.input_shape == b.input_shape
     assert a.name == b.name
+
+
+# ---------------------------------------------------------------------------
+# Gaussian benchmarks
+# ---------------------------------------------------------------------------
+
+
+def test_gaussian_2d_is_a_benchmark_problem():
+    bp = gaussian_2d()
+    assert isinstance(bp, BenchmarkProblem)
+    assert isinstance(bp, Problem)
+    assert bp.name == "gaussian_2d"
+    assert bp.artifact_version == "v1"
+    assert bp.input_shape == (2,)
+    assert isinstance(bp.reference_distribution, MultivariateNormal)
+
+
+def test_gaussian_2d_preserves_historical_defaults():
+    """gaussian_2d() must reproduce the pre-refactor gaussian2d defaults
+    (mean=0, cov=[[1, 0.5], [0.5, 1]]). Sampling from the analytic
+    reference reproduces those moments."""
+    bp = gaussian_2d()
+    samples = jnp.asarray(
+        sample(bp.reference_distribution, key=jax.random.key(0), sample_shape=(4096,))
+    )
+    emp_mean = jnp.mean(samples, axis=0)
+    emp_cov = jnp.cov(samples, rowvar=False)
+    assert jnp.allclose(emp_mean, jnp.zeros(2), atol=0.05)
+    assert jnp.allclose(emp_cov, jnp.asarray([[1.0, 0.5], [0.5, 1.0]]), atol=0.1)
+
+
+def test_gaussian_10d_is_a_benchmark_problem():
+    bp = gaussian_10d()
+    assert isinstance(bp, BenchmarkProblem)
+    assert bp.name == "gaussian_10d"
+    assert bp.input_shape == (10,)
+    assert isinstance(bp.reference_distribution, MultivariateNormal)
+
+
+def test_gaussian_10d_is_isotropic():
+    """gaussian_10d() defaults to mean=0, cov=I_10 — sample variances
+    cluster around 1 in every dim."""
+    bp = gaussian_10d()
+    samples = jnp.asarray(
+        sample(bp.reference_distribution, key=jax.random.key(0), sample_shape=(4096,))
+    )
+    emp_var = jnp.var(samples, axis=0)
+    assert jnp.allclose(emp_var, jnp.ones(10), atol=0.1)
+    assert jnp.allclose(jnp.mean(samples, axis=0), jnp.zeros(10), atol=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Neal's funnel benchmark
+# ---------------------------------------------------------------------------
+
+
+def test_neals_funnel_3d_is_a_benchmark_problem():
+    bp = neals_funnel_3d()
+    assert isinstance(bp, BenchmarkProblem)
+    assert bp.name == "neals_funnel_3d"
+    # 1 v dim + 2 x dims = 3 total.
+    assert bp.input_shape == (3,)
+    assert isinstance(bp.reference_distribution, NumericEmpiricalDistribution)
+
+
+def test_neals_funnel_3d_reference_loads_from_cache():
+    """The committed parquet artifact under reference_posteriors/
+    neals_funnel/ should hydrate without triggering NUTS regeneration."""
+    bp = neals_funnel_3d()
+    # 4 chains × 2000 results = 8000.
+    samples = jnp.asarray(bp.reference_distribution.samples)
+    assert samples.shape == (8000, 3)
+
+
+# ---------------------------------------------------------------------------
+# All benchmarks share the same identity invariants
+# ---------------------------------------------------------------------------
+
+
+def test_all_benchmark_names_distinct():
+    names = {
+        banana_2d().name,
+        banana_10d().name,
+        gaussian_2d().name,
+        gaussian_10d().name,
+        neals_funnel_3d().name,
+    }
+    assert len(names) == 5
