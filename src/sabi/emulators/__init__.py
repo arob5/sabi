@@ -9,7 +9,7 @@ that backend-specific dependencies stay scoped:
   Requires the optional ``gpjax`` extra.
 
 Top-level convenience re-exports are kept for the always-available
-backends (`GPEmulator` here is the tinygp-backed one); gpjax-backed
+backends (`TinyGPEmulator` here is the tinygp-backed one); gpjax-backed
 emulators are imported from their full path so that touching this
 namespace doesn't trigger a missing-optional-dep error.
 """
@@ -20,7 +20,7 @@ from sabi.emulators.dispatch import (
     emulator_update_registry,
     update_emulator,
 )
-from sabi.emulators.tinygp.gp import GPEmulator
+from sabi.emulators.tinygp.gp import TinyGPEmulator
 from sabi.emulators.updates import (
     AppendRows,
     EmulatorUpdate,
@@ -33,7 +33,7 @@ __all__ = [
     "Emulator",
     "EmulatorUpdate",
     "EmulatorUpdateMethod",
-    "GPEmulator",
+    "TinyGPEmulator",
     "RescaleOutputs",
     "RescaleThenAppend",
     "emulator_update_registry",

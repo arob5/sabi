@@ -4,7 +4,7 @@ import pytest
 from probpipe import mean, variance
 from probpipe.distributions.continuous import Normal
 
-from sabi.emulators import GPEmulator
+from sabi.emulators import TinyGPEmulator
 
 
 def _sample_2d_gp_data(n: int = 40, key_seed: int = 0):
@@ -15,10 +15,10 @@ def _sample_2d_gp_data(n: int = 40, key_seed: int = 0):
 
 
 def test_gp_call_returns_normal_with_correct_shape():
-    """GPEmulator is an ArrayRandomFunction; __call__(X) returns a Normal
+    """TinyGPEmulator is an ArrayRandomFunction; __call__(X) returns a Normal
     with batch_shape=(n,) and event_shape=()."""
     X, Y = _sample_2d_gp_data(n=30)
-    gp = GPEmulator(input_shape=(2,)).fit(X, Y)
+    gp = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
     Xtest = jax.random.uniform(jax.random.key(1), shape=(7, 2), minval=-2.0, maxval=2.0)
     pred = gp(Xtest)
     assert isinstance(pred, Normal)
@@ -28,7 +28,7 @@ def test_gp_call_returns_normal_with_correct_shape():
 
 def test_gp_predict_close_to_training_data():
     X, Y = _sample_2d_gp_data()
-    gp = GPEmulator(input_shape=(2,)).fit(X, Y)
+    gp = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
     pred = gp(X)
     pred_mean = jnp.asarray(mean(pred))
     rmse = float(jnp.sqrt(jnp.mean((pred_mean - Y) ** 2)))
@@ -38,7 +38,7 @@ def test_gp_predict_close_to_training_data():
 
 
 def test_gp_predict_before_fit_raises():
-    gp = GPEmulator(input_shape=(2,))
+    gp = TinyGPEmulator(input_shape=(2,))
     with pytest.raises(RuntimeError, match="before fit"):
         gp(jnp.zeros((3, 2)))
 
@@ -52,7 +52,7 @@ def test_gp_generalization_better_than_mean_predictor():
     X = jax.random.uniform(ktrain, shape=(n_train, 2), minval=-2.0, maxval=2.0)
     Y = jnp.sum(jnp.sin(X), axis=-1) + 0.5 * X[:, 0] * X[:, 1]
 
-    gp = GPEmulator(input_shape=(2,)).fit(X, Y)
+    gp = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
 
     Xtest = jax.random.uniform(ktest, shape=(30, 2), minval=-1.5, maxval=1.5)
     Ytest = jnp.sum(jnp.sin(Xtest), axis=-1) + 0.5 * Xtest[:, 0] * Xtest[:, 1]
@@ -71,6 +71,6 @@ def test_lengthscale_shrinks_with_more_data():
     Y_small = jnp.zeros(20)
     Y_large = jnp.zeros(200)
 
-    gp_small = GPEmulator(input_shape=(2,)).fit(X_small, Y_small)
-    gp_large = GPEmulator(input_shape=(2,)).fit(X_large, Y_large)
+    gp_small = TinyGPEmulator(input_shape=(2,)).fit(X_small, Y_small)
+    gp_large = TinyGPEmulator(input_shape=(2,)).fit(X_large, Y_large)
     assert float(gp_large.lengthscale) < float(gp_small.lengthscale)

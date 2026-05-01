@@ -23,7 +23,6 @@ axes). Add vmap-over-extra-batch support in v1.5+ if needed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Self
 
 import jax.numpy as jnp
@@ -31,31 +30,8 @@ from jax import Array
 from probpipe.distributions.gaussian_random_function import GaussianRandomFunction
 from tinygp import GaussianProcess, kernels
 
+from sabi.emulators._scalers import ZScoreScaler
 from sabi.emulators.base import Emulator
-
-
-@dataclass(frozen=True)
-class _Standardizer:
-    """Affine standardizer: y' = (y - loc) / scale. `scale=1` if input is constant."""
-
-    loc: Array
-    scale: Array
-
-    @classmethod
-    def fit(cls, x: Array, axis: int = 0) -> "_Standardizer":
-        loc = jnp.mean(x, axis=axis)
-        scale = jnp.std(x, axis=axis)
-        scale = jnp.where(scale < 1e-12, 1.0, scale)
-        return cls(loc=loc, scale=scale)
-
-    def transform(self, x: Array) -> Array:
-        return (x - self.loc) / self.scale
-
-    def inverse_mean(self, y: Array) -> Array:
-        return y * self.scale + self.loc
-
-    def inverse_var(self, v: Array) -> Array:
-        return v * (self.scale ** 2)
 
 
 def _median_nn_distance(X: Array) -> Array:
@@ -80,12 +56,12 @@ def _build_gp(X: Array, lengthscale: Array, noise: float, jitter: float) -> Gaus
     return GaussianProcess(kernel, X, diag=noise + jitter)
 
 
-class GPEmulator(Emulator, GaussianRandomFunction):
+class TinyGPEmulator(Emulator, GaussianRandomFunction):
     """GP emulator with Matern-5/2 isotropic kernel.
 
     `predict_mean` / `predict_variance` implement the abstract `GaussianRandomFunction`
     interface; `predict` / `__call__` come for free from the parent. `fit(X, Y)`
-    returns a new `GPEmulator` carrying the conditioned state.
+    returns a new `TinyGPEmulator` carrying the conditioned state.
     """
 
     # Marginal-only in v1.2 — joint covariance lands when emulator metrics need it.
@@ -104,8 +80,8 @@ class GPEmulator(Emulator, GaussianRandomFunction):
         jitter: float = 1e-3,
         # Internal conditioned-on-training state. Users don't pass these on
         # construction; `fit` populates them on the returned instance.
-        _x_standardizer: _Standardizer | None = None,
-        _y_standardizer: _Standardizer | None = None,
+        _x_scaler: ZScoreScaler | None = None,
+        _y_scaler: ZScoreScaler | None = None,
         _X_train: Array | None = None,
         _Y_train: Array | None = None,
         _lengthscale: Array | None = None,
@@ -116,14 +92,14 @@ class GPEmulator(Emulator, GaussianRandomFunction):
         super().__init__(
             input_shape=input_shape,
             output_shape=output_shape,
-            name=name or "GPEmulator",
+            name=name or "TinyGPEmulator",
         )
         self.ls_factor = ls_factor
         self.ls_floor = ls_floor
         self.noise = noise
         self.jitter = jitter
-        self._x_standardizer = _x_standardizer
-        self._y_standardizer = _y_standardizer
+        self._x_scaler = _x_scaler
+        self._y_scaler = _y_scaler
         self._X_train = _X_train
         self._Y_train = _Y_train
         self._lengthscale = _lengthscale
@@ -135,7 +111,7 @@ class GPEmulator(Emulator, GaussianRandomFunction):
     def fit(self, X: Array, Y: Array) -> Self:
         if X.ndim != 1 + len(self.input_shape):
             raise ValueError(
-                f"GPEmulator.fit: expected X.shape == (n,) + input_shape="
+                f"TinyGPEmulator.fit: expected X.shape == (n,) + input_shape="
                 f"{self.input_shape}, got {tuple(X.shape)}."
             )
         if Y.shape != X.shape[: -len(self.input_shape) or None]:
@@ -143,12 +119,12 @@ class GPEmulator(Emulator, GaussianRandomFunction):
             expected_y_shape = X.shape[: -len(self.input_shape)] + self.output_shape
             if Y.shape != expected_y_shape:
                 raise ValueError(
-                    f"GPEmulator.fit: expected Y.shape={expected_y_shape}, "
+                    f"TinyGPEmulator.fit: expected Y.shape={expected_y_shape}, "
                     f"got {tuple(Y.shape)}."
                 )
 
-        x_std = _Standardizer.fit(X, axis=0)
-        y_std = _Standardizer.fit(Y, axis=0)
+        x_std = ZScoreScaler.fit(X, axis=0)
+        y_std = ZScoreScaler.fit(Y, axis=0)
         Xs = x_std.transform(X)
         Ys = y_std.transform(Y)
         lengthscale = _choose_lengthscale(Xs, self.ls_factor, self.ls_floor)
@@ -161,8 +137,8 @@ class GPEmulator(Emulator, GaussianRandomFunction):
             ls_floor=self.ls_floor,
             noise=self.noise,
             jitter=self.jitter,
-            _x_standardizer=x_std,
-            _y_standardizer=y_std,
+            _x_scaler=x_std,
+            _y_scaler=y_std,
             _X_train=Xs,
             _Y_train=Ys,
             _lengthscale=lengthscale,
@@ -182,19 +158,19 @@ class GPEmulator(Emulator, GaussianRandomFunction):
             this is `(n,)`.
         """
         self._require_fit()
-        Xs = self._x_standardizer.transform(X)  # type: ignore[union-attr]
+        Xs = self._x_scaler.transform(X)  # type: ignore[union-attr]
         gp = _build_gp(self._X_train, self._lengthscale, self.noise, self.jitter)  # type: ignore[arg-type]
         cond = gp.condition(self._Y_train, Xs).gp  # type: ignore[arg-type]
-        return self._y_standardizer.inverse_mean(cond.mean)  # type: ignore[union-attr]
+        return self._y_scaler.inverse_mean(cond.mean)  # type: ignore[union-attr]
 
     def predict_variance(self, X: Array) -> Array:
         """Return the marginal predictive variance at each row of `X`."""
         self._require_fit()
-        Xs = self._x_standardizer.transform(X)  # type: ignore[union-attr]
+        Xs = self._x_scaler.transform(X)  # type: ignore[union-attr]
         gp = _build_gp(self._X_train, self._lengthscale, self.noise, self.jitter)  # type: ignore[arg-type]
         cond = gp.condition(self._Y_train, Xs).gp  # type: ignore[arg-type]
         # Clip tiny-negative variances that arise from Cholesky roundoff.
-        return self._y_standardizer.inverse_var(jnp.maximum(cond.variance, 0.0))  # type: ignore[union-attr]
+        return self._y_scaler.inverse_var(jnp.maximum(cond.variance, 0.0))  # type: ignore[union-attr]
 
     def _require_fit(self) -> None:
         if self._X_train is None:

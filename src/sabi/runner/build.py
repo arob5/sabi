@@ -30,7 +30,7 @@ from sabi.problems.banana import banana
 from sabi.problems.base import Problem
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.problems.neals_funnel import neals_funnel
-from sabi.emulators import GPEmulator
+from sabi.emulators import TinyGPEmulator
 
 
 def build_problem(cfg: DictConfig) -> Problem:
@@ -66,8 +66,8 @@ def _build_emulator_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
     problem's input_shape baked in."""
     name = cfg.name
     if name == "gp":
-        def factory() -> GPEmulator:
-            return GPEmulator(
+        def factory() -> TinyGPEmulator:
+            return TinyGPEmulator(
                 input_shape=input_shape,
                 ls_factor=float(cfg.get("ls_factor", 1.5)),
                 ls_floor=float(cfg.get("ls_floor", 0.05)),

@@ -20,7 +20,7 @@ from sabi.algorithms import (
 from sabi.metrics.posterior_mmd import ReferenceMMD
 from sabi.problems.banana import banana
 from sabi.problems.gaussian2d import gaussian2d
-from sabi.emulators import GPEmulator
+from sabi.emulators import TinyGPEmulator
 
 
 def _algorithm(
@@ -30,7 +30,7 @@ def _algorithm(
     surrogate_posterior_factory=emulator_pushforward_factory,
 ):
     return Algorithm(
-        emulator_factory=lambda: GPEmulator(),
+        emulator_factory=lambda: TinyGPEmulator(),
         acquisition=acquisition,
         n_initial=16,
         n_rounds=n_rounds,

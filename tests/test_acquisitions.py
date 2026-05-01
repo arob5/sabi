@@ -9,7 +9,7 @@ from sabi.acquisitions.random import PriorSampling
 from sabi.posterior.surrogate_posterior import SurrogatePosterior
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.sampling import PriorSampler
-from sabi.emulators import GPEmulator
+from sabi.emulators import TinyGPEmulator
 
 
 def _state(problem, key_seed=0, n=20):
@@ -18,7 +18,7 @@ def _state(problem, key_seed=0, n=20):
     trained on the same support."""
     X = PriorSampler().sample(problem, jax.random.key(key_seed), n)
     Y = problem.target_function(X)
-    gp = GPEmulator(input_shape=problem.input_shape).fit(X, Y)
+    gp = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
     sp = SurrogatePosterior(
         emulator=gp,
         log_density_form=problem.log_density_form,

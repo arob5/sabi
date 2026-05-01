@@ -102,7 +102,7 @@ The simplest case: nothing depends on `t`.
 
 ```python
 algorithm = Algorithm(
-    emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+    emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
     acquisition=ExpectedImprovement(...),
     # tempering_scheme defaults to NoTempering()
     # schedule defaults to UntemperedSchedule()
@@ -130,7 +130,7 @@ emulator's training target by `beta_t`.
 
 ```python
 algorithm = Algorithm(
-    emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+    emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
     acquisition=ExpectedImprovement(...),
     tempering_scheme=LikelihoodTemperingViaTarget(),
     schedule=FixedSchedule(states=(0.1, 0.5, 1.0)),
@@ -178,7 +178,7 @@ emulator's target is invariant. The `beta` factor lives in the form.
 
 ```python
 algorithm = Algorithm(
-    emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+    emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
     acquisition=ExpectedImprovement(...),
     tempering_scheme=LikelihoodTemperingViaForm(),
     schedule=FixedSchedule(states=(0.1, 0.5, 1.0)),

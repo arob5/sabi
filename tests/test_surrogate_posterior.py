@@ -48,7 +48,7 @@ from sabi.posterior import (
 )
 from sabi.posterior._pushforward import pushforward_marginal
 from sabi.problems.forms import ForwardModel, Identity, LogLikPlusPrior
-from sabi.emulators import GPEmulator
+from sabi.emulators import TinyGPEmulator
 
 
 # -------------------------------------------------------------------------
@@ -79,7 +79,7 @@ def _sp(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
     key = jax.random.key(seed)
     X = jax.random.uniform(key, shape=(n, d), minval=-3.0, maxval=3.0)
     Y = -0.5 * jnp.sum(X ** 2, axis=-1)
-    emulator = GPEmulator(input_shape=(d,)).fit(X, Y)
+    emulator = TinyGPEmulator(input_shape=(d,)).fit(X, Y)
     return SurrogatePosterior(
         emulator=emulator,
         log_density_form=form if form is not None else Identity(),
@@ -131,7 +131,7 @@ def test_werm_requires_support():
 
 
 def test_sp_requires_support():
-    emulator = GPEmulator(input_shape=(2,)).fit(
+    emulator = TinyGPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="support"):
@@ -144,7 +144,7 @@ def test_sp_requires_support():
 
 
 def test_sp_input_shape_must_match_emulator_input_shape():
-    emulator = GPEmulator(input_shape=(2,)).fit(
+    emulator = TinyGPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="input_shape"):

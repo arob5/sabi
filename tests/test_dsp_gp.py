@@ -4,7 +4,7 @@ Exercises:
 - 2-d fit + predict shapes
 - fit actually moves the lengthscale away from its init (optimizer ran)
 - sample-efficiency: at d=10 with small n, the DSP-prior emulator beats
-  the tinygp-backed `GPEmulator` (which has no high-d-aware prior) on
+  the tinygp-backed `TinyGPEmulator` (which has no high-d-aware prior) on
   held-out MSE.
 
 All tests skip cleanly when gpjax is not installed.
@@ -138,7 +138,11 @@ def _naive_predict_mean_var(em, X_test):
     import jax.numpy as jnp
 
     Xs_test = em._x_scaler.transform(X_test).astype(jnp.float64)
-    latent = em._opt_posterior.predict(Xs_test, train_data=em._train_dataset)
+    import gpjax as _gpx
+    train_data = _gpx.Dataset(
+        X=em._predict_cache.Xs_train, y=em._predict_cache.Ys_train.reshape(-1, 1)
+    )
+    latent = em._opt_posterior.predict(Xs_test, train_data=train_data)
     naive_mean = em._y_scaler.inverse_mean(latent.mean)
     naive_var = em._y_scaler.inverse_var(jnp.maximum(latent.variance, 0.0))
     return naive_mean, naive_var
@@ -342,7 +346,11 @@ def test_dspgp_predict_covariance_matches_naive_gpjax_dense():
     # Naive gpjax dense path — latent only (do NOT call likelihood
     # on top), to match the sabi latent convention.
     Xs_test = em._x_scaler.transform(X_test).astype(jnp.float64)
-    latent = em._opt_posterior.predict(Xs_test, train_data=em._train_dataset)
+    import gpjax as _gpx
+    train_data = _gpx.Dataset(
+        X=em._predict_cache.Xs_train, y=em._predict_cache.Ys_train.reshape(-1, 1)
+    )
+    latent = em._opt_posterior.predict(Xs_test, train_data=train_data)
     naive_cov_std = latent.covariance_matrix
     # Apply the y-standardizer's inverse_var (scales by scale²) to bring
     # back to the original output space.
@@ -528,7 +536,7 @@ def test_dspgp_condition_on_matches_partition_then_condition_strategy():
     import jax.random as jr
 
     from sabi.emulators.gpjax import DSPGPEmulator
-    from sabi.emulators.gpjax.dsp_gp import _PredictCache
+    from sabi.emulators.gpjax._cache import _PredictCache
 
     key = jr.key(121)
     n_total, d = 18, 3
@@ -1058,10 +1066,11 @@ def test_scale_cov_to_output_space_scalar_output_matches_simple_broadcast():
     _enable_x64()
     import jax.numpy as jnp
 
-    from sabi.emulators.gpjax.dsp_gp import _ZScoreScaler, _scale_cov_to_output_space
+    from sabi.emulators._scalers import ZScoreScaler
+    from sabi.emulators.gpjax.dsp_gp import _scale_cov_to_output_space
 
     cov = jnp.eye(4) * 2.5
-    scaler = _ZScoreScaler(loc=jnp.array(0.0), scale=jnp.array(3.0))
+    scaler = ZScoreScaler(loc=jnp.array(0.0), scale=jnp.array(3.0))
     out = _scale_cov_to_output_space(cov, scaler, output_shape=())
     assert jnp.allclose(out, cov * 9.0, rtol=1e-12, atol=1e-14)
 
@@ -1074,10 +1083,11 @@ def test_scale_cov_to_output_space_multi_output_raises():
     _enable_x64()
     import jax.numpy as jnp
 
-    from sabi.emulators.gpjax.dsp_gp import _ZScoreScaler, _scale_cov_to_output_space
+    from sabi.emulators._scalers import ZScoreScaler
+    from sabi.emulators.gpjax.dsp_gp import _scale_cov_to_output_space
 
     cov = jnp.eye(4)
-    scaler = _ZScoreScaler(loc=jnp.zeros(2), scale=jnp.ones(2))
+    scaler = ZScoreScaler(loc=jnp.zeros(2), scale=jnp.ones(2))
     with pytest.raises(NotImplementedError, match="multi-output"):
         _scale_cov_to_output_space(cov, scaler, output_shape=(2,))
 
@@ -1114,6 +1124,7 @@ def test_dspgp_n_starts_yields_better_or_equal_objective():
     the achieved objective should be ≥ the single-fit objective."""
     pytest.importorskip("gpjax")
     _enable_x64()
+    import gpjax as gpx
     import jax.numpy as jnp
     import jax.random as jr
     import paramax
@@ -1130,10 +1141,10 @@ def test_dspgp_n_starts_yields_better_or_equal_objective():
     em_4 = DSPGPEmulator(input_shape=(3,), n_starts=4, restart_seed=42).fit(X, Y)
 
     obj_1 = float(
-        dsp_map_objective(paramax.unwrap(em_1._opt_posterior), em_1._train_dataset)
+        dsp_map_objective(paramax.unwrap(em_1._opt_posterior), gpx.Dataset(X=em_1._predict_cache.Xs_train, y=em_1._predict_cache.Ys_train.reshape(-1, 1)))
     )
     obj_4 = float(
-        dsp_map_objective(paramax.unwrap(em_4._opt_posterior), em_4._train_dataset)
+        dsp_map_objective(paramax.unwrap(em_4._opt_posterior), gpx.Dataset(X=em_4._predict_cache.Xs_train, y=em_4._predict_cache.Ys_train.reshape(-1, 1)))
     )
     # Multi-restart can only do >= (it considers the same start at i=0).
     # Allow a tiny fp slop.
@@ -1222,7 +1233,7 @@ def test_dspgp_restart_inits_first_is_prior_mode():
 
 def test_dspgp_beats_tinygp_in_high_d_small_n():
     """At d=10 with n=30, the DSP-prior emulator should achieve lower
-    held-out MSE than the tinygp-backed `GPEmulator`. The DSP prior
+    held-out MSE than the tinygp-backed `TinyGPEmulator`. The DSP prior
     biases lengthscales upward with d, which prevents the high-d
     overfitting failure mode of generic GP-BO.
     """
@@ -1231,7 +1242,7 @@ def test_dspgp_beats_tinygp_in_high_d_small_n():
     import jax.numpy as jnp
     import jax.random as jr
 
-    from sabi.emulators import GPEmulator
+    from sabi.emulators import TinyGPEmulator
     from sabi.emulators.gpjax import DSPGPEmulator
 
     key = jr.key(7)
@@ -1250,7 +1261,7 @@ def test_dspgp_beats_tinygp_in_high_d_small_n():
     y_test = f(X_test)
 
     dsp = DSPGPEmulator(input_shape=(d,)).fit(X_train, y_train)
-    tg = GPEmulator(input_shape=(d,)).fit(X_train, y_train)
+    tg = TinyGPEmulator(input_shape=(d,)).fit(X_train, y_train)
 
     dsp_mse = float(jnp.mean((dsp.predict_mean(X_test) - y_test) ** 2))
     tg_mse = float(jnp.mean((tg.predict_mean(X_test) - y_test) ** 2))

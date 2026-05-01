@@ -7,7 +7,7 @@ backend tradeoffs match the experiment.
 
 | Emulator | Backend | Kernel | Hyperparam strategy | Best for |
 |---|---|---|---|---|
-| `GPEmulator` | tinygp | Matern-5/2 isotropic | data-adaptive lengthscale (median NN distance × factor), fixed noise | low-d, dense data, fast iteration |
+| `TinyGPEmulator` | tinygp | Matern-5/2 isotropic | data-adaptive lengthscale (median NN distance × factor), fixed noise | low-d, dense data, fast iteration |
 | `DSPGPEmulator` | gpjax | RBF or Matern-5/2 ARD | MAP via `gpx.fit_scipy` with dimension-scaled-prior recipe | higher-d (≥ ~5), small n, where overfitting bites |
 
 Both inherit from `Emulator + GaussianRandomFunction` and produce the
@@ -19,7 +19,7 @@ so they're drop-in for each other in the v1.2 marginal-mode pipeline.
 Both emulators standardize inputs and outputs **internally**, so callers
 pass raw data:
 
-- **`GPEmulator`** (tinygp): zero-mean unit-variance both inputs and
+- **`TinyGPEmulator`** (tinygp): zero-mean unit-variance both inputs and
   outputs.
 - **`DSPGPEmulator`** (gpjax): inputs min-max scaled to `[0, 1]^d`,
   outputs zero-mean unit-variance. These match the calibration of the
@@ -27,7 +27,7 @@ pass raw data:
 
 Predictions are returned in the original (pre-scaling) output space.
 
-## tinygp (`GPEmulator`)
+## tinygp (`TinyGPEmulator`)
 
 Lightweight, no extra deps. The hyperparameter strategy is intentionally
 non-adaptive: a single isotropic Matern-5/2 lengthscale is set from the
@@ -143,7 +143,7 @@ Sabi emulators report the **latent** posterior (no observation noise):
   equals `predict_variance(X)`.
 
 This convention is documented at the `Emulator` base class. Both
-`GPEmulator` and `DSPGPEmulator` follow it. Callers that want the
+`TinyGPEmulator` and `DSPGPEmulator` follow it. Callers that want the
 observation-predictive distribution build it explicitly:
 `Var[y* | data] = predict_variance(X) + sigma_n²` for whatever obs-
 noise model the application has.
@@ -157,7 +157,7 @@ supported for the scalar-output case (returns `(n, 1, 1)`). Use
 `predict(X, joint_inputs=True)` to get a `MultivariateNormal`
 directly via the `GaussianRandomFunction` assembly path.
 
-`GPEmulator` (tinygp) is still marginal-mode only; joint covariance
+`TinyGPEmulator` (tinygp) is still marginal-mode only; joint covariance
 will land there when a benchmark needs it.
 
 ## Performance notes

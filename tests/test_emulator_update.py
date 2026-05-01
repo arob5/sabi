@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import pytest
 from probpipe.core._registry import MethodInfo
 
-from sabi.emulators import GPEmulator
+from sabi.emulators import TinyGPEmulator
 from sabi.emulators.dispatch import (
     EmulatorUpdateMethod,
     emulator_update_registry,
@@ -71,7 +71,7 @@ def test_all_op_types_subclass_emulator_update():
 
 
 def _gp_factory():
-    return GPEmulator(input_shape=(2,))
+    return TinyGPEmulator(input_shape=(2,))
 
 
 def _fit_emulator():
@@ -98,7 +98,7 @@ def test_update_emulator_with_plan_no_registered_handler_falls_back_to_fit():
     X_full = jnp.asarray([[0.5, 0.5], [1.5, 1.5]])
     Y_full = jnp.asarray([2.0, 3.0])
     plan = AppendRows(X_new=jnp.asarray([[1.5, 1.5]]), Y_new=jnp.asarray([3.0]))
-    # No GPEmulator handlers are registered for AppendRows out-of-the-box.
+    # No TinyGPEmulator handlers are registered for AppendRows out-of-the-box.
     out = update_emulator(em, plan, factory=_gp_factory, X_full=X_full, Y_full=Y_full)
     expected = _gp_factory().fit(X_full, Y_full)
     test_X = jnp.asarray([[0.0, 0.0], [1.0, 0.0]])
@@ -125,7 +125,7 @@ class _RecordingRescaleHandler(EmulatorUpdateMethod):
         return "_test_rescale_noop"
 
     def supported_types(self) -> tuple[type, ...]:
-        return (GPEmulator,)
+        return (TinyGPEmulator,)
 
     def check(self, emulator, plan):
         feasible = isinstance(plan, RescaleOutputs) and plan.factor == 1.0
@@ -175,7 +175,7 @@ def test_registered_handler_check_returning_infeasible_falls_back_to_refit():
             return "_test_never_feasible"
 
         def supported_types(self):
-            return (GPEmulator,)
+            return (TinyGPEmulator,)
 
         def check(self, emulator, plan):
             return MethodInfo(feasible=False, method_name=self.name, description="never")

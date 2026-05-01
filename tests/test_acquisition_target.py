@@ -20,7 +20,7 @@ import pytest
 from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.acquisitions.base import AcquisitionTarget
 from sabi.algorithms import Algorithm, run
-from sabi.emulators import GPEmulator
+from sabi.emulators import TinyGPEmulator
 from sabi.problems.gaussian2d import gaussian2d
 from sabi.tempering.likelihood import LikelihoodTemperingViaForm
 from sabi.tempering.schedule import (
@@ -80,7 +80,7 @@ class _RecordingAcquisition(Acquisition):
 
 def _algorithm(acquisition_target: AcquisitionTarget, **kwargs):
     return Algorithm(
-        emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=_RecordingAcquisition(),
         n_initial=8,
         n_rounds=3,  # round 0 (initial) + rounds 1, 2 (acquisition).
@@ -124,7 +124,7 @@ def test_next_with_fixed_schedule_advances_one_step():
     problem = gaussian2d()
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
-        emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=_RecordingAcquisition(),
         n_initial=8,
         n_rounds=3,  # round 0 + acquisition rounds 1, 2.
@@ -154,7 +154,7 @@ def test_terminal_target_state_is_terminal_for_every_round():
     problem = gaussian2d()
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
-        emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=_RecordingAcquisition(),
         n_initial=8,
         n_rounds=3,  # round 0 + acquisition rounds 1, 2.
@@ -186,7 +186,7 @@ def test_default_acquisition_target_preserves_untempered_metrics():
 
     problem = gaussian2d()
     alg = Algorithm(
-        emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=PriorSampling(),
         n_initial=8,
         n_rounds=3,  # round 0 + acquisition rounds 1, 2 → 8 + 2 = 10 evals.
@@ -228,7 +228,7 @@ def test_via_target_with_next_lookahead_runs_to_completion():
     )
     problem = Problem(target_distribution=target, name="quad_loglik")
     alg = Algorithm(
-        emulator_factory=lambda: GPEmulator(input_shape=(2,)),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=PriorSampling(),
         n_initial=8,
         n_rounds=3,  # round 0 (initial) + acquisition rounds 1, 2.

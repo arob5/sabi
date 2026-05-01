@@ -164,7 +164,7 @@ samples; on-disk caching of expensive references via Parquet artifacts.
 - Runner / build wiring: `configs/problem/neals_funnel.yaml` + `build.py`
   dispatch on `name == "neals_funnel"`. `build_algorithm(cfg, problem=...)`
   signature now threads the problem's `input_shape` into the emulator
-  factory so `GPEmulator` is constructed with the right shape contract.
+  factory so `TinyGPEmulator` is constructed with the right shape contract.
 - `blackjax` removed from `pyproject.toml` dependencies. We use ProbPipe's
   `tfp_nuts` exclusively for both reference-posterior generation and the
   v1.2 `expected_target` sampling backend.
@@ -177,7 +177,7 @@ samples; on-disk caching of expensive references via Parquet artifacts.
 - Geometry-aware Neal's-funnel reference (non-centered reparameterization
   for substantially better ESS) — v1.5 stretch concern alongside emulator
   metrics on the funnel.
-- `predict_covariance` on `GPEmulator` (joint-mode pushforward) — v1.5+
+- `predict_covariance` on `TinyGPEmulator` (joint-mode pushforward) — v1.5+
   when emulator metrics need it.
 - Tier-B reference posteriors (large, expensive) — would use git-lfs;
   schedule when first benchmark requires them.
