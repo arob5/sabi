@@ -659,7 +659,7 @@ def test_dspgp_append_rows_handler_is_registered_on_module_import():
     from sabi.emulators.gpjax import DSPGPEmulator  # noqa: F401
     from sabi.emulators.dispatch import emulator_update_registry
 
-    assert "dspgp_append_rows_chol_update" in emulator_update_registry._name_index
+    assert "gp_append_rows_chol_update" in emulator_update_registry._name_index
 
 
 def test_dspgp_update_emulator_dispatches_through_handler_not_refit():
@@ -845,8 +845,8 @@ def test_dspgp_rescale_outputs_handler_is_registered():
     from sabi.emulators.gpjax import DSPGPEmulator  # noqa: F401
     from sabi.emulators.dispatch import emulator_update_registry
 
-    assert "dspgp_rescale_outputs_yscaler_only" in emulator_update_registry._name_index
-    assert "dspgp_rescale_then_append_chol_update" in emulator_update_registry._name_index
+    assert "gp_rescale_outputs_yscaler_only" in emulator_update_registry._name_index
+    assert "gp_rescale_then_append_chol_update" in emulator_update_registry._name_index
 
 
 def test_dspgp_rescale_outputs_dispatch_predicts_beta_times_original():

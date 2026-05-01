@@ -29,6 +29,13 @@ from sabi.emulators.updates import (
     RescaleThenAppend,
 )
 
+# Register the GPEmulator-typed cheap-update dispatch handlers.
+# Side-effect import: the module's bottom registers the handlers
+# with ``emulator_update_registry`` exactly once. No backend
+# dependency — the handlers dispatch on ``isinstance(em, GPEmulator)``
+# at call time.
+from sabi.emulators import _handlers  # noqa: E402, F401
+
 __all__ = [
     "AppendRows",
     "Emulator",

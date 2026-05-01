@@ -389,9 +389,3 @@ class DSPGPEmulator(GPEmulator):
         if self._predict_cache is None:
             return None
         return self._predict_cache.noise_var
-
-
-# Trigger handler registration when this module is imported. Module
-# import is itself triggered lazily by ``sabi.emulators.gpjax.__getattr__``
-# the first time ``DSPGPEmulator`` is accessed.
-from sabi.emulators.gpjax import _handlers  # noqa: E402, F401
