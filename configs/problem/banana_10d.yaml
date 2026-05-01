@@ -1,0 +1,6 @@
+name: banana
+d: 10
+a: 1.0
+b: 4.0
+c: 1.0
+# bounds: omit to use the d-aware defaults from banana()
