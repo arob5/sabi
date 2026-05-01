@@ -43,6 +43,8 @@ Primitives we expect to leverage as they mature:
 
 ### 4.1 `Problem` — a benchmark
 
+`Problem` is the **freely parameterized** family — useful for development and exploration. `BenchmarkProblem(Problem)` is the curated, frozen subclass that requires a non-None reference distribution and is the entry point used by the regression suite. Each named `BenchmarkProblem` corresponds to a single fixed configuration produced by a curated factory (e.g., `banana_2d()` from `sabi.problems.benchmarks`); changing parameters yields a *new* benchmark name, not a mutation — the posteriordb invariant. See `sabi/problems/base.py` and `sabi/problems/benchmarks.py`.
+
 The expensive Bayesian inference target plus everything needed to construct, transform, and evaluate against it. Shape conventions follow ProbPipe `ArrayRandomFunction` (see `docs/notation.md`): a single target input has shape `input_shape`, a single target output has shape `output_shape`, and design sets `X`, `Y` prepend a batch dimension `n`.
 
 ```
@@ -365,7 +367,7 @@ Two tiers:
 
 **Tier A (local, CI-runnable):** Analytic or very short NUTS.
 - 2-D Gaussian (analytic marginals)
-- Banana (analytic marginals)
+- Banana(d) — Haario twisted Gaussian, analytic reference at any d (e.g. `banana_2d()`, `banana_10d()`)
 - Neal's funnel
 - (Add as needed)
 
