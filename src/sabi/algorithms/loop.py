@@ -40,6 +40,7 @@ from sabi.algorithms.surrogate_posterior_factory import SurrogatePosteriorFactor
 from sabi.emulators.base import Emulator
 from sabi.emulators.dispatch import update_emulator
 from sabi.emulators.updates import (
+    AppendRows,
     EmulatorUpdate,
     RescaleOutputs,
     RescaleThenAppend,
@@ -144,6 +145,15 @@ def _plan_round_update(
     if diff is None:
         return None  # caller refits
     if isinstance(diff, RescaleOutputs):
+        # Reduce a trivial rescale (factor=1.0) so cheap-path handlers
+        # registered against `AppendRows` get a chance. Without this
+        # reduction every round of a no-tempering run is dispatched as
+        # `RescaleThenAppend(factor=1.0, ...)`, which only the
+        # (composite-aware) handlers can match.
+        if diff.factor == 1.0:
+            if has_new_rows:
+                return AppendRows(X_new=X_new, Y_new=Y_new_at_new_state)
+            return None  # nothing to do; fall back to refit (or skip)
         if has_new_rows:
             return RescaleThenAppend(
                 factor=diff.factor, X_new=X_new, Y_new=Y_new_at_new_state

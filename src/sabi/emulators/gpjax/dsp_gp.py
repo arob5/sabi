@@ -104,15 +104,21 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 import lineax as lx
 from jax import Array
+from probpipe.core._registry import MethodInfo
 from probpipe.distributions.gaussian_random_function import GaussianRandomFunction
 
 from sabi.emulators.base import Emulator
+from sabi.emulators.dispatch import (
+    EmulatorUpdateMethod,
+    emulator_update_registry,
+)
 from sabi.emulators.gpjax._dsp import (
     DSP_LENGTHSCALE_FLOOR,
     DSP_NOISE_FLOOR,
     BoundedPositive,
     dsp_map_objective,
 )
+from sabi.emulators.updates import AppendRows
 
 
 __all__ = ["DSPGPEmulator"]
@@ -898,3 +904,61 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
             _train_dataset=new_dataset,
             _predict_cache=new_cache,
         )
+
+
+# -----------------------------------------------------------------------------
+# Cheap-update dispatch handler
+# -----------------------------------------------------------------------------
+
+
+class _DSPGPAppendRowsHandler(EmulatorUpdateMethod):
+    """Cheap-path ``AppendRows`` handler for ``DSPGPEmulator``.
+
+    Delegates to ``DSPGPEmulator.condition_on``, which performs the
+    rank-one (block) Cholesky update on the cached factor — see
+    ``_PredictCache.append_rows`` for the math. Frozen
+    hyperparameters are intentional: this is the right cheap path
+    *only* when callers have decided the existing fit is good enough
+    for the augmented dataset. The dispatcher's natural fallback
+    (``factory().fit(X_full, Y_full)``) takes over when the loop
+    decides a refit is warranted.
+
+    Feasibility: requires the emulator to have an existing fit (i.e.,
+    a populated ``_predict_cache``). An unfitted emulator falls back
+    to refit, which is the only correct option there.
+    """
+
+    @property
+    def name(self) -> str:
+        return "dspgp_append_rows_chol_update"
+
+    def supported_types(self) -> tuple[type, ...]:
+        return (DSPGPEmulator,)
+
+    def check(self, emulator, plan) -> MethodInfo:
+        if not isinstance(plan, AppendRows):
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description="plan is not AppendRows",
+            )
+        if emulator._predict_cache is None:
+            return MethodInfo(
+                feasible=False,
+                method_name=self.name,
+                description="emulator not yet fitted; cache absent",
+            )
+        return MethodInfo(feasible=True, method_name=self.name)
+
+    def execute(self, emulator: "DSPGPEmulator", plan: AppendRows) -> "DSPGPEmulator":
+        return emulator.condition_on(plan.X_new, plan.Y_new)
+
+
+# Register at module import time. The gpjax package's lazy
+# ``__getattr__`` defers loading this module until ``DSPGPEmulator``
+# is referenced, so registration only happens when the optional
+# extra is actually in use — sabi installs without ``gpjax`` are
+# unaffected.
+_dspgp_append_rows_handler = _DSPGPAppendRowsHandler()
+if _dspgp_append_rows_handler.name not in emulator_update_registry._name_index:
+    emulator_update_registry.register(_dspgp_append_rows_handler)

@@ -188,13 +188,16 @@ Use `fit` when:
 - You haven't fitted yet, or want to refresh the hyperparameter
   estimate.
 
-The dispatch surface (`update_emulator` + `AppendRows`) is not yet
-wired to `condition_on` — that integration lands when the user-facing
-API is settled. Today it's a direct method call.
+`DSPGPEmulator` registers an `AppendRows` handler with the cheap-update
+dispatch (`sabi.emulators.dispatch.emulator_update_registry`), so loop
+code that calls `update_emulator(em, AppendRows(X_new, Y_new), ...)`
+takes the rank-one path automatically when the emulator is already
+fitted. Unfitted emulators fall through to the refit fallback.
 
 ## Forward-look
 
-- Wire `AppendRows` dispatch handler that delegates to `condition_on`
-  once the dispatch API for tempering composition stabilizes.
 - ProbPipe `condition_on` integration replaces the bespoke `fit` once
   the primitive lands.
+- `RescaleThenAppend` dispatch handler that fuses the rescale step
+  with the rank-one update — currently `RescaleOutputs` and
+  `RescaleThenAppend` plans hit the refit fallback.

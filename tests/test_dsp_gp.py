@@ -616,6 +616,195 @@ def test_dspgp_condition_on_rejects_wrong_shapes():
         em.condition_on(jnp.zeros((3, 2)), jnp.zeros((4,)))
 
 
+# --- AppendRows dispatch handler ---------------------------------------------
+
+
+def test_dspgp_append_rows_handler_is_registered_on_module_import():
+    """Importing the dsp_gp module registers the AppendRows handler
+    in the global emulator_update_registry."""
+    pytest.importorskip("gpjax")
+    # Trigger the lazy import.
+    from sabi.emulators.gpjax import DSPGPEmulator  # noqa: F401
+    from sabi.emulators.dispatch import emulator_update_registry
+
+    assert "dspgp_append_rows_chol_update" in emulator_update_registry._name_index
+
+
+def test_dspgp_update_emulator_dispatches_through_handler_not_refit():
+    """``update_emulator`` with an AppendRows plan on a fitted
+    DSPGPEmulator must hit the handler — not the refit fallback. We
+    prove this by passing an exploding factory that raises if it's
+    called."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import AppendRows
+
+    key = jr.key(201)
+    X = jr.uniform(key, (12, 2))
+    Y = jnp.sin(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_extra = jr.uniform(jr.key(202), (4, 2))
+    Y_extra = jnp.sin(X_extra[:, 0])
+    plan = AppendRows(X_new=X_extra, Y_new=Y_extra)
+
+    def _exploding_factory():
+        raise AssertionError(
+            "factory should not be called: cheap path is feasible"
+        )
+
+    X_full = jnp.concatenate([X, X_extra], axis=0)
+    Y_full = jnp.concatenate([Y, Y_extra], axis=0)
+    out = update_emulator(
+        em, plan, factory=_exploding_factory, X_full=X_full, Y_full=Y_full
+    )
+    assert isinstance(out, DSPGPEmulator)
+    # Same _opt_posterior object: handler routed through condition_on,
+    # which preserves the hyperparameters.
+    assert out._opt_posterior is em._opt_posterior
+    # Cache grew by exactly the number of new rows.
+    assert out._predict_cache.Xs_train.shape == (16, 2)
+
+
+def test_dspgp_update_emulator_dispatch_matches_direct_condition_on():
+    """The dispatch path and a direct ``condition_on`` call must
+    produce numerically identical predictions."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import AppendRows
+
+    key = jr.key(211)
+    X = jr.uniform(key, (10, 2))
+    Y = jnp.cos(X[:, 0])
+    em = DSPGPEmulator(input_shape=(2,)).fit(X, Y)
+
+    X_extra = jr.uniform(jr.key(212), (3, 2))
+    Y_extra = jnp.cos(X_extra[:, 0])
+    plan = AppendRows(X_new=X_extra, Y_new=Y_extra)
+
+    direct = em.condition_on(X_extra, Y_extra)
+    dispatched = update_emulator(
+        em,
+        plan,
+        factory=lambda: DSPGPEmulator(input_shape=(2,)),
+        X_full=jnp.concatenate([X, X_extra], axis=0),
+        Y_full=jnp.concatenate([Y, Y_extra], axis=0),
+    )
+
+    X_test = jr.uniform(jr.key(213), (5, 2))
+    assert jnp.allclose(
+        direct.predict_mean(X_test),
+        dispatched.predict_mean(X_test),
+        rtol=1e-12,
+        atol=1e-14,
+    )
+    assert jnp.allclose(
+        direct.predict_variance(X_test),
+        dispatched.predict_variance(X_test),
+        rtol=1e-12,
+        atol=1e-14,
+    )
+
+
+def test_dspgp_loop_planner_collapses_trivial_rescale_to_append_rows():
+    """End-to-end: when there's no tempering (rescale factor == 1.0)
+    plus new rows, the loop's planner should produce a plain
+    `AppendRows` plan — which our DSPGPEmulator handler accepts. This
+    is the integration that makes the cheap path actually fire in
+    runner runs."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+
+    from sabi.algorithms.loop import _plan_round_update
+    from sabi.emulators.updates import AppendRows, RescaleOutputs
+
+    class _IdentityRescaleTransform:
+        """Stub OutputTransform that always reports a no-op rescale diff."""
+
+        def diff(self, state_prev, state_new):
+            return RescaleOutputs(factor=1.0)
+
+    plan = _plan_round_update(
+        _IdentityRescaleTransform(),
+        state_prev=None,
+        state_new=None,
+        X_new=jnp.zeros((3, 2)),
+        Y_new_at_new_state=jnp.zeros((3,)),
+    )
+    assert isinstance(plan, AppendRows)
+    assert plan.X_new.shape == (3, 2)
+
+
+def test_dspgp_loop_planner_returns_none_for_trivial_rescale_no_new_rows():
+    """factor=1.0 with no new rows → nothing to do → `None` (skips
+    the dispatch entirely, or — at present — falls through to the
+    refit fallback which the caller can short-circuit)."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+
+    from sabi.algorithms.loop import _plan_round_update
+    from sabi.emulators.updates import RescaleOutputs
+
+    class _IdentityRescaleTransform:
+        def diff(self, state_prev, state_new):
+            return RescaleOutputs(factor=1.0)
+
+    plan = _plan_round_update(
+        _IdentityRescaleTransform(),
+        state_prev=None,
+        state_new=None,
+        X_new=None,
+        Y_new_at_new_state=None,
+    )
+    assert plan is None
+
+
+def test_dspgp_update_emulator_falls_back_to_refit_when_unfitted():
+    """An unfitted DSPGPEmulator can't take the cheap path (no cache
+    to update). Dispatch must fall back to a fresh ``factory().fit``."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.dispatch import update_emulator
+    from sabi.emulators.gpjax import DSPGPEmulator
+    from sabi.emulators.updates import AppendRows
+
+    em_unfitted = DSPGPEmulator(input_shape=(2,))
+    assert em_unfitted._predict_cache is None
+
+    key = jr.key(221)
+    X_full = jr.uniform(key, (8, 2))
+    Y_full = jnp.sin(X_full[:, 0])
+    plan = AppendRows(X_new=X_full, Y_new=Y_full)
+
+    factory_calls = {"n": 0}
+
+    def _counting_factory():
+        factory_calls["n"] += 1
+        return DSPGPEmulator(input_shape=(2,))
+
+    out = update_emulator(
+        em_unfitted, plan, factory=_counting_factory, X_full=X_full, Y_full=Y_full
+    )
+    assert factory_calls["n"] == 1, "factory should have been called once for refit"
+    # Output is a freshly fitted emulator (has a cache).
+    assert out._predict_cache is not None
+    assert out._predict_cache.Xs_train.shape == (8, 2)
+
+
 # --- Sample efficiency at high d ---------------------------------------------
 
 
