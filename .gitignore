@@ -15,3 +15,7 @@ multirun/
 .ipynb_checkpoints/
 wandb/
 reference_posteriors/cache/
+
+# Scratch files (commit message buffers etc.)
+.git_msg.tmp
+*.tmp
