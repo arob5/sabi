@@ -74,3 +74,19 @@ def test_lengthscale_shrinks_with_more_data():
     gp_small = TinyGPEmulator(input_shape=(2,)).fit(X_small, Y_small)
     gp_large = TinyGPEmulator(input_shape=(2,)).fit(X_large, Y_large)
     assert float(gp_large.lengthscale) < float(gp_small.lengthscale)
+
+
+def test_tinygp_obs_noise_variance_returns_constructor_value():
+    """``obs_noise_variance`` exposes the constructor ``noise`` arg as
+    an Array, both pre- and post-fit (TinyGPEmulator's noise is
+    fixed, not fit from data)."""
+    em_pre = TinyGPEmulator(input_shape=(2,), noise=2.5e-3)
+    pre = em_pre.obs_noise_variance
+    assert pre is not None
+    assert float(pre) == pytest.approx(2.5e-3)
+
+    X, Y = _sample_2d_gp_data(n=20)
+    em_post = em_pre.fit(X, Y)
+    post = em_post.obs_noise_variance
+    assert post is not None
+    assert float(post) == pytest.approx(2.5e-3)

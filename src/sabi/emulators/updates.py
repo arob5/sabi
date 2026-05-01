@@ -84,14 +84,27 @@ class RescaleOutputs(EmulatorUpdate):
 class RescaleThenAppend(EmulatorUpdate):
     """Composite: rescale existing outputs by ``factor``, then append new rows.
 
-    ``Y_new`` is at the *new* state (post-rescale coordinate system),
-    so combining the two ops yields a training set whose existing
-    rows have been rescaled and whose new rows are added at the new
-    state — equivalent to refitting on the full materialized data.
+    Contract — IMPORTANT for handler authors and callers:
+
+    - ``factor`` is a positive scalar applied to **existing** training
+      Y so that the prior-fit rows transform to the new state
+      (``Y_old → factor · Y_old``).
+    - ``X_new`` are inputs in the original (raw) input space.
+    - ``Y_new`` is **already at the new state** (post-rescale
+      coordinate system). Callers must materialize this themselves —
+      typically via ``transform.apply(state_new, X_new, Y_raw_new)``
+      — before constructing the op. Handlers do not re-apply
+      ``factor`` to ``Y_new``; that would double-rescale the new
+      rows.
+
+    Combining the two ops yields a training set whose existing rows
+    have been rescaled and whose new rows are added at the new state
+    — equivalent to refitting on the full materialized data.
 
     This composite is its own dataclass (rather than a generic
     sequence of ops) because backends often fuse the two operations
-    into a single Cholesky update, beating two separate dispatch calls.
+    into a single Cholesky update, beating two separate dispatch
+    calls.
     """
 
     factor: float

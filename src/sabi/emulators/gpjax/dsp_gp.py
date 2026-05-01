@@ -516,6 +516,21 @@ class DSPGPEmulator(Emulator, GaussianRandomFunction):
                 "state is unset."
             )
 
+    @property
+    def obs_noise_variance(self) -> Array | None:
+        """MAP-fitted observation-noise variance (``obs_stddev²``).
+
+        Sourced from the cache's ``noise_var`` field, which was
+        populated at fit time from the unwrapped posterior's
+        ``likelihood.obs_stddev``. Returns ``None`` if the emulator
+        has not been fit yet — predicting on an unfit emulator
+        already raises, but callers that introspect the property
+        before fit get a graceful ``None``.
+        """
+        if self._predict_cache is None:
+            return None
+        return self._predict_cache.noise_var
+
     # --- Fixed-hyperparameter conditioning ---------------------------------
 
     def condition_on(self, X_new: Array, Y_new: Array) -> Self:

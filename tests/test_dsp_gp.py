@@ -50,6 +50,30 @@ def test_dspgp_fit_predict_shapes_on_2d_toy():
     assert jnp.all(var >= 0.0)
 
 
+def test_dspgp_obs_noise_variance_returns_fitted_value_post_fit():
+    """``obs_noise_variance`` is ``None`` pre-fit and equals the
+    cache's ``noise_var`` (squared MAP-fitted ``obs_stddev``) after
+    fit."""
+    pytest.importorskip("gpjax")
+    _enable_x64()
+    import jax.numpy as jnp
+    import jax.random as jr
+
+    from sabi.emulators.gpjax import DSPGPEmulator
+
+    em_pre = DSPGPEmulator(input_shape=(2,))
+    assert em_pre.obs_noise_variance is None
+
+    key = jr.key(0)
+    X = jr.uniform(key, (15, 2))
+    Y = jnp.sin(X[:, 0])
+    em_post = em_pre.fit(X, Y)
+    nv = em_post.obs_noise_variance
+    assert nv is not None
+    # Matches the cache's stored noise_var.
+    assert jnp.allclose(nv, em_post._predict_cache.noise_var)
+
+
 def test_dspgp_predict_before_fit_raises():
     pytest.importorskip("gpjax")
     _enable_x64()

@@ -108,6 +108,17 @@ class TinyGPEmulator(Emulator, GaussianRandomFunction):
     def lengthscale(self) -> Array | None:
         return self._lengthscale
 
+    @property
+    def obs_noise_variance(self) -> Array:
+        """Observation-noise variance — the constructor ``noise`` arg.
+
+        ``TinyGPEmulator`` uses a fixed scalar noise term (passed at
+        construction); it is not fit from data. Returned as a JAX
+        array so callers can use it in ``jnp`` arithmetic without
+        type juggling.
+        """
+        return jnp.asarray(self.noise)
+
     def fit(self, X: Array, Y: Array) -> Self:
         if X.ndim != 1 + len(self.input_shape):
             raise ValueError(

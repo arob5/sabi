@@ -43,11 +43,12 @@ true function value at unobserved inputs — not the broader observation-
 predictive uncertainty.
 
 Callers that want the observation-predictive distribution can build it
-explicitly: ``Var[y* | data] = predict_variance(X) + sigma_n²``, where
-``sigma_n²`` is whatever observation-noise model the application has.
-Sabi emulators don't expose an ``obs_stddev`` accessor in v1; backends
-that have one (e.g. ``DSPGPEmulator``'s gpjax-fitted ``obs_stddev``)
-keep it as internal implementation detail.
+explicitly: ``Var[y* | data] = predict_variance(X) + obs_noise_variance``,
+where ``obs_noise_variance`` is read from the emulator's
+``obs_noise_variance`` property (see ``Emulator.obs_noise_variance``).
+Backends that have a fitted observation-noise variance expose it
+there (e.g. ``DSPGPEmulator`` returns the squared MAP-fitted
+``obs_stddev``); backends without one return ``None``.
 
 When v2's noisy-target work lands and the latent vs. observation
 distinction becomes user-facing, this module will grow a separate
@@ -83,3 +84,30 @@ class Emulator(ArrayRandomFunction):
         Returns:
             A new (or self-mutated) `Emulator` carrying the conditioned state.
         """
+
+    @property
+    def obs_noise_variance(self) -> Array | None:
+        """Observation-noise variance, or ``None`` if not modeled.
+
+        Sabi's ``predict_*`` family returns the **latent** posterior
+        — variance/covariance of the latent function ``f(x*)``, with
+        no observation noise added on the diagonal. Callers that want
+        the observation-predictive variance build it explicitly:
+
+        .. code-block:: python
+
+            obs_var = em.predict_variance(X)
+            sigma2 = em.obs_noise_variance
+            if sigma2 is not None:
+                obs_var = obs_var + sigma2
+
+        Backends that fit an observation-noise term (e.g.
+        ``TinyGPEmulator``'s constructor ``noise``,
+        ``DSPGPEmulator``'s MAP-fitted ``obs_stddev``) override this
+        property; the base returns ``None``.
+
+        Returns:
+            Scalar JAX array (variance, not stddev), or ``None`` if
+            the emulator does not model observation noise.
+        """
+        return None
