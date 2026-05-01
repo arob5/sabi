@@ -1,6 +1,8 @@
 name: banana
+d: 2
 a: 1.0
 b: 4.0
+c: 1.0  # filler-dim std for i >= 3; ignored at d=2
 bounds:
   - [-4.0, 4.0]
   - [-10.0, 4.0]

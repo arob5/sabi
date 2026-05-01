@@ -103,3 +103,47 @@ class Problem:
         y = self.target_single(x)
         return self.log_density_form(x, y, prior=self.prior)
 
+
+@dataclass(frozen=True)
+class BenchmarkProblem(Problem):
+    """A `Problem` with a locked-in, validated reference posterior.
+
+    Each named `BenchmarkProblem` corresponds to a single fixed
+    configuration of a problem family (parameters baked into the
+    factory that produced it). Changing the parameters yields a *new*
+    benchmark, not a mutation — the posteriordb invariant: a name
+    refers to one log-density up to a normalizing constant.
+
+    Validation invariants enforced at construction:
+
+    - ``reference_distribution`` must be non-None — that's the whole
+      point of the validated tier. Use bare `Problem` if you want a
+      flexible instance without a reference.
+    - ``name`` must be non-empty — names are the identity.
+    - The frozen dataclass blocks post-hoc parameter mutation.
+
+    Attributes:
+        artifact_version: opaque tag (e.g. ``"v1"``) bumped when the
+            posterior or its reference artifact genuinely changes. The
+            canonical operation when a benchmark needs to evolve is to
+            *introduce a new name* (posteriordb-style). The version
+            field exists for the rare case where a fix to a reference
+            generation pipeline is rolled into the same name and tests
+            need a way to declare which artifact they trust.
+    """
+
+    artifact_version: str = "v1"
+
+    def __post_init__(self):
+        if self.reference_distribution is None:
+            raise ValueError(
+                f"BenchmarkProblem {self.name!r} requires a non-None "
+                "reference_distribution. Use Problem for flexible "
+                "instances without a validated reference."
+            )
+        if not self.name:
+            raise ValueError(
+                "BenchmarkProblem requires a non-empty name; the name "
+                "is the benchmark's identity."
+            )
+

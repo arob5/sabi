@@ -42,10 +42,19 @@ def build_problem(cfg: DictConfig) -> Problem:
             bounds_radius=float(cfg.get("bounds_radius", 5.0)),
         )
     if name == "banana":
+        # `bounds` is optional in the d-D form: omit to fall through to
+        # banana()'s d-aware default. Tuple-of-tuples coercion only when
+        # the user supplied a value explicitly.
+        bounds_cfg = cfg.get("bounds", None)
+        bounds = (
+            tuple(tuple(b) for b in bounds_cfg) if bounds_cfg is not None else None
+        )
         return banana(
+            d=int(cfg.get("d", 2)),
             a=float(cfg.get("a", 1.0)),
             b=float(cfg.get("b", 4.0)),
-            bounds=tuple(tuple(b) for b in cfg.get("bounds", ((-4.0, 4.0), (-10.0, 4.0)))),
+            c=float(cfg.get("c", 1.0)),
+            bounds=bounds,
         )
     if name == "neals_funnel":
         return neals_funnel(
