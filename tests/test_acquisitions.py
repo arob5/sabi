@@ -6,7 +6,7 @@ from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.optim import CandidateSetOptimizer
 from sabi.acquisitions.random import PriorSampling
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.posterior.surrogate_distribution import SurrogateDistribution
 from sabi.problems.gaussian import gaussian2d
 from sabi.sampling import PriorSampler
 from sabi.emulators import TinyGPEmulator
@@ -19,7 +19,7 @@ def _state(problem, key_seed=0, n=20):
     X = PriorSampler().sample(problem, jax.random.key(key_seed), n)
     Y = problem.target_map(X)
     gp = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
-    sp = SurrogatePosterior(
+    sp = SurrogateDistribution(
         emulator=gp,
         log_density_form=problem.log_density_form,
         support=problem.support,
@@ -28,7 +28,7 @@ def _state(problem, key_seed=0, n=20):
     )
     return AcquisitionState(
         problem=problem,
-        surrogate_posterior=sp,
+        surrogate_distribution=sp,
         X=X,
         Y_raw=Y,
         Y_train=Y,
@@ -66,7 +66,7 @@ def test_ei_picks_points_with_higher_emulator_mean_than_random():
     )
     random_batch = PriorSampling().select_batch(state, q=16, key=jax.random.key(3))
 
-    emulator = state.surrogate_posterior.emulator
+    emulator = state.surrogate_distribution.emulator
     ei_pred = emulator(ei_batch)
     rand_pred = emulator(random_batch)
 

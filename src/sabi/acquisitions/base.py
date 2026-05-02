@@ -19,7 +19,7 @@ families:
    structured to slot in a parallel `BatchOptimizer` hierarchy when
    this lands (v1.5+).
 
-The acquisition sees the current `SurrogatePosterior` (carrying the
+The acquisition sees the current `SurrogateDistribution` (carrying the
 round's emulator and log-density form) plus an `AcquisitionState`
 bundling the design data and tempering state. See the
 `PointwiseScoredAcquisition` docstring for the scoring contract.
@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 import jax
 from jax import Array
 
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.posterior.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
 
 if TYPE_CHECKING:
@@ -51,7 +51,7 @@ class AcquisitionTarget(Enum):
     """Which tempering state the acquisition optimizes against.
 
     In a tempered loop, three natural choices exist for the state at
-    which the acquisition's `SurrogatePosterior` is built:
+    which the acquisition's `SurrogateDistribution` is built:
 
     - ``CURRENT``: state of the current round (``state_t``). Simplest;
       default. The acquisition sees the SP at the round's intermediate
@@ -88,7 +88,7 @@ def resolve_state(
     """Map an `AcquisitionTarget` value to a concrete tempering state.
 
     Used by the algorithm loop to determine which tempering state the
-    acquisition's `SurrogatePosterior` should be built at:
+    acquisition's `SurrogateDistribution` should be built at:
 
     - `CURRENT`: returns `current_state` (the round's state).
     - `NEXT`: returns `schedule.at(round_idx + 1)[0]`. Built-in
@@ -113,12 +113,12 @@ def resolve_state(
 class AcquisitionState:
     """Per-round bundle passed to acquisitions. All fields are read-only.
 
-    The round's `SurrogatePosterior` carries the emulator fit on the
+    The round's `SurrogateDistribution` carries the emulator fit on the
     current design data plus the log-density form for the round.
     Acquisitions that need a real (non-degenerate) emulator should check
-    ``state.surrogate_posterior.emulator is None`` — this is the case
+    ``state.surrogate_distribution.emulator is None`` — this is the case
     when the loop is running the weighted-empirical baseline (a
-    `WeightedEmpiricalRandomMeasure`, which is a `SurrogatePosterior`
+    `WeightedEmpiricalRandomMeasure`, which is a `SurrogateDistribution`
     subclass with ``emulator=None``).
 
     Two `Y` arrays are exposed:
@@ -133,17 +133,17 @@ class AcquisitionState:
       via target).
 
     Most acquisitions only care about ``Y_train`` (it's what's
-    consistent with ``state.surrogate_posterior.emulator``'s training
+    consistent with ``state.surrogate_distribution.emulator``'s training
     data). Diagnostic / logging code can use ``Y_raw`` to access the
     raw evaluations.
 
     Attributes:
         problem: the inference problem (provides `prior`, `support`,
             `input_shape`, etc.).
-        surrogate_posterior: round's surrogate-posterior random measure
+        surrogate_distribution: round's surrogate-posterior random measure
             built at ``target_tempering_state`` (the state the
             acquisition optimizes against — see `AcquisitionTarget`).
-            Always set; ``surrogate_posterior.emulator`` may be
+            Always set; ``surrogate_distribution.emulator`` may be
             ``None`` for the weighted-empirical baseline.
         X: design inputs, shape `(n,) + problem.input_shape`.
         Y_raw: raw target evaluations, shape `(n,) + problem.output_shape`.
@@ -156,13 +156,13 @@ class AcquisitionState:
             round's intermediate distribution independently of the
             target.
         target_tempering_state: state at which the
-            ``surrogate_posterior`` is built — the state the
+            ``surrogate_distribution`` is built — the state the
             acquisition optimizes against. Equal to ``tempering_state``
             when ``Algorithm.acquisition_target == CURRENT`` (default).
     """
 
     problem: Problem
-    surrogate_posterior: SurrogatePosterior
+    surrogate_distribution: SurrogateDistribution
     X: Array
     Y_raw: Array
     Y_train: Array
@@ -200,7 +200,7 @@ class PointwiseScoredAcquisition(Acquisition, ABC):
     gradient. The candidate-set optimizer needs only forward evaluation.
 
     **Emulator-protocol assumptions.** The score function reads from
-    `state.surrogate_posterior.emulator` (an `ArrayRandomFunction`)
+    `state.surrogate_distribution.emulator` (an `ArrayRandomFunction`)
     whatever predictive moments / samples it needs. See subclass
     docstrings for specifics. ProbPipe's `mean` and `variance` ops
     require `SupportsMean` / `SupportsVariance` — they do **not**

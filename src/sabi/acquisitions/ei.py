@@ -20,7 +20,7 @@ hunts for high-posterior-density regions — a reasonable v0+ heuristic.
 
 **Assumptions.** EI reads only the first two moments of the emulator
 predictive at each query point. Concretely the score requires
-`state.surrogate_posterior.emulator(x[None])` to satisfy ProbPipe's
+`state.surrogate_distribution.emulator(x[None])` to satisfy ProbPipe's
 `SupportsMean` and `SupportsVariance` protocols (TFP-backed `Normal` /
 `MultivariateNormal` do this by construction). See the
 `PointwiseScoredAcquisition` base docstring for the full contract on
@@ -68,11 +68,11 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
     def _score_single(self, x: Array, state: AcquisitionState) -> Array:
         """Single-point EI at `x` (shape `state.problem.input_shape`).
         Returns scalar."""
-        emulator = state.surrogate_posterior.emulator
+        emulator = state.surrogate_distribution.emulator
         if emulator is None:
             raise ValueError(
                 "ExpectedImprovement requires a non-degenerate emulator; "
-                "got `state.surrogate_posterior.emulator=None` (this happens "
+                "got `state.surrogate_distribution.emulator=None` (this happens "
                 "with the weighted-empirical baseline). Switch to a real "
                 "emulator or use a sampling acquisition like PriorSampling."
             )
@@ -92,7 +92,7 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
         if self.best_from == "data":
             return jnp.max(state.Y_train)
         if self.best_from == "mean":
-            emulator = state.surrogate_posterior.emulator
+            emulator = state.surrogate_distribution.emulator
             if emulator is None:
                 raise ValueError(
                     "ExpectedImprovement(best_from='mean') requires a "

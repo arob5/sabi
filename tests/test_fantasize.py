@@ -12,7 +12,7 @@ from sabi.acquisitions.fantasize import (
     ConstantLiar,
     KrigingBeliever,
 )
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.posterior.surrogate_distribution import SurrogateDistribution
 from sabi.problems.gaussian import gaussian2d
 from sabi.emulators import TinyGPEmulator
 
@@ -26,7 +26,7 @@ def _state(n: int = 20, seed: int = 0):
     )
     Y = problem.target_map(X)
     emulator = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
-    sp = SurrogatePosterior(
+    sp = SurrogateDistribution(
         emulator=emulator,
         log_density_form=problem.log_density_form,
         support=problem.support,
@@ -35,7 +35,7 @@ def _state(n: int = 20, seed: int = 0):
     )
     return AcquisitionState(
         problem=problem,
-        surrogate_posterior=sp,
+        surrogate_distribution=sp,
         X=X,
         Y_raw=Y,
         Y_train=Y,
@@ -50,7 +50,7 @@ def test_kriging_believer_returns_predictive_mean():
 
     imputer = KrigingBeliever()
     y = imputer.impute(x_pending, state)
-    expected = jnp.asarray(mean(state.surrogate_posterior.emulator(x_pending)))
+    expected = jnp.asarray(mean(state.surrogate_distribution.emulator(x_pending)))
     assert jnp.allclose(y, expected, atol=1e-5)
     assert y.shape == (2,) + state.problem.output_shape
 

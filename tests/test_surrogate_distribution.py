@@ -1,8 +1,8 @@
-"""Tests for the v1.2-refactor SurrogatePosterior + WeightedEmpiricalRandomMeasure.
+"""Tests for the v1.2-refactor SurrogateDistribution + WeightedEmpiricalRandomMeasure.
 
 Coverage:
-- Inheritance: SurrogatePosterior is a NumericRandomMeasure;
-  WeightedEmpiricalRandomMeasure is a SurrogatePosterior subclass with
+- Inheritance: SurrogateDistribution is a NumericRandomMeasure;
+  WeightedEmpiricalRandomMeasure is a SurrogateDistribution subclass with
   ``emulator=None`` (the degenerate / no-emulator case).
 - Inner-support / inner-event-shape derived from constructor args.
 - Decoupling from Problem (constructed from math primitives only).
@@ -42,7 +42,7 @@ from probpipe.distributions.continuous import Normal
 from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.posterior import (
-    SurrogatePosterior,
+    SurrogateDistribution,
     WeightedEmpiricalRandomMeasure,
     expected_target,
 )
@@ -75,12 +75,12 @@ def _werm(n: int = 16, d: int = 2, seed: int = 0):
 
 
 def _sp(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
-    """A SurrogatePosterior fit on a 2-D Gaussian log-density."""
+    """A SurrogateDistribution fit on a 2-D Gaussian log-density."""
     key = jax.random.key(seed)
     X = jax.random.uniform(key, shape=(n, d), minval=-3.0, maxval=3.0)
     Y = -0.5 * jnp.sum(X ** 2, axis=-1)
     emulator = TinyGPEmulator(input_shape=(d,)).fit(X, Y)
-    return SurrogatePosterior(
+    return SurrogateDistribution(
         emulator=emulator,
         log_density_form=form if form is not None else Identity(),
         support=_box_support(d),
@@ -95,19 +95,19 @@ def _sp(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
 # -------------------------------------------------------------------------
 
 
-def test_werm_is_surrogate_posterior_subclass():
+def test_werm_is_surrogate_distribution_subclass():
     werm = _werm()
     assert isinstance(werm, NumericRandomMeasure)
     assert isinstance(werm, RandomMeasure)
-    # WERM is a SurrogatePosterior subclass with degenerate emulator.
-    assert isinstance(werm, SurrogatePosterior)
+    # WERM is a SurrogateDistribution subclass with degenerate emulator.
+    assert isinstance(werm, SurrogateDistribution)
     assert werm.emulator is None
     assert werm.log_density_form is None
 
 
 def test_sp_is_numeric_random_measure():
     sp = _sp()
-    assert isinstance(sp, SurrogatePosterior)
+    assert isinstance(sp, SurrogateDistribution)
     assert isinstance(sp, NumericRandomMeasure)
     assert isinstance(sp, RandomMeasure)
 
@@ -135,7 +135,7 @@ def test_sp_requires_support():
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="support"):
-        SurrogatePosterior(
+        SurrogateDistribution(
             emulator=emulator,
             log_density_form=Identity(),
             support=None,  # type: ignore[arg-type]
@@ -148,7 +148,7 @@ def test_sp_input_shape_must_match_emulator_input_shape():
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="input_shape"):
-        SurrogatePosterior(
+        SurrogateDistribution(
             emulator=emulator,
             log_density_form=Identity(),
             support=_box_support(3),
@@ -305,7 +305,7 @@ def test_pushforward_forward_model_with_normal_falls_to_mc():
 
 
 # -------------------------------------------------------------------------
-# SurrogatePosterior random log-prob (uses the dispatch internally)
+# SurrogateDistribution random log-prob (uses the dispatch internally)
 # -------------------------------------------------------------------------
 
 

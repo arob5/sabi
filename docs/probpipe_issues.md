@@ -128,9 +128,9 @@ to this entry.
 
 **Status:** resolved ([PR #150](https://github.com/TARPS-group/prob-pipe/pull/150) merged 2026-04-27).
 
-**Sabi context.** sabi's `SurrogatePosterior` is conceptually a distribution over distributions — needs `RandomMeasure`-shaped abstractions.
+**Sabi context.** sabi's `SurrogateDistribution` is conceptually a distribution over distributions — needs `RandomMeasure`-shaped abstractions.
 
-**What landed.** `RandomMeasure[T](Distribution[Distribution[T]])` and `NumericRandomMeasure(RandomMeasure[Array])` in `probpipe/core/_random_measures.py`, plus `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` protocols and matching ops. v1.2 of sabi builds `SurrogatePosterior` directly on these.
+**What landed.** `RandomMeasure[T](Distribution[Distribution[T]])` and `NumericRandomMeasure(RandomMeasure[Array])` in `probpipe/core/_random_measures.py`, plus `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` protocols and matching ops. v1.2 of sabi builds `SurrogateDistribution` directly on these.
 
 ---
 
@@ -166,7 +166,7 @@ to this entry.
 
 **Status:** open.
 
-**Sabi context.** v1.2's `WeightedEmpiricalSurrogatePosterior` is conceptually a Dirac random measure (no surrogate uncertainty). Implementing `SupportsRandomLogProb` for it requires a degenerate `RandomFunction` whose `__call__(x)` returns a Dirac `Distribution[Array]` at the deterministic log-density value. Today we'd build this Dirac inside sabi.
+**Sabi context.** v1.2's `WeightedEmpiricalSurrogateDistribution` is conceptually a Dirac random measure (no surrogate uncertainty). Implementing `SupportsRandomLogProb` for it requires a degenerate `RandomFunction` whose `__call__(x)` returns a Dirac `Distribution[Array]` at the deterministic log-density value. Today we'd build this Dirac inside sabi.
 
 **Why it matters for sabi.** Multiple sabi v1.2 paths want "treat a deterministic value as a degenerate distribution for protocol-compatibility purposes": Dirac inner distributions in Dirac random measures, deterministic random functions (degenerate `RandomFunction`s), constant random log-densities, etc. Each instance is a small but fiddly shim.
 

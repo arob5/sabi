@@ -31,7 +31,7 @@ TemperingScheme    ← family of intermediate targets indexed by state
 TemperingSchedule  ← state sequence: schedule.next(round_idx) → (state, final)
 
 Emulator           ← predictive model fit to (X, Y_train)
-SurrogatePosterior ← Emulator + log_density_form (the SP at a particular state)
+SurrogateDistribution ← Emulator + log_density_form (the SP at a particular state)
 
 Algorithm          ← composition: emulator_factory + tempering_scheme +
                      schedule + acquisition + acquisition_target
@@ -47,7 +47,7 @@ Three orthogonal pieces of machinery interact:
    distribution at a particular state — a `TargetDistribution`
    subclass with state and `output_transform` metadata.
 3. **`AcquisitionTarget`** picks *which* state the acquisition's
-   `SurrogatePosterior` is built at: `CURRENT` (the round's state),
+   `SurrogateDistribution` is built at: `CURRENT` (the round's state),
    `NEXT` (the next round's state), or `TERMINAL` (the schedule's
    final state).
 

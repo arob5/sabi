@@ -250,13 +250,13 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                 # emulator only consumes Y_train anyway).
                 new_Y_train = jnp.concatenate([state.Y_train, y_pending], axis=0)
                 # Refit the emulator on the augmented training design.
-                # Mutate the surrogate_posterior copy so downstream
+                # Mutate the surrogate_distribution copy so downstream
                 # score calls see the new emulator.
-                old_sp = state.surrogate_posterior
+                old_sp = state.surrogate_distribution
                 if old_sp.emulator is None:
                     raise ValueError(
                         "GreedyMultiPointOptimizer requires a non-degenerate "
-                        "emulator; got `surrogate_posterior.emulator=None`."
+                        "emulator; got `surrogate_distribution.emulator=None`."
                     )
                 new_emulator = old_sp.emulator.fit(new_X, new_Y_train)
                 new_sp = type(old_sp)(
@@ -269,7 +269,7 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                 )
                 cur_state = replace(
                     state,
-                    surrogate_posterior=new_sp,
+                    surrogate_distribution=new_sp,
                     X=new_X,
                     Y_train=new_Y_train,
                 )

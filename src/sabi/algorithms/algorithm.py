@@ -5,8 +5,8 @@ needs to run end-to-end (emulator factory, acquisition, sampler,
 tempering scheme + schedule, etc.). `RunResult` is what `run` returns.
 
 The loop body itself lives in :mod:`sabi.algorithms.loop`. Factories
-producing `SurrogatePosterior` instances live in
-:mod:`sabi.algorithms.surrogate_posterior_factory`.
+producing `SurrogateDistribution` instances live in
+:mod:`sabi.algorithms.surrogate_distribution_factory`.
 """
 
 from __future__ import annotations
@@ -19,14 +19,14 @@ from jax import Array
 from probpipe.core._distribution_base import Distribution
 
 from sabi.acquisitions.base import Acquisition, AcquisitionTarget
-from sabi.algorithms.surrogate_posterior_factory import (
-    SurrogatePosteriorFactory,
+from sabi.algorithms.surrogate_distribution_factory import (
+    SurrogateDistributionFactory,
     emulator_pushforward_factory,
 )
 from sabi.emulators.base import Emulator
 from sabi.metrics.base import PosteriorMetric
 from sabi.posterior.estimators import expected_target
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.posterior.surrogate_distribution import SurrogateDistribution
 from sabi.sampling import BatchSampler, PriorSampler
 from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule
@@ -45,8 +45,8 @@ class Algorithm:
     tempering_scheme: TemperingScheme = field(default_factory=NoTempering)
     schedule: TemperingSchedule = field(default_factory=UntemperedSchedule)
     acquisition_target: AcquisitionTarget = AcquisitionTarget.CURRENT
-    surrogate_posterior_factory: SurrogatePosteriorFactory = emulator_pushforward_factory
-    estimator: Callable[[SurrogatePosterior], Distribution] = expected_target
+    surrogate_distribution_factory: SurrogateDistributionFactory = emulator_pushforward_factory
+    estimator: Callable[[SurrogateDistribution], Distribution] = expected_target
     metrics: tuple[PosteriorMetric, ...] = ()
 
 
