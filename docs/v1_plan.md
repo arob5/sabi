@@ -66,7 +66,7 @@ Following the pushforward-dispatch and class-hierarchy review, several of the v1
 
 - **`Surrogate(ArrayRandomFunction)`** — sabi's surrogate is now a real ProbPipe `ArrayRandomFunction`. `__call__(X, joint_inputs, joint_outputs) -> Distribution` is the predictive-distribution interface (free from the parent); `fit(X, Y) -> Self` is the only sabi-specific addition. `GPSurrogate(Surrogate, GaussianRandomFunction)` is the concrete Gaussian path — diamond inheritance over `ArrayRandomFunction`, resolved cleanly by C3 MRO. `SurrogatePrediction(mean, variance)` is removed; consumers use `mean` / `variance` ops on the returned `Normal` (or `MultivariateNormal` once joint modes land).
 - **Class collapse + rename.** `SurrogateDistribution` (formerly `GPPushforwardSurrogateDistribution`) is now the only "surrogate posterior" — direct subclass of `NumericRandomMeasure`, holds `(surrogate, log_density_form, support, input_shape, prior)`. `WeightedEmpiricalRandomMeasure` (renamed from `WeightedEmpiricalSurrogateDistribution`) is a sibling class — a Dirac random measure that no longer carries `log_density_form`. The two are coordinate concepts in the loop's `surrogate_distribution_factory`, not parent/child classes.
-- **`pushforward_marginal` dispatch.** A new free function in `sabi.posterior._pushforward` does the work that was buried in `_PushforwardLogDensityRandomFunction.__call__`. Type-dispatched on `(input_dist, log_density_form)`:
+- **`pushforward_marginal` dispatch.** A new free function in `sabi.surrogate._pushforward` does the work that was buried in `_PushforwardLogDensityRandomFunction.__call__`. Type-dispatched on `(input_dist, log_density_form)`:
   - `(Normal | MultivariateNormal, Identity | LogLikPlusPrior)` — closed-form affine pushforward (shift `loc`; same scale / scale_tril). Handles univariate marginals AND multivariate (joint over inputs / joint over outputs) uniformly.
   - `(samplable Distribution, anything)` — MC empirical via `@workflow_function`-wrapped helper. ProbPipe's broadcasting machinery samples from the input, runs the form pointwise (vmap when JAX-traceable), returns a `NumericEmpiricalDistribution`.
   - Otherwise — clear `NotImplementedError` naming the types and pointing at the partial-pushforward primitive in `docs/probpipe_issues.md`.
@@ -79,30 +79,30 @@ math primitives `support`, `prior`, `log_density_form`, `input_shape`
 directly).
 
 **Landed in this phase**
-- `sabi.posterior.SurrogateDistribution(NumericRandomMeasure)` — abstract base.
+- `sabi.surrogate.SurrogateDistribution(NumericRandomMeasure)` — abstract base.
   Constructor takes math primitives, requires `support` to be set (raises
   otherwise), and exposes `inner_support` / `inner_event_shape` derived from
   those args. No protocol opt-ins on the base — subclasses choose.
-- `sabi.posterior.WeightedEmpiricalSurrogateDistribution` — Dirac random measure.
+- `sabi.surrogate.WeightedEmpiricalSurrogateDistribution` — Dirac random measure.
   Stores `(X, Y_log_density)`, exposes `inner_distribution: NumericEmpiricalDistribution`
   via cached property. Implements `SupportsMean` (returns inner empirical),
   `SupportsSampling` (returns the inner empirical for `sample_shape == ()`,
   `DistributionArray` of repeats otherwise), and
   `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` via a Dirac
   random function shim.
-- `sabi.posterior.GPPushforwardSurrogateDistribution` — proper random measure.
+- `sabi.surrogate.GPPushforwardSurrogateDistribution` — proper random measure.
   Implements `SupportsRandomUnnormalizedLogProb` for the closed-form forms
   (`Identity`, `LogLikPlusPrior`); `ForwardModel` raises until partial-pushforward
   primitive lands. Does NOT implement `SupportsSampling` (surrogate doesn't
   yet expose function-trajectory sampling — v1.6), `SupportsMean` (no closed-form
   expected posterior), or `SupportsRandomLogProb` (normalization intractable).
 - Sabi-local Dirac shims (`_DiracDistribution`, `_DiracArrayRandomFunction`)
-  in `sabi.posterior._dirac` — graduate to ProbPipe when a general `Dirac`
+  in `sabi.surrogate._dirac` — graduate to ProbPipe when a general `Dirac`
   abstraction lands.
-- `sabi.posterior._pushforward._PushforwardLogDensityRandomFunction` — the
+- `sabi.surrogate._pushforward._PushforwardLogDensityRandomFunction` — the
   marginal random log-density for the GP-pushforward path. Affine pushforward
   for closed-form forms; raises for `ForwardModel`.
-- Free-function deterministic estimators in `sabi.posterior.estimators`:
+- Free-function deterministic estimators in `sabi.surrogate.estimators`:
   - `expected_target(sp)` — biased plug-in (renamed from "plug-in mean" since
     it's the expectation of the target map under the surrogate). For Dirac SPs,
     coincides with `mean(sp)`; for the GP path, returns an

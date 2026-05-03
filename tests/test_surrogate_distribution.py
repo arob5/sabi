@@ -41,12 +41,12 @@ from probpipe.core.protocols import (
 from probpipe.distributions.continuous import Normal
 from probpipe.distributions.multivariate import MultivariateNormal
 
-from sabi.posterior import (
+from sabi.surrogate import (
     SurrogateDistribution,
     WeightedEmpiricalRandomMeasure,
     expected_target,
 )
-from sabi.posterior._pushforward import pushforward_marginal
+from sabi.surrogate._pushforward import pushforward_marginal
 from sabi.problems.forms import ForwardModel, Identity, LogLikPlusPrior
 from sabi.emulators import TinyGPEmulator
 

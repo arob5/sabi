@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 import jax
 from jax import Array
 
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
 
 if TYPE_CHECKING:

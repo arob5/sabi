@@ -392,7 +392,7 @@ sabi/
     problems/          # benchmarks (one subpackage each)
     emulators/         # Emulator interface + tinygp impl
     acquisitions/      # + optim.py
-    posterior/         # SurrogateDistribution subclasses + deterministic estimators (expected_target, mean)
+    surrogate/         # SurrogateDistribution subclasses + deterministic estimators (expected_target, mean)
     metrics/           # PosteriorMetric + EmulatorMetric
     sampling.py        # BatchSampler + PriorSampler
     tempering/         # Tempering + TemperingSchedule + dispatch registry

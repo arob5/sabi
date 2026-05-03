@@ -25,8 +25,8 @@ from sabi.algorithms.surrogate_distribution_factory import (
 )
 from sabi.emulators.base import Emulator
 from sabi.metrics.base import PosteriorMetric
-from sabi.posterior.estimators import expected_target
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.estimators import expected_target
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.sampling import BatchSampler, PriorSampler
 from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import TemperingSchedule, UntemperedSchedule

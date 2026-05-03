@@ -26,8 +26,8 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
 from sabi.emulators.base import Emulator
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
-from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.forms import LogDensityForm
 
 

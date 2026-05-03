@@ -6,7 +6,7 @@ from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.optim import CandidateSetOptimizer
 from sabi.acquisitions.random import PriorSampling
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.gaussian import gaussian2d
 from sabi.sampling import PriorSampler
 from sabi.emulators import TinyGPEmulator

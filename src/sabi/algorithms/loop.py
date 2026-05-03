@@ -46,7 +46,7 @@ from sabi.emulators.updates import (
     RescaleThenAppend,
 )
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
 from sabi.tempering.output_transform import OutputTransform

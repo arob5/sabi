@@ -12,7 +12,7 @@ from sabi.acquisitions.fantasize import (
     ConstantLiar,
     KrigingBeliever,
 )
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.gaussian import gaussian2d
 from sabi.emulators import TinyGPEmulator
 

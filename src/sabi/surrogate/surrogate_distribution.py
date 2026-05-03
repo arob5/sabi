@@ -14,7 +14,7 @@ those from a `Problem` when constructing the SP each round.
 denotes a Dirac surrogate posterior — the design points carry the
 posterior structure directly, with no underlying emulator of the target
 map. The Dirac case is concretely realized by
-`sabi.posterior.weighted_empirical.WeightedEmpiricalRandomMeasure`,
+`sabi.surrogate.weighted_empirical.WeightedEmpiricalRandomMeasure`,
 which is a `SurrogateDistribution` subclass with `emulator=None`. Code
 that hits this base class with a None emulator but no override raises
 `NotImplementedError`; subclasses opt into degeneracy by overriding
@@ -57,7 +57,7 @@ from probpipe.core._random_measures import NumericRandomMeasure
 from probpipe.core.constraints import Constraint
 
 from sabi.emulators.base import Emulator
-from sabi.posterior._pushforward import pushforward_marginal
+from sabi.surrogate._pushforward import pushforward_marginal
 from sabi.problems.forms import LogDensityForm
 
 

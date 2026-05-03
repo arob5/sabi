@@ -34,8 +34,8 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.core.constraints import Constraint
 
-from sabi.posterior._dirac import _DiracArrayRandomFunction
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate._dirac import _DiracArrayRandomFunction
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 
 
 class WeightedEmpiricalRandomMeasure(SurrogateDistribution):

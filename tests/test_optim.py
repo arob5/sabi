@@ -27,7 +27,7 @@ from sabi.acquisitions.optim import (
     GreedyMultiPointOptimizer,
     _make_bijector,
 )
-from sabi.posterior.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.gaussian import gaussian2d
 from sabi.emulators import TinyGPEmulator
 
