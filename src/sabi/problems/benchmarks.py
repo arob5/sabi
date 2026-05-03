@@ -35,10 +35,10 @@ def banana_2d() -> BenchmarkProblem:
     samples, ~4σ default bounds, log-density emulation (`Identity` form).
     Used by visualization tutorials and as a sanity-check benchmark.
     """
-    p = banana(d=2, a=1.0, b=4.0)
+    problem = banana(d=2, a=1.0, b=4.0)
     return BenchmarkProblem(
-        target_distribution=p.target_distribution,
-        reference_distribution=p.reference_distribution,
+        target_distribution=problem.target_distribution,
+        reference_distribution=problem.reference_distribution,
         name="banana_2d",
         artifact_version="v1",
     )
@@ -51,10 +51,10 @@ def banana_10d() -> BenchmarkProblem:
     dimensions on top. Tests scaling of the loop in moderate dimension
     while keeping the analytic reference distribution exact.
     """
-    p = banana(d=10, a=1.0, b=4.0, c=1.0)
+    problem = banana(d=10, a=1.0, b=4.0, c=1.0)
     return BenchmarkProblem(
-        target_distribution=p.target_distribution,
-        reference_distribution=p.reference_distribution,
+        target_distribution=problem.target_distribution,
+        reference_distribution=problem.reference_distribution,
         name="banana_10d",
         artifact_version="v1",
     )
@@ -67,10 +67,10 @@ def gaussian_2d() -> BenchmarkProblem:
     factory: zero mean, unit marginal variances, off-diagonal correlation
     0.5. Reference is the analytic ProbPipe `MultivariateNormal` itself.
     """
-    p = gaussian(d=2, mean=(0.0, 0.0), cov=((1.0, 0.5), (0.5, 1.0)))
+    problem = gaussian(d=2, mean=(0.0, 0.0), cov=((1.0, 0.5), (0.5, 1.0)))
     return BenchmarkProblem(
-        target_distribution=p.target_distribution,
-        reference_distribution=p.reference_distribution,
+        target_distribution=problem.target_distribution,
+        reference_distribution=problem.reference_distribution,
         name="gaussian_2d",
         artifact_version="v1",
     )
@@ -84,10 +84,10 @@ def gaussian_10d() -> BenchmarkProblem:
     ablations where the curse of dimension matters but the geometry
     doesn't.
     """
-    p = gaussian(d=10)
+    problem = gaussian(d=10)
     return BenchmarkProblem(
-        target_distribution=p.target_distribution,
-        reference_distribution=p.reference_distribution,
+        target_distribution=problem.target_distribution,
+        reference_distribution=problem.reference_distribution,
         name="gaussian_10d",
         artifact_version="v1",
     )
@@ -103,7 +103,7 @@ def neals_funnel_3d() -> BenchmarkProblem:
     max_divergence_rate=0.10). Those sampler-side knobs are part of the
     benchmark's identity and are pinned here.
     """
-    p = neals_funnel(
+    problem = neals_funnel(
         d=2,
         sigma_v=3.0,
         v_bound=9.0,
@@ -114,8 +114,8 @@ def neals_funnel_3d() -> BenchmarkProblem:
         random_seed=0,
     )
     return BenchmarkProblem(
-        target_distribution=p.target_distribution,
-        reference_distribution=p.reference_distribution,
+        target_distribution=problem.target_distribution,
+        reference_distribution=problem.reference_distribution,
         name="neals_funnel_3d",
         artifact_version="v1",
     )
