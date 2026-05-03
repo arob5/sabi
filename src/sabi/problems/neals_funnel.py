@@ -88,7 +88,7 @@ def neals_funnel(
     if sigma_v <= 0:
         raise ValueError(f"sigma_v must be positive, got {sigma_v}.")
 
-    p = d + 1  # total dimension: v + d x_i's
+    total_dim = d + 1  # total parameter dimension: v + d x_i's
 
     # --- target log-density ------------------------------------------------
     # log p(v, x) = log p(v) + sum_i log p(x_i | v)
@@ -109,7 +109,7 @@ def neals_funnel(
     # --- support + design distribution ------------------------------------
     lower = jnp.asarray([-v_bound] + [-x_bound] * d, dtype=jnp.float64)
     upper = jnp.asarray([v_bound] + [x_bound] * d, dtype=jnp.float64)
-    # Multivariate-event prior over R^p (event_shape == (p,)). See
+    # Multivariate-event prior over R^total_dim (event_shape == (total_dim,)). See
     # `sabi/_probpipe_compat.py` for the shim.
     prior = independent_uniform(
         low=lower, high=upper, name=f"neals_funnel_design_d{d}_sv{sigma_v}"
@@ -143,7 +143,7 @@ def neals_funnel(
         target_function=log_prob_single,
         log_density_form=Identity(),
         prior=prior,
-        input_shape=(p,),
+        input_shape=(total_dim,),
         problem_params={
             "d": d,
             "sigma_v": sigma_v,
@@ -161,7 +161,7 @@ def neals_funnel(
     target = TargetDistribution(
         target_single=log_prob_single,
         name=f"neals_funnel_d{d}_target",
-        input_shape=(p,),
+        input_shape=(total_dim,),
         output_shape=(),
         log_density_form=Identity(),
         prior=prior,
