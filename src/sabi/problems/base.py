@@ -24,7 +24,7 @@ Shape conventions follow ProbPipe's `ArrayRandomFunction` (see
 output has shape `output_shape`, and design sets `X` / `Y` prepend a
 batch dimension. ``target_map`` is the **batched** view;
 ``target_single`` is the per-point view. See
-`sabi.problems.target_distribution.TargetDistribution`.
+`sabi.target_distribution.TargetDistribution`.
 """
 
 from __future__ import annotations

@@ -293,7 +293,7 @@ default `CURRENT` (no look-ahead), `NEXT` (one-step look-ahead),
 
 - Source: [`sabi/tempering/`](../src/sabi/tempering/) (`base.py`,
   `likelihood.py`, `schedule.py`).
-- Per-state intermediate: [`IntermediateTarget`](../src/sabi/problems/target_distribution.py).
+- Per-state intermediate: [`IntermediateTarget`](../src/sabi/target_distribution.py).
 - Loop integration: [`sabi/algorithms/loop.py`](../src/sabi/algorithms/loop.py).
 - Tests: [`tests/test_tempering.py`](../tests/test_tempering.py),
   [`tests/test_likelihood_tempering.py`](../tests/test_likelihood_tempering.py),

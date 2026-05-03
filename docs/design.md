@@ -49,22 +49,24 @@ The expensive Bayesian inference target plus everything needed to construct, tra
 
 ```
 Problem:
-  name: str
-  input_shape: tuple[int, ...]                 # shape of one x (e.g., (d,))
-  output_shape: tuple[int, ...]                # shape of one y = f(x) (e.g., () scalar, (p,))
-  support: Constraint                          # required (ProbPipe Constraint)
-  prior: Distribution | None                   # optional but preferred
-  sampling_bounds: tuple[Array, Array] | None  # fallback for initial design; each has shape input_shape
-  target_map: Callable[[x], y]            # the expensive thing being emulated; f(x) = y
-  log_density_form: LogDensityForm             # (x, y) → log_unnorm_posterior
-  reference_posterior: ReferencePosterior | None
+  target_distribution: TargetDistribution             # math content (target_map, log_density_form, prior, support)
+  reference_distribution: Distribution | None = None  # ground-truth posterior for reference-based metrics
+  name: str = ""                                      # benchmark name (used for cache keys, metadata)
 ```
 
-**Initial-design / acquisition-space resolution** (priority order):
-1. `prior` given → sample from prior.
-2. Else `sampling_bounds` given → uniform over bounds.
-3. Else `support` is bounded → uniform over support.
-4. Else → raise `NoSamplingBoundsError`.
+`Problem` has convenience `@property` accessors that delegate to its
+inner `target_distribution` (`input_shape`, `output_shape`,
+`target_map`, `target_single`, `log_density_form`, `prior`,
+`support`) so existing callers read the same fields they always have.
+
+**Initial-design / acquisition-space resolution.** `prior` is required
+on `TargetDistribution`, so `problem.prior` is always available. The
+loop's `Algorithm.initial_sampler` defaults to `PriorSampler`, which
+draws i.i.d. from `problem.prior`. Sobol / LHS samplers will land
+alongside the first benchmark that needs them. There is no
+`sampling_bounds` fallback path — bounded support is expressed by
+constructing the prior with bounded support (e.g., a `Uniform`-based
+`independent_uniform`).
 
 ### 4.2 `LogDensityForm`
 

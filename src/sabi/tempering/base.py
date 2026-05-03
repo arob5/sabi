@@ -7,6 +7,19 @@ state-specific target function `f_state` and form `phi_state`, plus an
 ``output_transform`` adapter for cheap derivation of training data
 from cached raw evaluations).
 
+**"Tempering" is sabi's name for the more general bridging
+abstraction**: a sequence of intermediate distributions connecting a
+tractable starting point to a target. Likelihood tempering (the
+schemes shipped today), annealed importance sampling,
+normalising-flow bridges, score-based bridges, and emulator
+warm-starts are all instances of the same conceptual pattern. sabi
+keeps the name `TemperingScheme` for the abstraction; if a
+non-tempering bridge lands later, the abstraction may be renamed
+`BridgingScheme` (with `LikelihoodTempering*` becoming concrete
+subtypes whose names already encode "tempering"). Until then, treat
+the docstring's "tempering" as a stand-in for the broader bridging
+operation.
+
 The scheme is the single object that the algorithm uses to advance the
 intermediate target between rounds. The `TemperingSchedule` produces
 states; the scheme consumes them to produce `IntermediateTarget`s.
