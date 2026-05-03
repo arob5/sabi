@@ -27,7 +27,7 @@ def _algorithm(
     acquisition,
     n_rounds: int = 5,  # 1 initial-design round + 4 acquisition rounds
     metrics=(ReferenceMMD(n_estimate_samples=512, n_reference_samples=512),),
-    surrogate_posterior_factory=emulator_pushforward_factory,
+    surrogate_distribution_factory=emulator_pushforward_factory,
 ):
     return Algorithm(
         emulator_factory=lambda: TinyGPEmulator(),
@@ -35,7 +35,7 @@ def _algorithm(
         n_initial=16,
         n_rounds=n_rounds,
         q=1,
-        surrogate_posterior_factory=surrogate_posterior_factory,
+        surrogate_distribution_factory=surrogate_distribution_factory,
         metrics=metrics,
     )
 
@@ -93,14 +93,14 @@ def test_loop_with_no_metrics_skips_estimator():
 
 
 def test_loop_with_weighted_empirical_baseline():
-    """No-GP baseline path: WeightedEmpiricalSurrogatePosterior produces
+    """No-GP baseline path: WeightedEmpiricalSurrogateDistribution produces
     a NumericEmpiricalDistribution as the estimate, which satisfies
     SupportsSampling, so ReferenceMMD runs end-to-end."""
     problem = gaussian2d()
     alg = _algorithm(
         PriorSampling(),
         n_rounds=3,
-        surrogate_posterior_factory=weighted_empirical_factory,
+        surrogate_distribution_factory=weighted_empirical_factory,
     )
     result = run(problem, alg, jax.random.key(5))
     assert isinstance(result.final_estimate, NumericEmpiricalDistribution)

@@ -1,7 +1,7 @@
-"""`SurrogatePosterior` — random measure induced by an emulator of the
+"""`SurrogateDistribution` — random measure induced by an emulator of the
 target map composed with a `LogDensityForm`.
 
-A `SurrogatePosterior` is a ProbPipe `NumericRandomMeasure[Array]`: every
+A `SurrogateDistribution` is a ProbPipe `NumericRandomMeasure[Array]`: every
 emulator function realization defines a deterministic posterior, and the
 random measure is the distribution over these as the emulator's random
 function varies.
@@ -14,8 +14,8 @@ those from a `Problem` when constructing the SP each round.
 denotes a Dirac surrogate posterior — the design points carry the
 posterior structure directly, with no underlying emulator of the target
 map. The Dirac case is concretely realized by
-`sabi.posterior.weighted_empirical.WeightedEmpiricalRandomMeasure`,
-which is a `SurrogatePosterior` subclass with `emulator=None`. Code
+`sabi.surrogate.weighted_empirical.WeightedEmpiricalRandomMeasure`,
+which is a `SurrogateDistribution` subclass with `emulator=None`. Code
 that hits this base class with a None emulator but no override raises
 `NotImplementedError`; subclasses opt into degeneracy by overriding
 the relevant protocol methods.
@@ -23,7 +23,7 @@ the relevant protocol methods.
 Naming: in sabi, "emulator" is reserved for the predictive model fit
 to observations of the target function (an `ArrayRandomFunction`).
 "Surrogate" denotes any approximate quantity replacing its exact
-analog — so `SurrogatePosterior` is the surrogate of the *true*
+analog — so `SurrogateDistribution` is the surrogate of the *true*
 posterior, distinct from the emulator that approximates the target
 function.
 
@@ -57,11 +57,11 @@ from probpipe.core._random_measures import NumericRandomMeasure
 from probpipe.core.constraints import Constraint
 
 from sabi.emulators.base import Emulator
-from sabi.posterior._pushforward import pushforward_marginal
+from sabi.surrogate._pushforward import pushforward_marginal
 from sabi.problems.forms import LogDensityForm
 
 
-class SurrogatePosterior(NumericRandomMeasure):
+class SurrogateDistribution(NumericRandomMeasure):
     """Random measure induced by an emulator of the target map composed
     with a `LogDensityForm`.
 
@@ -95,7 +95,7 @@ class SurrogatePosterior(NumericRandomMeasure):
         name: str | None = None,
     ):
         if support is None:
-            raise ValueError("SurrogatePosterior requires a non-None `support`.")
+            raise ValueError("SurrogateDistribution requires a non-None `support`.")
         if emulator is not None and tuple(input_shape) != tuple(emulator.input_shape):
             raise ValueError(
                 f"input_shape={tuple(input_shape)} must match "
@@ -136,14 +136,14 @@ class SurrogatePosterior(NumericRandomMeasure):
         if self._emulator is None:
             raise NotImplementedError(
                 f"{type(self).__name__}._random_unnormalized_log_prob: "
-                "emulator is None (degenerate SurrogatePosterior); "
+                "emulator is None (degenerate SurrogateDistribution); "
                 "subclass must override this method."
             )
-        return _SurrogatePosteriorPushforward(self)
+        return _SurrogateDistributionPushforward(self)
 
 
-class _SurrogatePosteriorPushforward(RandomFunction):
-    """The random unnormalized log-density of a `SurrogatePosterior`.
+class _SurrogateDistributionPushforward(RandomFunction):
+    """The random unnormalized log-density of a `SurrogateDistribution`.
 
     `__call__(X)` evaluates the emulator's predictive at `X` (a
     `Distribution`) and pushes it through the SP's `log_density_form` via
@@ -155,7 +155,7 @@ class _SurrogatePosteriorPushforward(RandomFunction):
     _sampling_cost: ClassVar[str] = "low"
     _preferred_orchestration: ClassVar[str | None] = None
 
-    def __init__(self, sp: SurrogatePosterior):
+    def __init__(self, sp: SurrogateDistribution):
         self._sp = sp
         super().__init__(name=f"{sp.name}_random_unnormalized_log_prob")
 

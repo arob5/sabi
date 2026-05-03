@@ -1,20 +1,20 @@
-"""Factories that build a `SurrogatePosterior` for a single round.
+"""Factories that build a `SurrogateDistribution` for a single round.
 
-A `SurrogatePosteriorFactory` packages the per-round
+A `SurrogateDistributionFactory` packages the per-round
 `(emulator, form, support, prior, ...)` math primitives into a
-`SurrogatePosterior`. Two factories ship in v1.4.x:
+`SurrogateDistribution`. Two factories ship in v1.4.x:
 
 - `emulator_pushforward_factory` (default): wraps a fitted emulator and
-  the round's log-density form into a `SurrogatePosterior` that
+  the round's log-density form into a `SurrogateDistribution` that
   pushes the emulator's predictive through the form via
   `pushforward_marginal`.
 - `weighted_empirical_factory`: the no-emulator baseline. Applies the
   form to `(X, Y)` directly to compute log-weights, returning a
-  `WeightedEmpiricalRandomMeasure` (a `SurrogatePosterior` subclass
+  `WeightedEmpiricalRandomMeasure` (a `SurrogateDistribution` subclass
   with `emulator=None`).
 
 The `Algorithm` carries its choice of factory via
-`Algorithm.surrogate_posterior_factory`.
+`Algorithm.surrogate_distribution_factory`.
 """
 
 from __future__ import annotations
@@ -26,20 +26,20 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
 from sabi.emulators.base import Emulator
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
-from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.forms import LogDensityForm
 
 
-class SurrogatePosteriorFactory(Protocol):
-    """Builds the round's `SurrogatePosterior` from the emulator state and
+class SurrogateDistributionFactory(Protocol):
+    """Builds the round's `SurrogateDistribution` from the emulator state and
     the math primitives (support, input_shape, prior, log_density_form).
 
-    Returns a `SurrogatePosterior`. The default factory
+    Returns a `SurrogateDistribution`. The default factory
     (`emulator_pushforward_factory`) builds an SP that pushes the
     fitted emulator's predictive through the form. The
     `weighted_empirical_factory` builds the no-emulator baseline
-    (`WeightedEmpiricalRandomMeasure`, a `SurrogatePosterior` subclass
+    (`WeightedEmpiricalRandomMeasure`, a `SurrogateDistribution` subclass
     with ``emulator=None``).
 
     `X` and `Y` are the design set; `log_density_form` is the form for
@@ -59,7 +59,7 @@ class SurrogatePosteriorFactory(Protocol):
         input_shape: tuple[int, ...],
         prior: Distribution | None,
         problem_name: str | None = None,
-    ) -> SurrogatePosterior: ...
+    ) -> SurrogateDistribution: ...
 
 
 def emulator_pushforward_factory(
@@ -72,24 +72,24 @@ def emulator_pushforward_factory(
     input_shape: tuple[int, ...],
     prior: Distribution | None,
     problem_name: str | None = None,
-) -> SurrogatePosterior:
-    """Default factory: build the `SurrogatePosterior` that pushes the
+) -> SurrogateDistribution:
+    """Default factory: build the `SurrogateDistribution` that pushes the
     fitted emulator's predictive distribution through ``log_density_form``.
 
-    The pushforward itself lives inside `SurrogatePosterior`
+    The pushforward itself lives inside `SurrogateDistribution`
     (`_random_unnormalized_log_prob` / `pushforward_marginal`); this
     factory just wires the round's emulator, form, and problem-side
-    primitives into a fresh `SurrogatePosterior` instance.
+    primitives into a fresh `SurrogateDistribution` instance.
 
     Emulator-agnostic — works for any `Emulator` subclass, not just GPs.
     """
-    return SurrogatePosterior(
+    return SurrogateDistribution(
         emulator=emulator,
         log_density_form=log_density_form,
         support=support,
         input_shape=input_shape,
         prior=prior,
-        name=f"surrogate_posterior_{problem_name}" if problem_name else None,
+        name=f"surrogate_distribution_{problem_name}" if problem_name else None,
     )
 
 

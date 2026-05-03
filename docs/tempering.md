@@ -5,7 +5,7 @@ pure mathematical setup (no emulator), then introduce the emulator
 layer, then walk through the common cases that exercise different
 parts of the machinery.
 
-The notation here mirrors the in-code naming: `target_function` /
+The notation here mirrors the in-code naming: `target_map` /
 `f`, `log_density_form` / `phi`, `tempering_state` / `state` (often
 just `t` indexing the round, or `beta` / `lambda` for likelihood
 tempering). For shape conventions, see [`notation.md`](notation.md).
@@ -15,7 +15,7 @@ tempering). For shape conventions, see [`notation.md`](notation.md).
 ```
 Problem
   └── target_distribution: TargetDistribution     ← pure math
-        ├── target_function (batched f)
+        ├── target_map (batched f)
         ├── target_single (single-point f)
         ├── log_density_form (phi)
         ├── prior, support
@@ -26,12 +26,12 @@ TemperingScheme    ← family of intermediate targets indexed by state
                                             ├── (TargetDistribution fields)
                                             ├── state
                                             ├── output_transform(state, X, Y_raw) → Y_train
-                                            └── base_target_function (un-tempered f)
+                                            └── base_target_map (un-tempered f)
 
 TemperingSchedule  ← state sequence: schedule.next(round_idx) → (state, final)
 
 Emulator           ← predictive model fit to (X, Y_train)
-SurrogatePosterior ← Emulator + log_density_form (the SP at a particular state)
+SurrogateDistribution ← Emulator + log_density_form (the SP at a particular state)
 
 Algorithm          ← composition: emulator_factory + tempering_scheme +
                      schedule + acquisition + acquisition_target
@@ -47,7 +47,7 @@ Three orthogonal pieces of machinery interact:
    distribution at a particular state — a `TargetDistribution`
    subclass with state and `output_transform` metadata.
 3. **`AcquisitionTarget`** picks *which* state the acquisition's
-   `SurrogatePosterior` is built at: `CURRENT` (the round's state),
+   `SurrogateDistribution` is built at: `CURRENT` (the round's state),
    `NEXT` (the next round's state), or `TERMINAL` (the schedule's
    final state).
 
@@ -76,7 +76,7 @@ Concrete schemes typically pick one axis:
 Combining both is mathematically definable but rarely useful; sabi
 doesn't ship a combined scheme.
 
-The scheme's `is_invariant_target_function(state_a, state_b)` and
+The scheme's `is_invariant_target_map(state_a, state_b)` and
 `is_invariant_form(state_a, state_b)` flags advertise which axis is
 state-invariant. The loop uses these to skip redundant work.
 
@@ -153,7 +153,7 @@ Loop behavior at round `t`:
 6. Round-end: refits emulator at the current state `beta_t` on the
    augmented design (`Y_train_t = beta_t * Y_raw`) for metrics.
 
-`is_invariant_target_function(beta_a, beta_b)` returns True iff
+`is_invariant_target_map(beta_a, beta_b)` returns True iff
 `beta_a == beta_b`; the look-ahead refit happens iff the scheme says
 the target is non-invariant.
 
@@ -189,7 +189,7 @@ algorithm = Algorithm(
 Loop behavior at round `t`:
 
 1. `current_state = beta_t`, `target_state = beta_{t+1}`.
-2. `is_invariant_target_function(beta_t, beta_{t+1})` returns True
+2. `is_invariant_target_map(beta_t, beta_{t+1})` returns True
    for this scheme — the emulator is the *same* across all states.
 3. The acquisition's SP uses the same emulator as the round-end SP,
    but with a different form (`phi_{t+1}` vs `phi_t`).
@@ -293,7 +293,7 @@ default `CURRENT` (no look-ahead), `NEXT` (one-step look-ahead),
 
 - Source: [`sabi/tempering/`](../src/sabi/tempering/) (`base.py`,
   `likelihood.py`, `schedule.py`).
-- Per-state intermediate: [`IntermediateTarget`](../src/sabi/problems/target_distribution.py).
+- Per-state intermediate: [`IntermediateTarget`](../src/sabi/target_distribution.py).
 - Loop integration: [`sabi/algorithms/loop.py`](../src/sabi/algorithms/loop.py).
 - Tests: [`tests/test_tempering.py`](../tests/test_tempering.py),
   [`tests/test_likelihood_tempering.py`](../tests/test_likelihood_tempering.py),

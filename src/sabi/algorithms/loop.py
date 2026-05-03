@@ -3,11 +3,11 @@
 The `run` function executes one full algorithm run end-to-end given a
 `Problem`, an `Algorithm`, and a PRNG key. The `Algorithm` and
 `RunResult` dataclasses live in :mod:`sabi.algorithms.algorithm`;
-factories that build per-round `SurrogatePosterior` instances live in
-:mod:`sabi.algorithms.surrogate_posterior_factory`.
+factories that build per-round `SurrogateDistribution` instances live in
+:mod:`sabi.algorithms.surrogate_distribution_factory`.
 
 Composition: initial design (drawn via `Algorithm.initial_sampler`) →
-emulator → acquisition → `SurrogatePosterior` → estimator function
+emulator → acquisition → `SurrogateDistribution` → estimator function
 (`expected_target` by default) → metrics. Tempering hooks present
 (`tempering_state` per round, `current_form` built each round); the
 default `NoTempering` + `UntemperedSchedule` make the state `None`
@@ -36,7 +36,7 @@ from sabi.acquisitions.base import (
     resolve_state,
 )
 from sabi.algorithms.algorithm import Algorithm, RunResult
-from sabi.algorithms.surrogate_posterior_factory import SurrogatePosteriorFactory
+from sabi.algorithms.surrogate_distribution_factory import SurrogateDistributionFactory
 from sabi.emulators.base import Emulator
 from sabi.emulators.dispatch import update_emulator
 from sabi.emulators.updates import (
@@ -46,7 +46,7 @@ from sabi.emulators.updates import (
     RescaleThenAppend,
 )
 from sabi.metrics.base import MissingProtocolError, PosteriorMetric
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
 from sabi.tempering.output_transform import OutputTransform
@@ -88,15 +88,15 @@ def _evaluate_metrics(
     return merged
 
 
-def _build_surrogate_posterior(
-    factory: SurrogatePosteriorFactory,
+def _build_surrogate_distribution(
+    factory: SurrogateDistributionFactory,
     *,
     emulator: Emulator,
     X: Array,
     Y: Array,
     log_density_form: LogDensityForm,
     problem: Problem,
-) -> SurrogatePosterior:
+) -> SurrogateDistribution:
     """Adapter: extract the math primitives from `Problem` and call the factory."""
     return factory(
         emulator=emulator,
@@ -174,7 +174,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     Tempering integration: each round, the `tempering_scheme` produces
     an `IntermediateTarget` at the round's state. ``Y_train`` is derived
     from cached ``Y_raw`` via the intermediate's ``output_transform``;
-    the round's form (used to build the `SurrogatePosterior`) is the
+    the round's form (used to build the `SurrogateDistribution`) is the
     intermediate's ``log_density_form``. Under `NoTempering` (default),
     these are identity / unchanged from the base target distribution.
 
@@ -195,7 +195,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     # Round 0: initial-design round. Draw n_initial points, evaluate
     # target, fit emulator at the schedule's round-0 state.
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
-    Y_raw = problem.target_function(X)
+    Y_raw = problem.target_map(X)
 
     state_0, _ = algorithm.schedule.at(0)
     target_0 = algorithm.tempering_scheme.intermediate_target(target, state_0)
@@ -242,10 +242,10 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
 
         # Path 1: Y_train and emulator the acquisition sees, derived at
         # target_state. When target_state == emulator_state for the Y
-        # axis (`invariance.target_function`), reuse directly. Otherwise
+        # axis (`invariance.target_map`), reuse directly. Otherwise
         # dispatch a state-only cheap update (no new rows yet); the
         # dispatcher falls back to refit when no fast path is registered.
-        if invariance.target_function:
+        if invariance.target_map:
             Y_train_for_acq = Y_train
             emulator_for_acq = emulator
         else:
@@ -270,11 +270,11 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
         # Pre-acquisition SP wraps the acquisition-state emulator +
         # form. The weighted-empirical factory produces a
-        # SurrogatePosterior with ``emulator=None``; acquisitions that
+        # SurrogateDistribution with ``emulator=None``; acquisitions that
         # need a real emulator check
-        # ``state.surrogate_posterior.emulator is None`` and raise.
-        pre_round_posterior = _build_surrogate_posterior(
-            algorithm.surrogate_posterior_factory,
+        # ``state.surrogate_distribution.emulator is None`` and raise.
+        pre_round_posterior = _build_surrogate_distribution(
+            algorithm.surrogate_distribution_factory,
             emulator=emulator_for_acq,
             X=X,
             Y=Y_train_for_acq,
@@ -283,7 +283,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         )
         acq_state = AcquisitionState(
             problem=problem,
-            surrogate_posterior=pre_round_posterior,
+            surrogate_distribution=pre_round_posterior,
             X=X,
             Y_raw=Y_raw,
             Y_train=Y_train_for_acq,
@@ -291,7 +291,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             target_tempering_state=target_state,
         )
         x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key_acq)
-        y_new_raw = problem.target_function(x_new)
+        y_new_raw = problem.target_map(x_new)
 
         X = jnp.concatenate([X, x_new], axis=0)
         Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
@@ -320,8 +320,8 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         )
         emulator_state = current_state
 
-        sp = _build_surrogate_posterior(
-            algorithm.surrogate_posterior_factory,
+        sp = _build_surrogate_distribution(
+            algorithm.surrogate_distribution_factory,
             emulator=emulator,
             X=X,
             Y=Y_train,
@@ -341,8 +341,8 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     # downstream tooling always has a reference row at the terminal
     # distribution, regardless of where the schedule ended.
     final_form = target.log_density_form
-    final_sp = _build_surrogate_posterior(
-        algorithm.surrogate_posterior_factory,
+    final_sp = _build_surrogate_distribution(
+        algorithm.surrogate_distribution_factory,
         emulator=emulator,
         X=X,
         Y=Y_train,

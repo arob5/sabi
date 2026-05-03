@@ -1,7 +1,7 @@
 from sabi.algorithms.algorithm import Algorithm, RunResult
 from sabi.algorithms.loop import run
-from sabi.algorithms.surrogate_posterior_factory import (
-    SurrogatePosteriorFactory,
+from sabi.algorithms.surrogate_distribution_factory import (
+    SurrogateDistributionFactory,
     emulator_pushforward_factory,
     weighted_empirical_factory,
 )
@@ -9,7 +9,7 @@ from sabi.algorithms.surrogate_posterior_factory import (
 __all__ = [
     "Algorithm",
     "RunResult",
-    "SurrogatePosteriorFactory",
+    "SurrogateDistributionFactory",
     "emulator_pushforward_factory",
     "run",
     "weighted_empirical_factory",

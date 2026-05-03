@@ -27,7 +27,7 @@ from sabi.acquisitions.optim import (
     GreedyMultiPointOptimizer,
     _make_bijector,
 )
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.gaussian import gaussian2d
 from sabi.emulators import TinyGPEmulator
 
@@ -44,9 +44,9 @@ def _state(n: int = 30, seed: int = 0):
     X = lower + (upper - lower) * jax.random.uniform(
         key, shape=(n,) + problem.input_shape
     )
-    Y = problem.target_function(X)
+    Y = problem.target_map(X)
     emulator = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
-    sp = SurrogatePosterior(
+    sp = SurrogateDistribution(
         emulator=emulator,
         log_density_form=problem.log_density_form,
         support=problem.support,
@@ -55,7 +55,7 @@ def _state(n: int = 30, seed: int = 0):
     )
     return AcquisitionState(
         problem=problem,
-        surrogate_posterior=sp,
+        surrogate_distribution=sp,
         X=X,
         Y_raw=Y,
         Y_train=Y,

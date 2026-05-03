@@ -95,8 +95,8 @@ class TargetDistribution(NumericRecordDistribution):
         output_shape: shape of one target-function output.
         target_single: single-point target callable
             ``input_shape -> output_shape``. The constructor
-            auto-derives the batched ``target_function`` via
-            ``jax.vmap`` (subclasses can override `target_function`
+            auto-derives the batched ``target_map`` via
+            ``jax.vmap`` (subclasses can override `target_map`
             for a vectorized implementation if vmap is suboptimal —
             but for v1 nothing requires that).
         log_density_form: composes ``(x, y, prior)`` into a scalar
@@ -133,10 +133,10 @@ class TargetDistribution(NumericRecordDistribution):
         self._input_shape = tuple(input_shape)
         self._output_shape = tuple(output_shape)
         self._target_single = target_single
-        # Derive the batched target_function via jax.vmap. The Python
+        # Derive the batched target_map via jax.vmap. The Python
         # call to vmap happens once at construction time; the resulting
         # callable is the public batched API.
-        self._target_function = jax.vmap(target_single)
+        self._target_map = jax.vmap(target_single)
         self._log_density_form = log_density_form
         self._prior = prior
         super().__init__(name=name)
@@ -154,8 +154,8 @@ class TargetDistribution(NumericRecordDistribution):
         return self._output_shape
 
     @property
-    def target_function(self) -> Callable[[Array], Array]:
-        return self._target_function
+    def target_map(self) -> Callable[[Array], Array]:
+        return self._target_map
 
     @property
     def target_single(self) -> Callable[[Array], Array]:
@@ -193,7 +193,7 @@ class TargetDistribution(NumericRecordDistribution):
         primary contract; ProbPipe MCMC dispatches via this path) or a
         batch of shape ``(n,) + input_shape``. Detected by shape;
         single-point uses ``target_single`` + form's per-point hook,
-        batched uses ``target_function`` + the form's batched call.
+        batched uses ``target_map`` + the form's batched call.
         """
         x = jnp.asarray(value)
         if x.shape == self._input_shape:
@@ -202,7 +202,7 @@ class TargetDistribution(NumericRecordDistribution):
             # single-point call.
             return self._log_density_form._call_single(x, y, prior=self._prior)
         # Batched (n,) + input_shape: use the form's public batched call.
-        y = self._target_function(x)
+        y = self._target_map(x)
         return self._log_density_form(x, y, prior=self._prior)
 
 
@@ -223,16 +223,16 @@ class IntermediateTarget(TargetDistribution):
       cheap-update fast path; see `sabi.emulators.dispatch`). Callable
       on instances via ``__call__``, so existing call sites read as
       plain function calls.
-    - ``base_target_function``: the un-tempered base target ``f`` (for
+    - ``base_target_map``: the un-tempered base target ``f`` (for
       reference; the loop typically already has it via the base
       `TargetDistribution`).
 
-    The relationship between ``target_function`` (which is ``f_state``)
+    The relationship between ``target_map`` (which is ``f_state``)
     and ``output_transform`` is:
 
     .. code-block:: python
 
-        f_state(x) == output_transform(state, x, base_target_function(x))
+        f_state(x) == output_transform(state, x, base_target_map(x))
 
     For Case 1 (no tempering): ``output_transform`` is the `Identity`
     transform and ``f_state == f``. For Case 2 (likelihood tempering
@@ -252,12 +252,12 @@ class IntermediateTarget(TargetDistribution):
         log_density_form: LogDensityForm,
         state: Any,
         output_transform: "OutputTransform",
-        base_target_function: Callable[[Array], Array],
+        base_target_map: Callable[[Array], Array],
         prior: Distribution,
     ):
         self._state = state
         self._output_transform = output_transform
-        self._base_target_function = base_target_function
+        self._base_target_map = base_target_map
         super().__init__(
             name=name,
             input_shape=input_shape,
@@ -276,5 +276,5 @@ class IntermediateTarget(TargetDistribution):
         return self._output_transform
 
     @property
-    def base_target_function(self) -> Callable[[Array], Array]:
-        return self._base_target_function
+    def base_target_map(self) -> Callable[[Array], Array]:
+        return self._base_target_map

@@ -87,14 +87,14 @@ def test_via_form_returns_intermediate_target():
     assert isinstance(intermediate, IntermediateTarget)
 
 
-def test_via_form_target_function_unchanged():
+def test_via_form_target_map_unchanged():
     target = _log_lik_plus_prior_target()
     intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=0.4)
     # f_state == f for the via-form scheme. target_single is reused by
-    # reference; target_function is re-vmapped (same outputs).
+    # reference; target_map is re-vmapped (same outputs).
     assert intermediate.target_single is target.target_single
     X = jnp.asarray([[0.5, -0.3], [1.0, 1.0]])
-    assert jnp.allclose(intermediate.target_function(X), target.target_function(X))
+    assert jnp.allclose(intermediate.target_map(X), target.target_map(X))
 
 
 def test_via_form_log_lik_plus_prior_scales_likelihood():
@@ -152,7 +152,7 @@ def test_via_form_identity_uses_geometric_bridge():
 def test_via_form_invariance_flags():
     scheme = LikelihoodTemperingViaForm()
     # Target is invariant under any state change.
-    assert scheme.is_invariant_target_function(0.1, 0.5)
+    assert scheme.is_invariant_target_map(0.1, 0.5)
     # Form depends on state.
     assert not scheme.is_invariant_form(0.1, 0.5)
     assert scheme.is_invariant_form(0.5, 0.5)
@@ -198,7 +198,7 @@ def test_via_target_form_unchanged():
     assert intermediate.log_density_form is target.log_density_form
 
 
-def test_via_target_target_function_scaled_by_state():
+def test_via_target_target_map_scaled_by_state():
     target = _log_lik_plus_prior_target()
     beta = 0.4
     intermediate = LikelihoodTemperingViaTarget().intermediate_target(target, state=beta)
@@ -222,8 +222,8 @@ def test_via_target_output_transform_scales_y_raw():
 def test_via_target_invariance_flags():
     scheme = LikelihoodTemperingViaTarget()
     # Target depends on state.
-    assert not scheme.is_invariant_target_function(0.1, 0.5)
-    assert scheme.is_invariant_target_function(0.5, 0.5)
+    assert not scheme.is_invariant_target_map(0.1, 0.5)
+    assert scheme.is_invariant_target_map(0.5, 0.5)
     # Form is invariant.
     assert scheme.is_invariant_form(0.1, 0.5)
 
@@ -238,7 +238,7 @@ def test_via_target_rejects_non_log_lik_plus_prior_form():
 
 
 def test_via_target_terminal_state_recovers_base_distribution():
-    """At beta=1, target_function and output_transform are identity."""
+    """At beta=1, target_map and output_transform are identity."""
     target = _log_lik_plus_prior_target()
     intermediate = LikelihoodTemperingViaTarget().intermediate_target(target, state=1.0)
     x = jnp.asarray([0.5, -0.3])

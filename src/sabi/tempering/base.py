@@ -7,6 +7,19 @@ state-specific target function `f_state` and form `phi_state`, plus an
 ``output_transform`` adapter for cheap derivation of training data
 from cached raw evaluations).
 
+**"Tempering" is sabi's name for the more general bridging
+abstraction**: a sequence of intermediate distributions connecting a
+tractable starting point to a target. Likelihood tempering (the
+schemes shipped today), annealed importance sampling,
+normalising-flow bridges, score-based bridges, and emulator
+warm-starts are all instances of the same conceptual pattern. sabi
+keeps the name `TemperingScheme` for the abstraction; if a
+non-tempering bridge lands later, the abstraction may be renamed
+`BridgingScheme` (with `LikelihoodTempering*` becoming concrete
+subtypes whose names already encode "tempering"). Until then, treat
+the docstring's "tempering" as a stand-in for the broader bridging
+operation.
+
 The scheme is the single object that the algorithm uses to advance the
 intermediate target between rounds. The `TemperingSchedule` produces
 states; the scheme consumes them to produce `IntermediateTarget`s.
@@ -48,7 +61,7 @@ class InvarianceFlags(NamedTuple):
     """Per-axis invariance flags returned by `TemperingScheme.invariance`.
 
     Attributes:
-        target_function: True iff `f_state_a == f_state_b` (so the
+        target_map: True iff `f_state_a == f_state_b` (so the
             emulator's training data is unchanged).
         form: True iff `phi_state_a == phi_state_b` (so the round's
             log-density form is unchanged).
@@ -56,7 +69,7 @@ class InvarianceFlags(NamedTuple):
             common "is anything different at all?" check.
     """
 
-    target_function: bool
+    target_map: bool
     form: bool
     both: bool
 
@@ -68,7 +81,7 @@ class TemperingScheme(ABC):
     `IntermediateTarget` given the base `TargetDistribution` and a
     state from the schedule.
 
-    `is_invariant_target_function` and `is_invariant_form` are
+    `is_invariant_target_map` and `is_invariant_form` are
     optimization hints used by the loop to skip redundant emulator
     refits / form rebuilds when consecutive states yield the same
     `f_state` or `phi_state`. Conservative defaults
@@ -88,7 +101,7 @@ class TemperingScheme(ABC):
     ) -> IntermediateTarget:
         """Build the `IntermediateTarget` at ``state``."""
 
-    def is_invariant_target_function(
+    def is_invariant_target_map(
         self,
         state_a: Any,
         state_b: Any,
@@ -108,12 +121,12 @@ class TemperingScheme(ABC):
         Combines the two `is_invariant_*` checks plus a ``both`` flag
         for the common "nothing changed" branch in the loop.
         """
-        target_function = self.is_invariant_target_function(state_a, state_b)
+        target_map = self.is_invariant_target_map(state_a, state_b)
         form = self.is_invariant_form(state_a, state_b)
         return InvarianceFlags(
-            target_function=target_function,
+            target_map=target_map,
             form=form,
-            both=target_function and form,
+            both=target_map and form,
         )
 
 
@@ -121,7 +134,7 @@ class NoTempering(TemperingScheme):
     """Identity tempering: the intermediate target equals the base.
 
     For any state, returns an `IntermediateTarget` whose
-    ``target_function`` and ``log_density_form`` are the base's
+    ``target_map`` and ``log_density_form`` are the base's
     (unchanged) and whose ``output_transform`` is the identity. The
     state is recorded but has no effect on the math.
 
@@ -141,11 +154,11 @@ class NoTempering(TemperingScheme):
             log_density_form=base.log_density_form,
             state=state,
             output_transform=Identity(),
-            base_target_function=base.target_function,
+            base_target_map=base.target_map,
             prior=base.prior,
         )
 
-    def is_invariant_target_function(
+    def is_invariant_target_map(
         self,
         state_a: Any,
         state_b: Any,

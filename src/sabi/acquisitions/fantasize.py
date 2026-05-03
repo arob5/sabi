@@ -67,11 +67,11 @@ class KrigingBeliever(FantasyImputer):
     """
 
     def impute(self, x_pending: Array, state: AcquisitionState) -> Array:
-        emulator = state.surrogate_posterior.emulator
+        emulator = state.surrogate_distribution.emulator
         if emulator is None:
             raise ValueError(
                 "KrigingBeliever requires a non-degenerate emulator; got "
-                "`state.surrogate_posterior.emulator=None` (the "
+                "`state.surrogate_distribution.emulator=None` (the "
                 "weighted-empirical baseline)."
             )
         pred = emulator(x_pending)

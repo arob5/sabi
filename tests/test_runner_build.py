@@ -55,14 +55,14 @@ def test_build_algorithm_without_metrics_yields_empty_tuple():
     assert alg.metrics == ()
 
 
-def test_build_algorithm_default_surrogate_posterior_is_emulator_pushforward():
+def test_build_algorithm_default_surrogate_distribution_is_emulator_pushforward():
     cfg = _cfg()
     alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
-    assert alg.surrogate_posterior_factory is emulator_pushforward_factory
+    assert alg.surrogate_distribution_factory is emulator_pushforward_factory
 
 
 def test_build_algorithm_can_select_weighted_empirical_factory():
     cfg = _cfg()
-    cfg.algorithm.surrogate_posterior = "weighted_empirical"
+    cfg.algorithm.surrogate_distribution = "weighted_empirical"
     alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
-    assert alg.surrogate_posterior_factory is weighted_empirical_factory
+    assert alg.surrogate_distribution_factory is weighted_empirical_factory

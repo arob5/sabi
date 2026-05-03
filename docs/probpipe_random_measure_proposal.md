@@ -4,7 +4,7 @@
 > session in `/Users/andrewroberts/Desktop/git-repos/prob-pipe`. The goal of
 > the receiving session is to design and implement a `RandomMeasure`
 > abstraction in ProbPipe — a "distribution-valued probability distribution"
-> — that sabi will then build on top of for its `SurrogatePosterior`
+> — that sabi will then build on top of for its `SurrogateDistribution`
 > hierarchy in v1.2.
 >
 > This document lays out the conceptual goal, a starting-point shape, and an
@@ -70,11 +70,11 @@ Three operations of interest, in increasing optionality:
 
 **Sabi context.** Sabi is a benchmark framework for sequential
 surrogate-based Bayesian inference. The central object is a
-`SurrogatePosterior`: given a stochastic surrogate (e.g. a GP) approximating
+`SurrogateDistribution`: given a stochastic surrogate (e.g. a GP) approximating
 an expensive log-density, the induced posterior is a *random* probability
 distribution — different surrogate function draws give different
 posteriors. This is exactly a random measure. Sabi v1.2 wants
-`SurrogatePosterior` to be a proper subclass of `RandomMeasure[Array]`,
+`SurrogateDistribution` to be a proper subclass of `RandomMeasure[Array]`,
 with concrete subclasses for:
 
 - A "weighted-empirical" baseline (Dirac random measure, no real surrogate
@@ -89,7 +89,7 @@ with concrete subclasses for:
 - Anywhere distributions themselves are objects of inference (Bayesian model
   averaging, stochastic block models with distribution-valued parameters).
 
-ProbPipe currently has no abstraction here; the local `SurrogatePosterior`
+ProbPipe currently has no abstraction here; the local `SurrogateDistribution`
 in sabi is a stand-in until ProbPipe lands a first-class concept.
 
 ## Proposed shape (starting point)
@@ -371,7 +371,7 @@ valid `RandomFunction` whose marginals are `Distribution[Array]`s.
 Branch off `main`. No dependency on other open PRs (PRs #145 and #146
 merged 2026-04-27).
 
-After this PR lands, a sabi `SurrogatePosterior` v1.2 implementation will
+After this PR lands, a sabi `SurrogateDistribution` v1.2 implementation will
 follow — a `RandomMeasure[Array]` subclass with two concrete subtypes
 (Dirac at an empirical measure, GP-pushforward). **Sabi work shouldn't
 drive this PR's scope.** If there are sabi-specific shape needs that

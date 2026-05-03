@@ -254,7 +254,7 @@ def test_acquisition_state_carries_target_tempering_state():
     """Smoke check the AcquisitionState constructor accepts the new field."""
     state = AcquisitionState(
         problem=gaussian2d(),
-        surrogate_posterior=None,  # type: ignore[arg-type]
+        surrogate_distribution=None,  # type: ignore[arg-type]
         X=jnp.zeros((1, 2)),
         Y_raw=jnp.zeros((1,)),
         Y_train=jnp.zeros((1,)),

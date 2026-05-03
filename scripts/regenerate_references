@@ -44,7 +44,7 @@ def _regenerate_neals_funnel(args: argparse.Namespace) -> None:
     v_bound = args.v_bound if args.v_bound is not None else 9.0
     x_bound = args.x_bound if args.x_bound is not None else 30.0
 
-    # Build target_function inline (mirrors neals_funnel internals; kept
+    # Build target_map inline (mirrors neals_funnel internals; kept
     # synchronized with src/sabi/problems/neals_funnel.py).
     log2pi = jnp.log(2.0 * jnp.pi)
     sigma_v_sq = sigma_v * sigma_v
@@ -79,7 +79,7 @@ def _regenerate_neals_funnel(args: argparse.Namespace) -> None:
     reference = load_or_generate_reference_samples(
         problem_name="neals_funnel",
         cache_key=cache_key,
-        target_function=log_prob,
+        target_map=log_prob,
         log_density_form=Identity(),
         prior=prior,
         support=support,

@@ -7,7 +7,7 @@ Target is :math:`\mathcal{N}(\mu, \Sigma)` on :math:`\mathbb{R}^d`:
     \log p(x) = -\tfrac{1}{2} (x - \mu)^\top \Sigma^{-1} (x - \mu)
                 - \tfrac{1}{2} \log\!\big((2\pi)^d |\Sigma|\big).
 
-``target_function`` routes through the ProbPipe ``MultivariateNormal``'s
+``target_map`` routes through the ProbPipe ``MultivariateNormal``'s
 ``log_prob``, so the analytic posterior IS the ``reference_distribution``
 (the same ProbPipe object) — exercising the abstractions end-to-end.
 

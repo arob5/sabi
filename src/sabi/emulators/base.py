@@ -20,7 +20,7 @@ requiring sabi to wire ProbPipe's full conditioning machinery yet.
 Naming convention: in sabi, "emulator" is reserved specifically for the
 predictive model fit to observations of the target function. The broader
 word "surrogate" denotes any approximate quantity replacing its exact
-analog (hence `SurrogatePosterior` for the surrogate of the true
+analog (hence `SurrogateDistribution` for the surrogate of the true
 posterior).
 
 Latent vs. observation predictive

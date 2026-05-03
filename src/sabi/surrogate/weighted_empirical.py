@@ -4,9 +4,9 @@ The simplest non-trivial random measure: zero variance over inner-distribution
 draws, with the inner distribution being a `NumericEmpiricalDistribution`
 weighted by `softmax(log_weights)`.
 
-Conceptually this is a `SurrogatePosterior` whose underlying emulator is
+Conceptually this is a `SurrogateDistribution` whose underlying emulator is
 degenerate — there's no random function, the design points carry the
-posterior structure directly. Implemented as a `SurrogatePosterior`
+posterior structure directly. Implemented as a `SurrogateDistribution`
 subclass with `emulator=None`, so the algorithm loop and acquisitions
 see one unified type.
 
@@ -34,17 +34,17 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.core.constraints import Constraint
 
-from sabi.posterior._dirac import _DiracArrayRandomFunction
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
+from sabi.surrogate._dirac import _DiracArrayRandomFunction
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 
 
-class WeightedEmpiricalRandomMeasure(SurrogatePosterior):
+class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
     """Dirac surrogate posterior at a weighted empirical of design points.
 
     A draw from this random measure is always the same
     `NumericEmpiricalDistribution` over `(X, log_weights)`. Implements
     the full `NumericRandomMeasure` protocol surface via the underlying
-    empirical and Dirac shims. As a `SurrogatePosterior` subclass, it
+    empirical and Dirac shims. As a `SurrogateDistribution` subclass, it
     reports `emulator=None` and `log_density_form=None` (the form was
     consumed at construction time to compute the weights).
 
@@ -84,7 +84,7 @@ class WeightedEmpiricalRandomMeasure(SurrogatePosterior):
             )
         self._X = X
         self._log_weights = log_weights
-        # Initialize the SurrogatePosterior base with a degenerate
+        # Initialize the SurrogateDistribution base with a degenerate
         # emulator (None) and no form (consumed into log_weights).
         super().__init__(
             emulator=None,
@@ -111,7 +111,7 @@ class WeightedEmpiricalRandomMeasure(SurrogatePosterior):
             name=f"{self.name}_empirical",
         )
 
-    # Protocol implementations (overrides of SurrogatePosterior defaults) -----
+    # Protocol implementations (overrides of SurrogateDistribution defaults) -----
 
     def _mean(self) -> Distribution:
         return self.inner_distribution

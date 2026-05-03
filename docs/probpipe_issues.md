@@ -42,7 +42,7 @@ Conventions for the **status** field:
 
 **Status:** resolved ([PR #146](https://github.com/TARPS-group/prob-pipe/pull/146) merged 2026-04-27).
 
-**Sabi context.** `gaussian2d`'s posterior is a natural fit for `probpipe.distributions.multivariate.MultivariateNormal`, and per the v1 plan we route `target_function = lambda x: log_prob(posterior, x)`. Sabi tests run with `jax_enable_x64`.
+**Sabi context.** `gaussian2d`'s posterior is a natural fit for `probpipe.distributions.multivariate.MultivariateNormal`, and per the v1 plan we route `target_map = lambda x: log_prob(posterior, x)`. Sabi tests run with `jax_enable_x64`.
 
 **What we observed.** Every TFP-backed `__init__` in `probpipe/distributions/multivariate.py` and `probpipe/distributions/continuous.py` hard-codes `jnp.asarray(..., dtype=jnp.float32)`. Under x64, calling `log_prob(mvn, x)` with a float64 `x` raises a hard `TypeError` (not just a precision warning) from TFP's bijector internals. `Uniform.sample` also returns float32 regardless of x64.
 
@@ -56,7 +56,7 @@ Conventions for the **status** field:
 
 **Status:** open.
 
-**Sabi context.** ProbPipe ops (`log_prob`, `mean`, `sample`, etc.) return `NumericRecord` containers rather than bare arrays. Sabi's `LogDensityForm.LogLikPlusPrior` does `y + log_prob(prior, x)`; `target_function` for `gaussian2d` returns `log_prob(mvn, x)` and downstream code expects a plain scalar.
+**Sabi context.** ProbPipe ops (`log_prob`, `mean`, `sample`, etc.) return `NumericRecord` containers rather than bare arrays. Sabi's `LogDensityForm.LogLikPlusPrior` does `y + log_prob(prior, x)`; `target_map` for `gaussian2d` returns `log_prob(mvn, x)` and downstream code expects a plain scalar.
 
 **What we observed.** `NumericRecord` implements `__array__` and `__jax_array__`, so JAX-namespace functions auto-unwrap it transparently:
 
@@ -128,9 +128,9 @@ to this entry.
 
 **Status:** resolved ([PR #150](https://github.com/TARPS-group/prob-pipe/pull/150) merged 2026-04-27).
 
-**Sabi context.** sabi's `SurrogatePosterior` is conceptually a distribution over distributions — needs `RandomMeasure`-shaped abstractions.
+**Sabi context.** sabi's `SurrogateDistribution` is conceptually a distribution over distributions — needs `RandomMeasure`-shaped abstractions.
 
-**What landed.** `RandomMeasure[T](Distribution[Distribution[T]])` and `NumericRandomMeasure(RandomMeasure[Array])` in `probpipe/core/_random_measures.py`, plus `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` protocols and matching ops. v1.2 of sabi builds `SurrogatePosterior` directly on these.
+**What landed.** `RandomMeasure[T](Distribution[Distribution[T]])` and `NumericRandomMeasure(RandomMeasure[Array])` in `probpipe/core/_random_measures.py`, plus `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` protocols and matching ops. v1.2 of sabi builds `SurrogateDistribution` directly on these.
 
 ---
 
@@ -166,7 +166,7 @@ to this entry.
 
 **Status:** open.
 
-**Sabi context.** v1.2's `WeightedEmpiricalSurrogatePosterior` is conceptually a Dirac random measure (no surrogate uncertainty). Implementing `SupportsRandomLogProb` for it requires a degenerate `RandomFunction` whose `__call__(x)` returns a Dirac `Distribution[Array]` at the deterministic log-density value. Today we'd build this Dirac inside sabi.
+**Sabi context.** v1.2's `WeightedEmpiricalSurrogateDistribution` is conceptually a Dirac random measure (no surrogate uncertainty). Implementing `SupportsRandomLogProb` for it requires a degenerate `RandomFunction` whose `__call__(x)` returns a Dirac `Distribution[Array]` at the deterministic log-density value. Today we'd build this Dirac inside sabi.
 
 **Why it matters for sabi.** Multiple sabi v1.2 paths want "treat a deterministic value as a degenerate distribution for protocol-compatibility purposes": Dirac inner distributions in Dirac random measures, deterministic random functions (degenerate `RandomFunction`s), constant random log-densities, etc. Each instance is a small but fiddly shim.
 

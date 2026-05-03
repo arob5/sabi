@@ -22,9 +22,9 @@ because:
 Shape conventions follow ProbPipe's `ArrayRandomFunction` (see
 `docs/notation.md`): a single input has shape `input_shape`, a single
 output has shape `output_shape`, and design sets `X` / `Y` prepend a
-batch dimension. ``target_function`` is the **batched** view;
+batch dimension. ``target_map`` is the **batched** view;
 ``target_single`` is the per-point view. See
-`sabi.problems.target_distribution.TargetDistribution`.
+`sabi.target_distribution.TargetDistribution`.
 """
 
 from __future__ import annotations
@@ -73,8 +73,8 @@ class Problem:
         return self.target_distribution.output_shape
 
     @property
-    def target_function(self) -> Callable[[Array], Array]:
-        return self.target_distribution.target_function
+    def target_map(self) -> Callable[[Array], Array]:
+        return self.target_distribution.target_map
 
     @property
     def target_single(self) -> Callable[[Array], Array]:

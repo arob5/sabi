@@ -31,9 +31,9 @@ Primitives we expect to leverage as they mature:
 | `ArrayRandomFunction` | Shape + batch-dim conventions for `Emulator`; v1+ `Emulator` is an `ArrayRandomFunction` subclass |
 | `GaussianRandomFunction` | GP-backed emulator |
 | `Constraint` + `support` | Parameter-space support in `Problem` |
-| `RandomMeasure` / `NumericRandomMeasure` | Base for `SurrogatePosterior` (landed via PR #150) |
-| `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` | Optional protocols on `SurrogatePosterior` for the random log-density (landed via PR #150) |
-| `Pushforward` (planned) | Assembly of `SurrogatePosterior` from surrogate + `LogDensityForm`; sabi ships a local pushforward in `LogDensityForm` until ProbPipe's primitive lands |
+| `RandomMeasure` / `NumericRandomMeasure` | Base for `SurrogateDistribution` (landed via PR #150) |
+| `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` | Optional protocols on `SurrogateDistribution` for the random log-density (landed via PR #150) |
+| `Pushforward` (planned) | Assembly of `SurrogateDistribution` from surrogate + `LogDensityForm`; sabi ships a local pushforward in `LogDensityForm` until ProbPipe's primitive lands |
 | `condition_on` | Future implementation path for `Emulator.update` |
 | `_mc_expectation` / `BootstrapDistribution` | Metric computation with MC-error tracking |
 
@@ -49,22 +49,24 @@ The expensive Bayesian inference target plus everything needed to construct, tra
 
 ```
 Problem:
-  name: str
-  input_shape: tuple[int, ...]                 # shape of one x (e.g., (d,))
-  output_shape: tuple[int, ...]                # shape of one y = f(x) (e.g., () scalar, (p,))
-  support: Constraint                          # required (ProbPipe Constraint)
-  prior: Distribution | None                   # optional but preferred
-  sampling_bounds: tuple[Array, Array] | None  # fallback for initial design; each has shape input_shape
-  target_function: Callable[[x], y]            # the expensive thing being emulated; f(x) = y
-  log_density_form: LogDensityForm             # (x, y) → log_unnorm_posterior
-  reference_posterior: ReferencePosterior | None
+  target_distribution: TargetDistribution             # math content (target_map, log_density_form, prior, support)
+  reference_distribution: Distribution | None = None  # ground-truth posterior for reference-based metrics
+  name: str = ""                                      # benchmark name (used for cache keys, metadata)
 ```
 
-**Initial-design / acquisition-space resolution** (priority order):
-1. `prior` given → sample from prior.
-2. Else `sampling_bounds` given → uniform over bounds.
-3. Else `support` is bounded → uniform over support.
-4. Else → raise `NoSamplingBoundsError`.
+`Problem` has convenience `@property` accessors that delegate to its
+inner `target_distribution` (`input_shape`, `output_shape`,
+`target_map`, `target_single`, `log_density_form`, `prior`,
+`support`) so existing callers read the same fields they always have.
+
+**Initial-design / acquisition-space resolution.** `prior` is required
+on `TargetDistribution`, so `problem.prior` is always available. The
+loop's `Algorithm.initial_sampler` defaults to `PriorSampler`, which
+draws i.i.d. from `problem.prior`. Sobol / LHS samplers will land
+alongside the first benchmark that needs them. There is no
+`sampling_bounds` fallback path — bounded support is expressed by
+constructing the prior with bounded support (e.g., a `Uniform`-based
+`independent_uniform`).
 
 ### 4.2 `LogDensityForm`
 
@@ -74,15 +76,15 @@ Deterministic function `φ(x, y) → log_unnorm_posterior(x)` mapping a single t
 - `LogLikPlusPrior` — `φ(x, y) = y + log_prior(x)`. Emulator learns log-likelihood only.
 - `ForwardModel` — `φ(x, y) = log_lik_from_outputs(data, y) + log_prior(x)`. Emulator learns a multi-output forward model; observation model is supplied separately.
 
-### 4.3 `Emulator` — stochastic predictive model of `target_function`
+### 4.3 `Emulator` — stochastic predictive model of `target_map`
 
 `Emulator` IS-A ProbPipe `ArrayRandomFunction`. It inherits the full random-function shape contract (`input_shape`, `output_shape`, `batch_shape`, joint-input / joint-output flags) and the `__call__(X, joint_inputs, joint_outputs) -> Distribution` predictive interface. The only sabi-specific addition is an abstract `fit(X, Y) -> Self` that captures the algorithmic role (a fittable predictive process). Future migration: `condition_on(prior_rf, X=X_train, y=Y_train)` is the natural ProbPipe-native pattern; sabi's `fit` is a v1.x bridge that does the same conceptual work without requiring full ProbPipe conditioning machinery.
 
 Concrete Gaussian emulators inherit from both `Emulator` and `GaussianRandomFunction` (diamond inheritance over `ArrayRandomFunction`, resolved by Python's C3 MRO). For example, `TinyGPEmulator(Emulator, GaussianRandomFunction)` implements `predict_mean(X)` and `predict_variance(X)`; `predict` / `__call__` come for free from the parent and assemble `Normal` (marginal) or `MultivariateNormal` (joint) at the right shape.
 
-Naming: in sabi, "emulator" is reserved for the predictive model fit to evaluations of the target function. The broader word "surrogate" denotes any approximate quantity replacing its exact analog (hence `SurrogatePosterior` for the surrogate of the *true* posterior).
+Naming: in sabi, "emulator" is reserved for the predictive model fit to evaluations of the target function. The broader word "surrogate" denotes any approximate quantity replacing its exact analog (hence `SurrogateDistribution` for the surrogate of the *true* posterior).
 
-**The `Emulator` is tempering-agnostic.** It emulates `target_function` — a raw function of `x` — and never sees a tempering state. Tempering is applied downstream in `LogDensityForm` (via `Tempering`, §4.11) and, if an algorithm wants to fit on tempered values instead of raw ones, through a future `EmulatorTarget` adapter that transforms `(x, y, state, prior)` into training values before `fit`. Keeping tempering out of the emulator lets the same emulator be reused across tempering states and lets forward-model emulation work unchanged under tempering.
+**The `Emulator` is tempering-agnostic.** It emulates `target_map` — a raw function of `x` — and never sees a tempering state. Tempering is applied downstream in `LogDensityForm` (via `Tempering`, §4.11) and, if an algorithm wants to fit on tempered values instead of raw ones, through a future `EmulatorTarget` adapter that transforms `(x, y, state, prior)` into training values before `fit`. Keeping tempering out of the emulator lets the same emulator be reused across tempering states and lets forward-model emulation work unchanged under tempering.
 
 **v0/v1.2 concrete implementation:** `TinyGPEmulator(Emulator, GaussianRandomFunction)` — thin tinygp wrapper with data-adaptive fixed hyperparameters; `predict_mean` / `predict_variance` only (no `predict_covariance` until v1.5 emulator metrics). **v1.6:** proper GP via gpjax or a ProbPipe-native `GaussianRandomFunction` subclass; no hand-rolled hyperparameter optimization code in sabi.
 
@@ -93,7 +95,7 @@ Acquisition:
   select_batch(state: AcquisitionState, q: int, key) -> Array   # shape (q,) + input_shape
 ```
 
-Covers both (a) deterministic strategies that optimize an acquisition function, and (b) stochastic strategies such as Thompson sampling from `SurrogatePosterior`. Batch `q = 1` is pure sequential.
+Covers both (a) deterministic strategies that optimize an acquisition function, and (b) stochastic strategies such as Thompson sampling from `SurrogateDistribution`. Batch `q = 1` is pure sequential.
 
 Acquisitions decouple **scoring** (the function to maximize) from **optimization** (how to maximize it). The hierarchy:
 
@@ -109,22 +111,22 @@ Acquisitions decouple **scoring** (the function to maximize) from **optimization
 
 Acquisitions implement only their scoring function (and pick an optimizer per their needs). Helpers like reparameterization, top-k, candidate sampling are reused inside the optimizer module.
 
-### 4.5 `SurrogatePosterior` — a `RandomMeasure`
+### 4.5 `SurrogateDistribution` — a `RandomMeasure`
 
-`SurrogatePosterior` is a ProbPipe `NumericRandomMeasure[Array]`: a distribution over `Distribution[Array]`s on the parameter space. **Decoupled from `Problem`** — it carries math primitives directly (`support`, `prior`, `log_density_form`, `input_shape`). The algorithm loop pulls those primitives from a `Problem` when constructing the SP each round.
+`SurrogateDistribution` is a ProbPipe `NumericRandomMeasure[Array]`: a distribution over `Distribution[Array]`s on the parameter space. **Decoupled from `Problem`** — it carries math primitives directly (`support`, `prior`, `log_density_form`, `input_shape`). The algorithm loop pulls those primitives from a `Problem` when constructing the SP each round.
 
-A `SurrogatePosterior` holds a `Surrogate` (a sabi-side `ArrayRandomFunction` subclass — see §4.3) and a `LogDensityForm`; its `_random_unnormalized_log_prob()` returns a `RandomFunction` whose `__call__(X)` evaluates the surrogate at `X` (yielding a `Distribution[Array]`) and pushes it through the form via the shared `pushforward_marginal` dispatch (closed-form for Gaussian × affine cases, MC empirical via ProbPipe `WorkflowFunction` broadcasting otherwise). The class itself is Gaussian-agnostic — only the dispatch knows about Gaussianness.
+A `SurrogateDistribution` holds a `Surrogate` (a sabi-side `ArrayRandomFunction` subclass — see §4.3) and a `LogDensityForm`; its `_random_unnormalized_log_prob()` returns a `RandomFunction` whose `__call__(X)` evaluates the surrogate at `X` (yielding a `Distribution[Array]`) and pushes it through the form via the shared `pushforward_marginal` dispatch (closed-form for Gaussian × affine cases, MC empirical via ProbPipe `WorkflowFunction` broadcasting otherwise). The class itself is Gaussian-agnostic — only the dispatch knows about Gaussianness.
 
-`WeightedEmpiricalRandomMeasure` is the **sibling** no-GP-baseline random measure (NOT a `SurrogatePosterior` subclass): a Dirac at a weighted empirical of design points. Useful for testing the loop without a fitted surrogate, and as a reference for any random-measure consumer. Tracked for potential graduation to ProbPipe.
+`WeightedEmpiricalRandomMeasure` is the **sibling** no-GP-baseline random measure (NOT a `SurrogateDistribution` subclass): a Dirac at a weighted empirical of design points. Useful for testing the loop without a fitted surrogate, and as a reference for any random-measure consumer. Tracked for potential graduation to ProbPipe.
 
 Protocol opt-ins (v1.2):
 
-- **`SurrogatePosterior`**: `SupportsRandomUnnormalizedLogProb`. Does NOT implement `SupportsSampling` (no function-trajectory sampler on the v1.x `Surrogate` interface yet — v1.6), `SupportsMean` (unbiased expected posterior needs an MC backend, deferred to v2), or `SupportsRandomLogProb` (normalization intractable).
+- **`SurrogateDistribution`**: `SupportsRandomUnnormalizedLogProb`. Does NOT implement `SupportsSampling` (no function-trajectory sampler on the v1.x `Surrogate` interface yet — v1.6), `SupportsMean` (unbiased expected posterior needs an MC backend, deferred to v2), or `SupportsRandomLogProb` (normalization intractable).
 - **`WeightedEmpiricalRandomMeasure`**: `SupportsMean` / `SupportsSampling` / `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb`, all via the underlying `NumericEmpiricalDistribution` and a Dirac random-function shim.
 
 ### 4.6 Deterministic posterior estimators
 
-A `SurrogatePosterior` admits many deterministic posterior approximations. They are exposed as **free functions** with type-dispatch on `SurrogatePosterior` subtype, mirroring ProbPipe's op-dispatch style. Each returns a concrete `Distribution[Array]`. For `WeightedEmpiricalSurrogatePosterior` (Dirac), all estimators coincide and reduce to the underlying empirical.
+A `SurrogateDistribution` admits many deterministic posterior approximations. They are exposed as **free functions** with type-dispatch on `SurrogateDistribution` subtype, mirroring ProbPipe's op-dispatch style. Each returns a concrete `Distribution[Array]`. For `WeightedEmpiricalSurrogateDistribution` (Dirac), all estimators coincide and reduce to the underlying empirical.
 
 Currently shipped:
 
@@ -180,8 +182,8 @@ Algorithm:
   initial_sampler: BatchSampler
   emulator_factory: Callable[[], Emulator]
   acquisition: Acquisition
-  surrogate_posterior_factory: SurrogatePosteriorFactory   # default emulator_pushforward_factory
-  estimator: Callable[[SurrogatePosterior], Distribution]  # default expected_target
+  surrogate_distribution_factory: SurrogateDistributionFactory   # default emulator_pushforward_factory
+  estimator: Callable[[SurrogateDistribution], Distribution]  # default expected_target
   tempering_scheme: TemperingScheme    # default NoTempering()
   schedule: TemperingSchedule          # default UntemperedSchedule()
   acquisition_target: AcquisitionTarget # default CURRENT
@@ -210,7 +212,7 @@ metadata:
   training data from cached raw evaluations of the *base* target
   function — the loop uses this instead of evaluating the (possibly
   expensive) base target afresh.
-- `base_target_function`: the un-tempered base target (for reference;
+- `base_target_map`: the un-tempered base target (for reference;
   the loop typically already has it via the base `TargetDistribution`).
 
 Two orthogonal axes can be tempered:
@@ -223,7 +225,7 @@ Two orthogonal axes can be tempered:
 
 Concrete schemes pick one axis at a time. The scheme advertises
 which axis is invariant via
-`is_invariant_target_function(state_a, state_b)` and
+`is_invariant_target_map(state_a, state_b)` and
 `is_invariant_form(state_a, state_b)`; the loop uses these to skip
 redundant emulator refits / form rebuilds.
 
@@ -288,7 +290,7 @@ Built-in:
 
 ### 4.13 `AcquisitionTarget`
 
-Picks *which* tempering state the acquisition's `SurrogatePosterior`
+Picks *which* tempering state the acquisition's `SurrogateDistribution`
 is built at — independent of the round's "current" state.
 
 - `CURRENT` (default): the round's current state. Acquisition
@@ -334,9 +336,9 @@ Per round (loop sketch):
    (`Y_train_acq = target_intermediate.output_transform(target_state, X, Y_raw)`).
    Cheap-update dispatch ([issue #4](https://github.com/arob5/sabi/issues/4))
    will replace the full refit.
-6. `SurrogatePosterior` for acquisition = `(emulator_for_acq,
+6. `SurrogateDistribution` for acquisition = `(emulator_for_acq,
    target_intermediate.log_density_form, ...)`. Acquisition picks
-   `x_new`, loop appends `y_new_raw = problem.target_function(x_new)`
+   `x_new`, loop appends `y_new_raw = problem.target_map(x_new)`
    to `Y_raw`.
 7. Round-end emulator + SP at the *current* state for metrics:
    `Y_train = current_intermediate.output_transform(current_state, X, Y_raw)`;
@@ -392,7 +394,7 @@ sabi/
     problems/          # benchmarks (one subpackage each)
     emulators/         # Emulator interface + tinygp impl
     acquisitions/      # + optim.py
-    posterior/         # SurrogatePosterior subclasses + deterministic estimators (expected_target, mean)
+    surrogate/         # SurrogateDistribution subclasses + deterministic estimators (expected_target, mean)
     metrics/           # PosteriorMetric + EmulatorMetric
     sampling.py        # BatchSampler + PriorSampler
     tempering/         # Tempering + TemperingSchedule + dispatch registry
@@ -416,8 +418,8 @@ sabi/
 ## 11. Roadmap
 
 - **v0 (spike):** 2-D Gaussian + banana, toy tinygp-backed GP surrogate on log-posterior with fixed data-adaptive hyperparameters, random + EI acquisitions (candidate-set scoring), `PosteriorMetric` protocol with `ReferenceMMD`, Hydra configs, local logging. `Tempering` / `TemperingSchedule` shipped as no-op defaults (`NoTempering`, `UntemperedSchedule`); hook points exist, no tempering behavior exercised. **Explicitly not production-grade:** the GP, importance-resampling `PlugInMean`, and missing ProbPipe integration are all known v0 stubs.
-- **v1:** `Problem` / reference posteriors re-expressed on ProbPipe `Distribution` + `Constraint` (no inline math for standard targets); `Surrogate` becomes an `ArrayRandomFunction` subclass; `SurrogatePosterior` becomes a sabi-local `RandomMeasure` (intended to graduate to ProbPipe); baseline weighted-empirical `SurrogatePosterior` ships first (for testing without a GP backend); GP surrogate backed by a proper GP library (gpjax or ProbPipe `GaussianRandomFunction`) with library-provided hyperparameter optimization (no hand-rolled BFGS); `SurrogatePosterior` / `PosteriorEstimator` abstractions formalized; Tier-A benchmarks with reference posteriors; optimization module (§5) with shared candidate / multi-start / greedy-batch helpers and BOTorch-comparison tests; `EmulatorMetric` protocol. **See [`v1_plan.md`](v1_plan.md) for the sub-phasing.**
-- **v2:** `PosteriorEstimator` backend dispatch on `(estimator_type, surrogate_posterior_type, backend)` — swap IS / MCMC / SMC / VI as a config change, backed by ProbPipe sampler integration. Loop generalizes from sample-based metric evaluation to `Distribution`-valued estimates; `PosteriorMetric` declares which representation it consumes. `LikelihoodTempering` + `FixedSchedule` / `ESSAdaptiveSchedule`; `EmulatorTarget` adapter for optional tempered-target emulator fits. Native VBMC implementation (PyVBMC as oracle); more acquisitions (stochastic / Thompson); `ExpectedPosterior` estimator.
+- **v1:** `Problem` / reference posteriors re-expressed on ProbPipe `Distribution` + `Constraint` (no inline math for standard targets); `Surrogate` becomes an `ArrayRandomFunction` subclass; `SurrogateDistribution` becomes a sabi-local `RandomMeasure` (intended to graduate to ProbPipe); baseline weighted-empirical `SurrogateDistribution` ships first (for testing without a GP backend); GP surrogate backed by a proper GP library (gpjax or ProbPipe `GaussianRandomFunction`) with library-provided hyperparameter optimization (no hand-rolled BFGS); `SurrogateDistribution` / `PosteriorEstimator` abstractions formalized; Tier-A benchmarks with reference posteriors; optimization module (§5) with shared candidate / multi-start / greedy-batch helpers and BOTorch-comparison tests; `EmulatorMetric` protocol. **See [`v1_plan.md`](v1_plan.md) for the sub-phasing.**
+- **v2:** `PosteriorEstimator` backend dispatch on `(estimator_type, surrogate_distribution_type, backend)` — swap IS / MCMC / SMC / VI as a config change, backed by ProbPipe sampler integration. Loop generalizes from sample-based metric evaluation to `Distribution`-valued estimates; `PosteriorMetric` declares which representation it consumes. `LikelihoodTempering` + `FixedSchedule` / `ESSAdaptiveSchedule`; `EmulatorTarget` adapter for optional tempered-target emulator fits. Native VBMC implementation (PyVBMC as oracle); more acquisitions (stochastic / Thompson); `ExpectedPosterior` estimator.
 - **v3:** Batch `q > 1`, more benchmarks (Tier B), W&B backend. `DataTempering` and `PartitionedLogLikForm` land alongside the first benchmark that requires them.
 - **v4+:** Noisy/stochastic target setting; non-GP surrogates (BNN, deep ensemble, ENN).
 

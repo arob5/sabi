@@ -20,7 +20,7 @@ from sabi.acquisitions.optim import (
 from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms import (
     Algorithm,
-    SurrogatePosteriorFactory,
+    SurrogateDistributionFactory,
     emulator_pushforward_factory,
     weighted_empirical_factory,
 )
@@ -171,12 +171,12 @@ def _build_metrics(cfg: DictConfig) -> tuple[PosteriorMetric, ...]:
     return tuple(_build_metric(m) for m in metrics_cfg)
 
 
-def _build_surrogate_posterior_factory(name: str) -> SurrogatePosteriorFactory:
+def _build_surrogate_distribution_factory(name: str) -> SurrogateDistributionFactory:
     if name == "emulator_pushforward":
         return emulator_pushforward_factory
     if name == "weighted_empirical":
         return weighted_empirical_factory
-    raise ValueError(f"Unknown surrogate_posterior factory: {name!r}.")
+    raise ValueError(f"Unknown surrogate_distribution factory: {name!r}.")
 
 
 def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
@@ -187,8 +187,8 @@ def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
             cfg.emulator, input_shape=problem.input_shape
         ),
         acquisition=_build_acquisition(cfg.acquisition),
-        surrogate_posterior_factory=_build_surrogate_posterior_factory(
-            str(cfg.algorithm.get("surrogate_posterior", "emulator_pushforward"))
+        surrogate_distribution_factory=_build_surrogate_distribution_factory(
+            str(cfg.algorithm.get("surrogate_distribution", "emulator_pushforward"))
         ),
         n_initial=int(cfg.algorithm.n_initial),
         n_rounds=int(cfg.algorithm.n_rounds),

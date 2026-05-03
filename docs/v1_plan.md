@@ -20,7 +20,7 @@ through optional protocols.
 
 The first big lift. Switch `Problem` from callable-based prior/sampling to
 `ProbPipe` primitives, formalize `LogDensityForm` as sabi's local
-pushforward operator, ship a baseline `WeightedEmpiricalSurrogatePosterior`
+pushforward operator, ship a baseline `WeightedEmpiricalSurrogateDistribution`
 that needs no GP at all, and make the loop pass `Distribution` objects to
 metrics rather than raw sample arrays.
 
@@ -28,81 +28,81 @@ metrics rather than raw sample arrays.
 - `Problem.prior: Distribution | None` (replaces `prior_log_prob` + `prior_sample` callables). Where v0 benchmarks had `sampling_bounds=(low, high)` for uniform initial design, v1 expresses the same thing as `prior = Uniform(low, high, name=...)` — i.e. the prior field is the design distribution. (Renaming the field to something like `design_distribution` is a semantic bike-shed; v1.1 keeps `prior` to limit churn.)
 - `Problem.support: Constraint | None` (replaces `sampling_bounds`). For v1.1 `support` is **metadata** — used by acquisitions / metrics that want to check feasibility, but sampling routes through `prior`. ProbPipe exposes TFP bijectors via `TransformedDistribution` (`probpipe/distributions/transformed.py`); we don't need them for v0 benchmarks (bounded boxes are sampled directly via `Uniform`), but they're available for v1.3+ benchmarks with non-trivial supports (positive parameters, simplex, etc.).
 - `Problem.reference_distribution: Distribution | None` replacing `reference_samples` + `reference_log_prob`. For benchmarks with an analytic posterior we use the corresponding ProbPipe distribution directly (e.g. `gaussian2d`'s reference is a `MultivariateNormal`); for benchmarks without one we wrap pre-computed samples in `NumericEmpiricalDistribution`.
-- Benchmarks rebuilt: `gaussian2d`'s posterior is a ProbPipe `MultivariateNormal`, and `target_function = lambda x: log_prob(posterior_dist, x)` per Option A. `banana` keeps its inline analytic log-density for v1.1 (a transformed-Normal expression of the banana posterior is a v1.5 exercise) and uses a `NumericEmpiricalDistribution` reference. **Watch:** `MultivariateNormal` currently casts to float32 internally, so the `target_function` may need an explicit cast back to float64 to interop with our x64-enabled tests; if that gets ugly, surface as a ProbPipe gap.
+- Benchmarks rebuilt: `gaussian2d`'s posterior is a ProbPipe `MultivariateNormal`, and `target_map = lambda x: log_prob(posterior_dist, x)` per Option A. `banana` keeps its inline analytic log-density for v1.1 (a transformed-Normal expression of the banana posterior is a v1.5 exercise) and uses a `NumericEmpiricalDistribution` reference. **Watch:** `MultivariateNormal` currently casts to float32 internally, so the `target_map` may need an explicit cast back to float64 to interop with our x64-enabled tests; if that gets ugly, surface as a ProbPipe gap.
 - `LogDensityForm` documented and labeled as **sabi's local pushforward operator**: it composes `f(x) = y` with `prior.log_prob(x)` to form an unnormalized log-posterior. Naming aligns with ProbPipe (`unnormalized_log_prob`), so the eventual swap to ProbPipe's pushforward is mechanical.
-- `SurrogatePosterior` becomes abstract; subclasses declare which `Supports*` protocols they satisfy.
-- New baseline: `WeightedEmpiricalSurrogatePosterior` — stores `(X, Y)` where `Y` is observed log-density at `X`. Exposes its inner posterior as a ProbPipe `NumericEmpiricalDistribution(samples=X, weights=Weights(log_weights=Y))` via a cached property. Sabi does **not** reimplement weighting / normalization / ESS — `Weights` in `probpipe/_weights.py` handles all of that. Inherits `SupportsSampling` and `SupportsMean` from the wrapped empirical.
-- Existing GP-pushforward `SurrogatePosterior` (the v0 plug-in-mean object) refactored into a second concrete subclass `GPPushforwardSurrogatePosterior`. Implements `SupportsSampling` (via IS over the surrogate-mean log-density) only.
-- **`PlugInMean` subclasses `NumericRecordDistribution`** (ProbPipe's base for all numeric distributions with TFP-style shape semantics) — not a generic `Distribution[Array]`. Constructor takes a `SurrogatePosterior`; the result is the concrete plug-in-mean posterior (a `Distribution[Array]` with `event_shape == problem.input_shape`). Internal type dispatch on the surrogate-posterior subtype (until v1.2 formalizes this as `RandomMeasure._mean()` op dispatch):
-  - For `WeightedEmpiricalSurrogatePosterior` (Dirac random measure): `_sample` and `_unnormalized_log_prob` forward to the underlying `NumericEmpiricalDistribution`. `PlugInMean` and `mean(surrogate_posterior)` coincide here.
-  - For `GPPushforwardSurrogatePosterior`: `_sample` is IS over the surrogate-mean log-density (the v0 backend); `_unnormalized_log_prob` evaluates `LogDensityForm(x, surrogate.predict(x).mean, problem)`. The IS backend is the same hook v2 backend dispatch will replace with MCMC / SMC / VI.
-- Loop materialization: after constructing `posterior_estimate = PlugInMean(surrogate_posterior)`, the loop draws `samples = sample(posterior_estimate, key, n)` once per round and wraps in `NumericEmpiricalDistribution(samples)` to hand to metrics. Metrics see a `Distribution[Array]`, never a raw array.
+- `SurrogateDistribution` becomes abstract; subclasses declare which `Supports*` protocols they satisfy.
+- New baseline: `WeightedEmpiricalSurrogateDistribution` — stores `(X, Y)` where `Y` is observed log-density at `X`. Exposes its inner posterior as a ProbPipe `NumericEmpiricalDistribution(samples=X, weights=Weights(log_weights=Y))` via a cached property. Sabi does **not** reimplement weighting / normalization / ESS — `Weights` in `probpipe/_weights.py` handles all of that. Inherits `SupportsSampling` and `SupportsMean` from the wrapped empirical.
+- Existing GP-pushforward `SurrogateDistribution` (the v0 plug-in-mean object) refactored into a second concrete subclass `GPPushforwardSurrogateDistribution`. Implements `SupportsSampling` (via IS over the surrogate-mean log-density) only.
+- **`PlugInMean` subclasses `NumericRecordDistribution`** (ProbPipe's base for all numeric distributions with TFP-style shape semantics) — not a generic `Distribution[Array]`. Constructor takes a `SurrogateDistribution`; the result is the concrete plug-in-mean posterior (a `Distribution[Array]` with `event_shape == problem.input_shape`). Internal type dispatch on the surrogate-posterior subtype (until v1.2 formalizes this as `RandomMeasure._mean()` op dispatch):
+  - For `WeightedEmpiricalSurrogateDistribution` (Dirac random measure): `_sample` and `_unnormalized_log_prob` forward to the underlying `NumericEmpiricalDistribution`. `PlugInMean` and `mean(surrogate_distribution)` coincide here.
+  - For `GPPushforwardSurrogateDistribution`: `_sample` is IS over the surrogate-mean log-density (the v0 backend); `_unnormalized_log_prob` evaluates `LogDensityForm(x, surrogate.predict(x).mean, problem)`. The IS backend is the same hook v2 backend dispatch will replace with MCMC / SMC / VI.
+- Loop materialization: after constructing `posterior_estimate = PlugInMean(surrogate_distribution)`, the loop draws `samples = sample(posterior_estimate, key, n)` once per round and wraps in `NumericEmpiricalDistribution(samples)` to hand to metrics. Metrics see a `Distribution[Array]`, never a raw array.
 - `PosteriorMetric` declares its required protocols via a class attribute (e.g., `requires: tuple[type, ...] = (SupportsSampling,)`). Loop introspects each metric and **raises** if the estimator distribution doesn't support a required protocol.
 - `_evaluate_metrics` reshaped: takes the estimator-returned `Distribution[Array]`, dispatches per-metric via ProbPipe ops (`sample`, `log_prob`, `mean`, etc.). Removes the "draw samples once, pass as array" assumption from the loop.
 - Tests:
-  - End-to-end run with **only** `WeightedEmpiricalSurrogatePosterior` (no GP) — confirms the baseline path is self-contained.
+  - End-to-end run with **only** `WeightedEmpiricalSurrogateDistribution` (no GP) — confirms the baseline path is self-contained.
   - `PlugInMean(weighted_empirical_baseline)` produces the same samples (up to PRNG) as direct sampling from the underlying empirical — Dirac mean property holds in code.
   - `PosteriorMetric.requires` honored: a metric requiring `SupportsLogProb` against an estimator that only supports `SupportsSampling` raises a clear error.
   - All v0 tests still pass after rename / reshape.
 
 **Exit criteria**
 - All 41+ tests green.
-- `runner.main` smoke test: gaussian2d with `WeightedEmpiricalSurrogatePosterior` produces sensible MMD numbers (the baseline isn't expected to be *good*, just non-degenerate).
+- `runner.main` smoke test: gaussian2d with `WeightedEmpiricalSurrogateDistribution` produces sensible MMD numbers (the baseline isn't expected to be *good*, just non-degenerate).
 - No raw `Array` flowing from estimator → metric in the loop body; metrics receive `Distribution[Array]` only.
 
 **Open design questions for v1.1**
-1. Benchmark expression — answered: route `target_function` through ProbPipe's `Distribution.log_prob` / `unnormalized_log_prob` for benchmarks where a ProbPipe distribution describes the posterior natively. Inline math is kept only when no clean ProbPipe equivalent exists.
+1. Benchmark expression — answered: route `target_map` through ProbPipe's `Distribution.log_prob` / `unnormalized_log_prob` for benchmarks where a ProbPipe distribution describes the posterior natively. Inline math is kept only when no clean ProbPipe equivalent exists.
 2. `sampling_bounds` removal — answered: drop. Use `Constraint` + TFP bijectors. Verify ProbPipe's TFP bijector exposure on implementation; if missing, surface as a ProbPipe gap.
 3. `PosteriorMetric.requires` mismatch — answered: raise.
 4. Should the v0 toy GP wrapper survive as a `Surrogate` example? It still works; it's just not the primary baseline anymore. Recommend keeping it (handy for testing acquisitions in v1.4) but not advertising it.
 
 ---
 
-## v1.2 — `SurrogatePosterior` as a `NumericRandomMeasure` subclass — **landed**
+## v1.2 — `SurrogateDistribution` as a `NumericRandomMeasure` subclass — **landed**
 
 ### v1.2 refactor (post-MCMC-relaxation)
 
 Following the pushforward-dispatch and class-hierarchy review, several of the v1.2 shapes have been refined:
 
 - **`Surrogate(ArrayRandomFunction)`** — sabi's surrogate is now a real ProbPipe `ArrayRandomFunction`. `__call__(X, joint_inputs, joint_outputs) -> Distribution` is the predictive-distribution interface (free from the parent); `fit(X, Y) -> Self` is the only sabi-specific addition. `GPSurrogate(Surrogate, GaussianRandomFunction)` is the concrete Gaussian path — diamond inheritance over `ArrayRandomFunction`, resolved cleanly by C3 MRO. `SurrogatePrediction(mean, variance)` is removed; consumers use `mean` / `variance` ops on the returned `Normal` (or `MultivariateNormal` once joint modes land).
-- **Class collapse + rename.** `SurrogatePosterior` (formerly `GPPushforwardSurrogatePosterior`) is now the only "surrogate posterior" — direct subclass of `NumericRandomMeasure`, holds `(surrogate, log_density_form, support, input_shape, prior)`. `WeightedEmpiricalRandomMeasure` (renamed from `WeightedEmpiricalSurrogatePosterior`) is a sibling class — a Dirac random measure that no longer carries `log_density_form`. The two are coordinate concepts in the loop's `surrogate_posterior_factory`, not parent/child classes.
-- **`pushforward_marginal` dispatch.** A new free function in `sabi.posterior._pushforward` does the work that was buried in `_PushforwardLogDensityRandomFunction.__call__`. Type-dispatched on `(input_dist, log_density_form)`:
+- **Class collapse + rename.** `SurrogateDistribution` (formerly `GPPushforwardSurrogateDistribution`) is now the only "surrogate posterior" — direct subclass of `NumericRandomMeasure`, holds `(surrogate, log_density_form, support, input_shape, prior)`. `WeightedEmpiricalRandomMeasure` (renamed from `WeightedEmpiricalSurrogateDistribution`) is a sibling class — a Dirac random measure that no longer carries `log_density_form`. The two are coordinate concepts in the loop's `surrogate_distribution_factory`, not parent/child classes.
+- **`pushforward_marginal` dispatch.** A new free function in `sabi.surrogate._pushforward` does the work that was buried in `_PushforwardLogDensityRandomFunction.__call__`. Type-dispatched on `(input_dist, log_density_form)`:
   - `(Normal | MultivariateNormal, Identity | LogLikPlusPrior)` — closed-form affine pushforward (shift `loc`; same scale / scale_tril). Handles univariate marginals AND multivariate (joint over inputs / joint over outputs) uniformly.
   - `(samplable Distribution, anything)` — MC empirical via `@workflow_function`-wrapped helper. ProbPipe's broadcasting machinery samples from the input, runs the form pointwise (vmap when JAX-traceable), returns a `NumericEmpiricalDistribution`.
   - Otherwise — clear `NotImplementedError` naming the types and pointing at the partial-pushforward primitive in `docs/probpipe_issues.md`.
 - **Acquisitions adopt the ProbPipe-native interface.** `ExpectedImprovement` now calls `state.surrogate(X)` to get a `Normal` and reads `mean(...)` / `variance(...)` via ProbPipe ops. No more sabi-specific `SurrogatePrediction` dataclass.
 
 `RandomMeasure` lives in ProbPipe (PRs #150 + #151 — the latter relaxing
-MCMC dispatch to `SupportsUnnormalizedLogProb`). Sabi's `SurrogatePosterior`
+MCMC dispatch to `SupportsUnnormalizedLogProb`). Sabi's `SurrogateDistribution`
 inherits from `NumericRandomMeasure` and is decoupled from `Problem` (takes
 math primitives `support`, `prior`, `log_density_form`, `input_shape`
 directly).
 
 **Landed in this phase**
-- `sabi.posterior.SurrogatePosterior(NumericRandomMeasure)` — abstract base.
+- `sabi.surrogate.SurrogateDistribution(NumericRandomMeasure)` — abstract base.
   Constructor takes math primitives, requires `support` to be set (raises
   otherwise), and exposes `inner_support` / `inner_event_shape` derived from
   those args. No protocol opt-ins on the base — subclasses choose.
-- `sabi.posterior.WeightedEmpiricalSurrogatePosterior` — Dirac random measure.
+- `sabi.surrogate.WeightedEmpiricalSurrogateDistribution` — Dirac random measure.
   Stores `(X, Y_log_density)`, exposes `inner_distribution: NumericEmpiricalDistribution`
   via cached property. Implements `SupportsMean` (returns inner empirical),
   `SupportsSampling` (returns the inner empirical for `sample_shape == ()`,
   `DistributionArray` of repeats otherwise), and
   `SupportsRandomLogProb` / `SupportsRandomUnnormalizedLogProb` via a Dirac
   random function shim.
-- `sabi.posterior.GPPushforwardSurrogatePosterior` — proper random measure.
+- `sabi.surrogate.GPPushforwardSurrogateDistribution` — proper random measure.
   Implements `SupportsRandomUnnormalizedLogProb` for the closed-form forms
   (`Identity`, `LogLikPlusPrior`); `ForwardModel` raises until partial-pushforward
   primitive lands. Does NOT implement `SupportsSampling` (surrogate doesn't
   yet expose function-trajectory sampling — v1.6), `SupportsMean` (no closed-form
   expected posterior), or `SupportsRandomLogProb` (normalization intractable).
 - Sabi-local Dirac shims (`_DiracDistribution`, `_DiracArrayRandomFunction`)
-  in `sabi.posterior._dirac` — graduate to ProbPipe when a general `Dirac`
+  in `sabi.surrogate._dirac` — graduate to ProbPipe when a general `Dirac`
   abstraction lands.
-- `sabi.posterior._pushforward._PushforwardLogDensityRandomFunction` — the
+- `sabi.surrogate._pushforward._PushforwardLogDensityRandomFunction` — the
   marginal random log-density for the GP-pushforward path. Affine pushforward
   for closed-form forms; raises for `ForwardModel`.
-- Free-function deterministic estimators in `sabi.posterior.estimators`:
+- Free-function deterministic estimators in `sabi.surrogate.estimators`:
   - `expected_target(sp)` — biased plug-in (renamed from "plug-in mean" since
     it's the expectation of the target map under the surrogate). For Dirac SPs,
     coincides with `mean(sp)`; for the GP path, returns an
@@ -113,19 +113,19 @@ directly).
   prior's `log_prob` across all returned dims (a v1.2 pragma to handle
   ProbPipe's element-wise `Uniform` cleanly; revisit when ProbPipe ships
   joint multivariate distributions).
-- Loop adapter (`_build_surrogate_posterior`) extracts math primitives from
+- Loop adapter (`_build_surrogate_distribution`) extracts math primitives from
   `Problem` and passes them to the factory; the factory + SP know nothing
   about `Problem`.
 - Old `sabi.estimators` package removed.
 - ProbPipe op imports switched from `import probpipe.core.ops as pp_ops` to
   top-level `from probpipe import condition_on, sample, log_prob, ...` per
   user preference.
-- 20 new tests in `tests/test_surrogate_posterior.py`; 66 tests pass total.
+- 20 new tests in `tests/test_surrogate_distribution.py`; 66 tests pass total.
 
 **Deferred to later phases**
 - `mean(gp_sp)` returning the unbiased expected posterior — v2 with MC backend
   + ProbPipe `PosteriorEstimator` backend dispatch.
-- `SupportsSampling` on `GPPushforwardSurrogatePosterior` — needs a
+- `SupportsSampling` on `GPPushforwardSurrogateDistribution` — needs a
   function-trajectory sampler on the surrogate (v1.6 swap to a real GP backend).
 - `_random_unnormalized_log_prob` for `ForwardModel` — needs partial-pushforward
   primitive in ProbPipe (tracked in `docs/probpipe_issues.md`).
@@ -290,7 +290,7 @@ library-backed GP with proper hyperparameter optimization.
 
 ## After v1
 
-**v2** — tempering becomes real (design doc §4.11–§4.13): `LikelihoodTempering` with `FixedSchedule` / `ESSAdaptiveSchedule`, `EmulatorTarget` adapter for tempered-target emulator fits. `PosteriorEstimator` backend dispatch on `(estimator_type, surrogate_posterior_type, backend)` for IS / MCMC / SMC / VI; native VBMC; stochastic acquisitions (Thompson); `ExpectedPosterior` estimator's full implementation. The "distributions in, distributions out" generalization for metrics consummated by v2.
+**v2** — tempering becomes real (design doc §4.11–§4.13): `LikelihoodTempering` with `FixedSchedule` / `ESSAdaptiveSchedule`, `EmulatorTarget` adapter for tempered-target emulator fits. `PosteriorEstimator` backend dispatch on `(estimator_type, surrogate_distribution_type, backend)` for IS / MCMC / SMC / VI; native VBMC; stochastic acquisitions (Thompson); `ExpectedPosterior` estimator's full implementation. The "distributions in, distributions out" generalization for metrics consummated by v2.
 
 **v3** — `q > 1` batches, Tier-B benchmarks, W&B logger backend, `DataTempering` + `PartitionedLogLikForm` when the first data-tempering benchmark lands.
 

@@ -37,8 +37,8 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
-from sabi.posterior.surrogate_posterior import SurrogatePosterior
-from sabi.posterior.weighted_empirical import WeightedEmpiricalRandomMeasure
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.forms import LogDensityForm
 from sabi.emulators.base import Emulator
 
@@ -58,7 +58,7 @@ def expected_target(
     - `WeightedEmpiricalRandomMeasure` (Dirac): returns the inner
       empirical (which IS the deterministic target). `sampler` /
       `sampler_kwargs` are ignored.
-    - `SurrogatePosterior`: returns an `_ExpectedTargetDistribution`
+    - `SurrogateDistribution`: returns an `_ExpectedTargetDistribution`
       whose `_unnormalized_log_prob` is the form composed with the
       surrogate's predictive mean. Sampling delegates to ProbPipe
       `condition_on` (auto-dispatched MCMC). `sampler` selects a
@@ -67,7 +67,7 @@ def expected_target(
     """
     if isinstance(sp, WeightedEmpiricalRandomMeasure):
         return sp.inner_distribution
-    if isinstance(sp, SurrogatePosterior):
+    if isinstance(sp, SurrogateDistribution):
         return _ExpectedTargetDistribution(
             emulator=sp.emulator,
             log_density_form=sp.log_density_form,

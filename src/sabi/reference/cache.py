@@ -74,7 +74,7 @@ def load_or_generate_reference_samples(
     *,
     problem_name: str,
     cache_key: str,
-    target_function: Callable[[Array], Array],
+    target_map: Callable[[Array], Array],
     log_density_form: LogDensityForm,
     prior: Distribution,
     input_shape: tuple[int, ...],
@@ -94,7 +94,7 @@ def load_or_generate_reference_samples(
         problem_name: subdirectory under `cache_dir` (e.g., "neals_funnel").
         cache_key: human-readable identifier of the problem variant
             (e.g., "d2_sv3.0"). Different cache_keys → different artifacts.
-        target_function, log_density_form, prior, input_shape:
+        target_map, log_density_form, prior, input_shape:
             forwarded to `generate_via_nuts`. Support is derived from
             ``prior.support``.
         problem_params: optional dict embedded verbatim in metadata
@@ -130,7 +130,7 @@ def load_or_generate_reference_samples(
 
     # Regenerate via NUTS.
     samples, diagnostics = generate_via_nuts(
-        target_function=target_function,
+        target_map=target_map,
         log_density_form=log_density_form,
         prior=prior,
         input_shape=input_shape,
