@@ -126,6 +126,48 @@ For ABCs whose subclasses are dataclasses (e.g. `PointwiseOptimizer`,
 subclasses opt into `@dataclass(frozen=True)`. Don't decorate the
 ABC itself.
 
+## Algorithmic invariants
+
+### Main loops read like pseudocode
+
+The main algorithm loops — currently `run()` in
+[`src/sabi/algorithms/loop.py`](../src/sabi/algorithms/loop.py), and any
+future top-level loop bodies that play the same role — must read like a
+paper-style pseudocode description of the algorithm. An informed
+reader should be able to scan the loop body once and recover the
+algorithmic skeleton: state resolution → acquisition view →
+acquisition → target evaluation → round-end update → metrics →
+bookkeeping. Each step should be one named operation, ideally one line.
+
+Concretely, the per-round body should *not* expose:
+
+- Branching on tempering invariance, `output_transform` plumbing, or
+  cheap-update vs. refit dispatch — push these into named helpers.
+- Manual PRNG-key splitting interleaved with algorithmic steps —
+  resolve keys at the top of the round or inside the helper that
+  consumes them.
+- Inline construction of `SurrogateDistribution` /
+  `AcquisitionState` / `MetricContext` payloads — these are
+  bookkeeping, not algorithm.
+- Per-axis or per-target conditional reuse logic (e.g.
+  "if `invariance.both` then reuse the current intermediate") — wrap
+  in a helper whose name describes the *what*, not the *how*.
+
+The helpers carrying that complexity should have docstrings that
+explain the conditional logic and trade-offs. The loop body itself
+explains the algorithm.
+
+When reviewing a PR that touches `run()` or a similar loop, ask:
+"could a reader who knows the math but not this codebase trace the
+algorithm by reading only the loop body?" If the answer is no, the
+change needs to push complexity into helpers before it lands.
+
+> **Status note:** the current `run()` body does not yet satisfy this
+> invariant — the refactor lives in [issue #20](https://github.com/arob5/sabi/issues/20).
+> The invariant applies going forward: new contributions to the loop
+> should not make the situation worse, and the issue-#20 refactor is
+> the canonical example of how to bring it into compliance.
+
 ## Tests
 
 - One test file per source module where practical (`tests/test_loop.py`
