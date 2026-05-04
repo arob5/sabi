@@ -8,4 +8,4 @@ defaults:
 seed: 0
 
 metrics:
-  - name: reference_mmd
+  - name: mmd

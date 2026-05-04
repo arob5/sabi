@@ -143,21 +143,96 @@ Future estimators (motivated by the partial-pushforward primitive — see `docs/
 
 ### 4.7 Metrics
 
-Two protocols:
+A single `Metric` protocol covers reference-comparison, surrogate-quality,
+and emulator-calibration metrics:
 
 ```
-PosteriorMetric: (samples: Array, problem: Problem) -> dict[str, float]
-EmulatorMetric:  (emulator, validation_set, log_density_form?) -> dict[str, float]
+Metric: (ctx: MetricContext, *, key: Array) -> dict[str, float]
 ```
 
-A metric returns a **dict of named scalars**, not a single float, so that related quantities stay bundled (e.g., MMD² and its square root, forward and reverse KL, per-marginal TV). The dict keys are merged into each round's metric row; namespacing is the metric's responsibility when collisions are possible.
+`MetricContext` bundles the round's posterior estimate, the
+`SurrogateDistribution` that produced it, the problem, the design data
+(`X`, `Y_raw`, `Y_train`), the round's tempering state, the round
+index, and the resolved `MetricTarget` (CURRENT vs TERMINAL). Different
+metric families read different fields:
 
-- `PosteriorMetric` examples: MMD (keys `mmd2`, `mmd`), forward/reverse KL, TV on 1-D marginals, log-score of estimate on reference samples.
-- `EmulatorMetric` examples: log-score of emulator at validation points, log-score of induced unnormalized log-density (calibration of the pushforward).
+- **Reference-comparison metrics** (the dominant family) read
+  `ctx.estimate` and `ctx.problem.reference_distribution`. Examples:
+  MMD (keys `mmd2`, `mmd`), forward/reverse KL, TV on 1-D marginals.
+- **Surrogate-quality metrics** read `ctx.surrogate_distribution`
+  (carrying the round's emulator + form). Example: log-score of the
+  surrogate's induced unnormalized log-density.
+- **Emulator-calibration metrics** read
+  `ctx.surrogate_distribution.emulator` plus held-out design data.
+  Example: log-score of emulator predictions on validation points.
 
-The metric list is a field on `Algorithm`; the loop evaluates every metric each round with no metric-specific code paths in the loop itself.
+A metric returns a **dict of named scalars**, not a single float, so
+related quantities stay bundled (MMD² and its square root, forward
+and reverse KL from a single sample pair). Each `Metric` subclass
+declares two class attributes:
 
-**v0 limitation (tracked for post-ProbPipe):** the loop currently passes metrics a sample batch from the estimator, which assumes a sample-based posterior representation. Once ProbPipe's `Distribution` is available (v2, when `PosteriorEstimator` backend dispatch lands), the loop should ask the estimator for a `Distribution` and each metric should declare which representation it consumes — samples, density, or both. VI / Laplace / mixture estimators, and metrics like log-score or TV on 1-D marginals, are the motivating cases.
+- `requires`: tuple of ProbPipe `Supports*` protocols that
+  `ctx.estimate` must satisfy. The loop checks each and raises
+  `MissingProtocolError` if any are not satisfied.
+- `keys`: tuple of dict keys this metric will produce. Used for
+  upfront collision detection (see below). Default `()` opts out of
+  upfront validation; runtime backstop catches collisions at the
+  merge step.
+
+#### Per-metric scheduling
+
+`Algorithm.metrics: tuple[ScheduledMetric | Metric, ...]`. A
+`ScheduledMetric` wraps a `Metric` with:
+
+- `every: int = 1` — fire on rounds where `round_idx % every == 0`,
+  so `every=1` fires every round including round 0; `every=k`
+  fires at rounds 0, k, 2k, ....
+- `target: MetricTarget = CURRENT` — which intermediate distribution
+  to evaluate against. `CURRENT` builds the SP at the round's
+  intermediate target; `TERMINAL` builds it at the un-tempered base
+  with the round's emulator (matches the post-loop final-eval
+  semantics).
+- `final: bool = True` — also include in the post-loop
+  `RunResult.final_metrics`, always evaluated against the un-tempered
+  base.
+- `name_suffix: str = ""` — appended as `_{name_suffix}` to each
+  returned key when non-empty. Use this to disambiguate when the
+  same metric is scheduled at multiple targets.
+
+Bare `Metric` instances in `Algorithm.metrics` auto-wrap with the
+default `ScheduledMetric` config — preserves the simple "one metric,
+every round, also at final eval" pattern.
+
+#### Collision detection
+
+Two scheduled metrics that produce the same key in the same row
+would silently overwrite — the loop refuses to allow this. Two
+checks run **before any emulator work**:
+
+1. Per-round: for each `round_idx`, enumerate firing scheduled
+   metrics and check that their declared `keys` (with `name_suffix`
+   applied) don't overlap with each other or with the bookkeeping
+   fields the loop populates per row (`round`, `tempering_state`,
+   `target_tempering_state`, `n_evals`).
+2. Final-eval: across all `final=True` scheduled metrics, check
+   their declared keys don't overlap.
+
+The error message names the colliding key, both metrics that
+produced it, and points at `ScheduledMetric.name_suffix` for
+resolution. Metrics with `keys = ()` (the default; opts out) are
+skipped — a runtime check at the merge step catches their
+collisions when the dicts are actually merged.
+
+The metric list is a field on `Algorithm`; the loop evaluates each
+firing scheduled metric per round (round 0 included) and the
+`final=True` subset at end-of-loop. No metric-specific code paths in
+the loop itself.
+
+**v0 limitation (tracked for post-ProbPipe):** the metric receives a
+ProbPipe `Distribution` for `ctx.estimate`. Once ProbPipe's
+`PosteriorEstimator` backend dispatch lands (v2), each metric's
+`requires` will gate against richer protocols (density vs samples)
+to support VI / Laplace / mixture estimators directly.
 
 ### 4.8 `BatchSampler`
 
@@ -343,8 +418,20 @@ Per round (loop sketch):
 7. Round-end emulator + SP at the *current* state for metrics:
    `Y_train = current_intermediate.output_transform(current_state, X, Y_raw)`;
    refit emulator; build SP for metrics at `current_intermediate`.
-8. Run metrics. Per-round metrics record both `tempering_state` and
-   `target_tempering_state` for ablation reproducibility.
+8. Run scheduled metrics for this round (those whose `every`
+   matches and whose target — CURRENT or TERMINAL — has been
+   resolved). The SP/estimate at each target is built lazily, at
+   most once per round per target. See §4.7 for the metric
+   protocol and `ScheduledMetric` wrapper. Per-round metrics
+   record both `tempering_state` and `target_tempering_state` for
+   ablation reproducibility.
+
+After the loop, every `final=True` scheduled metric runs against
+the un-tempered base target (`target.log_density_form`); results
+populate `RunResult.final_metrics`. `RunResult.final_estimate` is
+always populated — built once at the un-tempered base regardless
+of whether any metric has `final=True` — for downstream tooling
+that wants the canonical end-of-run posterior.
 
 The base-class `Emulator` is tempering-agnostic — it just consumes
 `(X, Y_train)`. The state-dependence enters through the scheme's
@@ -417,7 +504,7 @@ sabi/
 
 ## 11. Roadmap
 
-- **v0 (spike):** 2-D Gaussian + banana, toy tinygp-backed GP surrogate on log-posterior with fixed data-adaptive hyperparameters, random + EI acquisitions (candidate-set scoring), `PosteriorMetric` protocol with `ReferenceMMD`, Hydra configs, local logging. `Tempering` / `TemperingSchedule` shipped as no-op defaults (`NoTempering`, `UntemperedSchedule`); hook points exist, no tempering behavior exercised. **Explicitly not production-grade:** the GP, importance-resampling `PlugInMean`, and missing ProbPipe integration are all known v0 stubs.
+- **v0 (spike):** 2-D Gaussian + banana, toy tinygp-backed GP surrogate on log-posterior with fixed data-adaptive hyperparameters, random + EI acquisitions (candidate-set scoring), `Metric` protocol with `MMD`, Hydra configs, local logging. `Tempering` / `TemperingSchedule` shipped as no-op defaults (`NoTempering`, `UntemperedSchedule`); hook points exist, no tempering behavior exercised. **Explicitly not production-grade:** the GP, importance-resampling `PlugInMean`, and missing ProbPipe integration are all known v0 stubs.
 - **v1:** `Problem` / reference posteriors re-expressed on ProbPipe `Distribution` + `Constraint` (no inline math for standard targets); `Surrogate` becomes an `ArrayRandomFunction` subclass; `SurrogateDistribution` becomes a sabi-local `RandomMeasure` (intended to graduate to ProbPipe); baseline weighted-empirical `SurrogateDistribution` ships first (for testing without a GP backend); GP surrogate backed by a proper GP library (gpjax or ProbPipe `GaussianRandomFunction`) with library-provided hyperparameter optimization (no hand-rolled BFGS); `SurrogateDistribution` / `PosteriorEstimator` abstractions formalized; Tier-A benchmarks with reference posteriors; optimization module (§5) with shared candidate / multi-start / greedy-batch helpers and BOTorch-comparison tests; `EmulatorMetric` protocol. **See [`v1_plan.md`](v1_plan.md) for the sub-phasing.**
 - **v2:** `PosteriorEstimator` backend dispatch on `(estimator_type, surrogate_distribution_type, backend)` — swap IS / MCMC / SMC / VI as a config change, backed by ProbPipe sampler integration. Loop generalizes from sample-based metric evaluation to `Distribution`-valued estimates; `PosteriorMetric` declares which representation it consumes. `LikelihoodTempering` + `FixedSchedule` / `ESSAdaptiveSchedule`; `EmulatorTarget` adapter for optional tempered-target emulator fits. Native VBMC implementation (PyVBMC as oracle); more acquisitions (stochastic / Thompson); `ExpectedPosterior` estimator.
 - **v3:** Batch `q > 1`, more benchmarks (Tier B), W&B backend. `DataTempering` and `PartitionedLogLikForm` land alongside the first benchmark that requires them.

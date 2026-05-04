@@ -240,9 +240,12 @@ def test_via_target_with_next_lookahead_runs_to_completion():
     result = run(problem, alg, jax.random.key(3))
     # 8 initial + 2 acquisition rounds * q=1 = 10.
     assert result.X.shape == (10, 2)
-    # target_tempering_state per round is recorded in metrics.
-    assert result.per_round_metrics[0]["target_tempering_state"] == 1.0
-    assert result.per_round_metrics[1]["target_tempering_state"] == 1.0  # clamped
+    # per_round_metrics[0] is the initial-design row (no acquisition).
+    assert result.per_round_metrics[0]["round"] == 0
+    assert result.per_round_metrics[0]["target_tempering_state"] is None
+    # Acquisition rounds 1, 2 follow.
+    assert result.per_round_metrics[1]["target_tempering_state"] == 1.0
+    assert result.per_round_metrics[2]["target_tempering_state"] == 1.0  # clamped
 
 
 # -------------------------------------------------------------------------

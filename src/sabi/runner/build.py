@@ -24,8 +24,9 @@ from sabi.algorithms import (
     emulator_pushforward_factory,
     weighted_empirical_factory,
 )
-from sabi.metrics.base import PosteriorMetric
-from sabi.metrics.posterior_mmd import ReferenceMMD
+from sabi.metrics.base import Metric
+from sabi.metrics.mmd import MMD
+from sabi.metrics.scheduling import MetricTarget, ScheduledMetric
 from sabi.problems.banana import banana
 from sabi.problems.base import Problem
 from sabi.problems.gaussian import gaussian, gaussian2d
@@ -156,15 +157,40 @@ def _build_acquisition(cfg: DictConfig) -> Acquisition:
     raise ValueError(f"Unknown acquisition.name={name!r}.")
 
 
-def _build_metric(cfg: DictConfig) -> PosteriorMetric:
+def _build_bare_metric(cfg: DictConfig) -> Metric:
     name = cfg.name
-    if name == "reference_mmd":
+    if name == "mmd":
         bw = cfg.get("bandwidth", None)
-        return ReferenceMMD(bandwidth=None if bw is None else float(bw))
+        return MMD(bandwidth=None if bw is None else float(bw))
     raise ValueError(f"Unknown metric.name={name!r}.")
 
 
-def _build_metrics(cfg: DictConfig) -> tuple[PosteriorMetric, ...]:
+_SCHEDULING_FIELDS = frozenset({"every", "target", "final", "name_suffix"})
+
+
+def _build_metric(cfg: DictConfig) -> Metric | ScheduledMetric:
+    """Build a single metric entry from YAML.
+
+    Bare entries (no scheduling fields present) return a `Metric`,
+    which the loop auto-wraps in `ScheduledMetric(defaults)`. When
+    any of `every` / `target` / `final` / `name_suffix` is present,
+    return an explicit `ScheduledMetric`.
+    """
+    metric = _build_bare_metric(cfg)
+    if not any(f in cfg for f in _SCHEDULING_FIELDS):
+        return metric
+    target_cfg = cfg.get("target", "current")
+    target = MetricTarget(str(target_cfg).lower())
+    return ScheduledMetric(
+        metric=metric,
+        every=int(cfg.get("every", 1)),
+        target=target,
+        final=bool(cfg.get("final", True)),
+        name_suffix=str(cfg.get("name_suffix", "")),
+    )
+
+
+def _build_metrics(cfg: DictConfig) -> tuple[Metric | ScheduledMetric, ...]:
     metrics_cfg = cfg.get("metrics", None)
     if metrics_cfg is None:
         return ()
