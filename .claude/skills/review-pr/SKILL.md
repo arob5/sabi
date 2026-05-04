@@ -9,6 +9,23 @@ Use this skill when the user invokes `/review-pr <number>` (or asks to review a 
 
 The goal is a careful, calibrated review: catch real problems, don't pad the report with nits. If a section has nothing to flag, say so rather than inventing concerns.
 
+## Source-of-truth docs
+
+The substantive rules — coding conventions, math-doc style, type-hint
+conventions, ProbPipe import policy, dataclass policy, shape /
+notation / "target" vocabulary, public-batched / private-single-point
+convention, the "main loops read like pseudocode" invariant, test
+conventions, numerical-tolerance defaults — all live in:
+
+- [`docs/contributing.md`](../../../docs/contributing.md)
+- [`docs/notation.md`](../../../docs/notation.md)
+
+**Read both before producing a review** and keep them open as you go.
+Cite the relevant section back to the user when flagging a violation
+(e.g. "violates `contributing.md#jax-traceability`"). Don't restate
+the rules in this skill — when the docs change, the skill should keep
+working without edits.
+
 ## 1. Fetch the PR and orient
 
 Run these in parallel with the `Bash` tool:
@@ -30,8 +47,8 @@ Cover each of the following. For each, decide "no issues", "minor", or "blocking
 
 - Does the code do what the PR / issue says it should?
 - Are there logic bugs, off-by-one errors, swapped arguments, or wrong defaults?
-- Are mathematical formulas correct? Cross-check against the docstring math (sabi puts non-trivial formulas in docstrings — they are part of the contract).
-- Concurrency / JAX trace boundaries: if the change runs inside `jax.vmap` / `jax.jit` / `jax.grad`, is it traceable per the JAX-traceability rules in `docs/contributing.md`?
+- Are mathematical formulas correct? Cross-check against the docstring math.
+- JAX trace boundaries: if the change runs inside a traced region, does it satisfy the JAX-traceability section of `contributing.md`?
 
 ### Edge cases and failure modes
 
@@ -45,41 +62,19 @@ Cover each of the following. For each, decide "no issues", "minor", or "blocking
 - Dead code, unused imports, unused parameters.
 - Duplicated logic that should be factored, OR over-abstracted helpers introduced for hypothetical future use.
 - Premature feature flags, backwards-compat shims, or `# removed: ...` comments instead of deletions.
-- Variables that shadow notation symbols (`p`, `n`, `d`, `q`, `f`, `x`, `y`) — `docs/notation.md` calls these out specifically.
+- Variables that shadow notation symbols — see `notation.md` for the reserved set.
 
-### Documentation
+### Conformance to `contributing.md` and `notation.md`
 
-- Public functions / classes / methods have docstrings.
-- Non-trivial math is in the docstring with `r"""..."""` and reST math directives (`:math:`...`` or `.. math::` blocks). Per `docs/contributing.md`: math goes in docstrings.
-- Cross-references rather than duplication: shared contracts (e.g. `PointwiseScoredAcquisition`'s scoring contract) should be referenced, not restated.
-- Symbol use matches `docs/notation.md`: `x` for parameter input (not `theta`), `f` for the target map, `X` / `Y` for batched, `n` / `d` / `p` / `q` only in math contexts.
+Walk the PR diff against each subsection of those two docs and flag any violation. The docs are the spec; the review just enforces them. Cite the violated section by anchor in your finding.
 
-### Conformance to `docs/contributing.md`
-
-Check explicitly:
-- Modern Python type hints: `collections.abc` for ABCs, `X | Y` not `Union`, built-in generics, no quoted hints unless required.
-- ProbPipe imports: top-level `from probpipe import ...` for the stable surface; only reach into `probpipe.core.*` for types without a top-level alias; no private-module imports.
-- Dataclasses: configuration bundles are `@dataclass(frozen=True)`. ABCs themselves are plain `abc.ABC` (decorate the subclass, not the ABC).
-- Tests: one test file per source module where practical, prefer `scripts/python -m pytest`, numerical-tolerance choices justified.
-
-### Conformance to `docs/notation.md`
-
-- Shape annotations match the convention (`X.shape == (n,) + input_shape`, `Y.shape == (n,) + output_shape`).
-- Public batched / private single-point convention: batched methods take `X, Y`; single-point hooks are underscore-prefixed (`_call_single`, `_score_single`).
-- "Target" terms: `target_distribution` (Distribution) vs. `target_map` (Callable) kept distinct. `IntermediateTarget`, `AcquisitionTarget` used per the glossary.
-- `emulator` (function) vs. `surrogate` (distribution) usage.
-
-### The "main loops read like pseudocode" invariant
-
-This is a sabi-specific invariant documented in `docs/contributing.md`. Apply it to any change that touches `run()` in `src/sabi/algorithms/loop.py` or any other top-level algorithm loop body that plays the same role.
-
-Ask: could a reader who knows the math but not this codebase trace the algorithm by reading only the loop body? Flag any of:
-- Branching on tempering invariance, `output_transform` plumbing, or cheap-update vs. refit dispatch in the loop body itself.
-- Inline construction of `SurrogateDistribution` / `AcquisitionState` / `MetricContext` payloads in the loop body.
-- Manual `jax.random.split(...)` interleaved with algorithmic steps.
-- Per-axis or per-target conditional reuse logic at the top level (e.g. `if invariance.both: ...`).
-
-The current `run()` body does not yet satisfy this invariant — issue #20 tracks the refactor. Don't flag pre-existing violations the PR doesn't touch, but **do** flag any new code that makes the situation worse.
+The "main loops read like pseudocode" invariant (in `contributing.md`)
+deserves an explicit mention because it's easy to violate
+incrementally: any change touching `run()` in
+`src/sabi/algorithms/loop.py` (or another top-level loop body) should
+be checked against it. Don't flag pre-existing violations the PR
+doesn't touch, but **do** flag any new code that makes the situation
+worse.
 
 ### Excessive "AI thinking" commentary
 
@@ -90,7 +85,7 @@ Flag comments that are clearly AI-generated rationalization rather than load-bea
 - Comments that hedge (`# this might break if ...` followed by no actual handling).
 - Comments restating what well-named identifiers already say.
 
-Per `docs/contributing.md` style: comments should explain non-obvious *why*, not *what*. Recommend deletion or compression for any AI-thinking-style block found.
+Recommend deletion or compression for any AI-thinking-style block found.
 
 ### Test coverage
 
@@ -98,7 +93,7 @@ This is a quick check — a deep audit is the `audit-tests` skill's job. Just ve
 - New behavior has tests, ideally in the right `tests/test_<module>.py` file.
 - Bug fixes include a regression test that fails on the old code.
 - Public API changes update the relevant tests.
-- Numerical assertions have justified tolerances (5% slack on top-level metrics is the default; tighter or looser needs a written reason).
+- Numerical tolerances are picked per the rule in `contributing.md`.
 
 If test coverage looks thin, mention it and suggest the user run `/audit-tests` for a deep pass.
 
@@ -111,7 +106,7 @@ If test coverage looks thin, mention it and suggest the user run `/audit-tests` 
 
 ## 3. Write the review
 
-Present findings to the user in this structure. Keep each item terse — file:line + one sentence is usually enough. Group by severity, not by category.
+Present findings to the user in this structure. Keep each item terse — file:line + one sentence + a citation to the violated doc section is usually enough. Group by severity, not by category.
 
 ```
 # Review: PR #<number> — <title>
@@ -121,7 +116,7 @@ Present findings to the user in this structure. Keep each item terse — file:li
 **CI status**: pass / fail / skipped checks.
 
 ## Blocking
-- [`path/to/file.py:42`](path/to/file.py:42) — <issue, one sentence>.
+- [`path/to/file.py:42`](path/to/file.py:42) — <issue, one sentence> (`contributing.md#<section>`).
 - ...
 
 ## Minor

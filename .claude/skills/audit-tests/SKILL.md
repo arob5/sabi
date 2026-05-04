@@ -9,6 +9,19 @@ Use this skill when the user invokes `/audit-tests` (optionally with a path / mo
 
 The audit is a quality-of-tests review, not a coverage-percentage check. The bar is: would this test catch a real regression, and does its name truthfully describe what it asserts?
 
+## Source-of-truth docs
+
+Test conventions (file-per-source-module, `scripts/python -m pytest`,
+numerical-tolerance defaults) and notation conventions (shape strings,
+public-batched / private-single-point, "target" vocabulary) live in:
+
+- [`docs/contributing.md`](../../../docs/contributing.md) — Tests section
+- [`docs/notation.md`](../../../docs/notation.md)
+
+**Read both before producing an audit.** Cite the relevant section
+when flagging a convention violation. Don't restate the rules here —
+when the docs change, the skill should keep working without edits.
+
 ## 1. Scope the audit
 
 Determine the audit scope from the argument:
@@ -22,15 +35,9 @@ State the scope explicitly back to the user as the first line of the audit, so t
 
 Then locate the corresponding source files and read both sides. A test audit without reading the code under test is shallow — you can't tell whether an assertion is meaningful unless you know what the function is supposed to do.
 
-For full-suite audits, read all of `tests/` and `src/sabi/` upfront if context allows; for huge suites, prioritize the load-bearing modules (`algorithms/loop.py`, `acquisitions/`, `metrics/`, `tempering/`, `surrogate/`). Note that `docs/contributing.md` says "one test file per source module where practical" — that mapping is your guide.
+For full-suite audits, read all of `tests/` and `src/sabi/` upfront if context allows; for huge suites, prioritize the load-bearing modules (`algorithms/loop.py`, `acquisitions/`, `metrics/`, `tempering/`, `surrogate/`). The "one test file per source module" rule in `contributing.md` is your map.
 
-Run the relevant tests once before auditing, so failures surface immediately:
-
-```
-scripts/python -m pytest <scope> -q
-```
-
-Per `docs/contributing.md`, prefer `scripts/python -m pytest` over bare `pytest` — the wrapper threads `PYTHONPATH` for the worktree + ProbPipe pin.
+Run the relevant tests once before auditing, so failures surface immediately. Use the test-runner command documented in `contributing.md`.
 
 If tests are failing, surface that at the top of the audit before going further. A skill that reports "all looks good" while the suite is red is worse than useless.
 
@@ -41,9 +48,9 @@ For each test file in scope, evaluate the following. Cite specific test names (`
 ### Correctness
 
 - Does each assertion actually verify the documented behavior, or does it just verify *something* the code happens to do?
-- Are tolerances reasonable? Per `docs/contributing.md`: 5% slack on top-level metrics is the default; tighter or looser needs a written reason. Flag tests that use a tolerance so loose it would pass even on a broken implementation.
+- Are tolerances reasonable per the rule in `contributing.md`? Flag tests that use a tolerance so loose it would pass even on a broken implementation.
 - Are random seeds fixed where determinism matters? Are they varied where the test is *meant* to probe seed-dependent behavior?
-- Does the test set up the right precondition? A test of `_score_single` that passes a batched array is testing the wrong contract.
+- Does the test set up the right precondition? A test of `_score_single` (a private single-point hook per `notation.md`) that passes a batched array is testing the wrong contract.
 
 ### Misleading or "cheating" tests
 
@@ -76,7 +83,7 @@ For each public function / class / method in scope, check whether at least one t
 - Edge cases relevant to the function's contract:
   - Single-element / empty inputs (where supported).
   - `n_rounds == 1`, `q == 1`, `n_initial` minimal.
-  - Scalar vs. vector outputs (`output_shape == ()` vs `(p,)` with `p > 1`).
+  - Scalar vs. vector outputs (`output_shape == ()` vs `(p,)` with `p > 1`) — see the shape conventions in `notation.md`.
   - Unbounded prior support (algorithms that need bounded support should error clearly).
   - Tempering-on (non-`NoTempering`) variants.
   - JAX trace boundaries: if a function is traced, is there a test that actually runs it under `jax.jit` / `jax.vmap`?
@@ -103,9 +110,7 @@ Flag math-bearing functions whose tests don't include at least one closed-form c
 
 ### Convention conformance
 
-- One test file per source module where practical. Flag major source modules without a `tests/test_<module>.py`.
-- Test names start with `test_`. Use of `pytest.fixture` is appropriate (not abused to hide setup the reader needs to see).
-- Numerical assertions name the tolerance choice with a comment if it's nonstandard.
+Walk the test files against the Tests section of `contributing.md` and the relevant parts of `notation.md`, and flag any violation. Cite the violated section by anchor.
 
 ## 3. Write the audit
 
