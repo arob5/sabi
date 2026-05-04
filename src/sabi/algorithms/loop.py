@@ -37,6 +37,7 @@ Shape / symbol conventions: see ``docs/notation.md``.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import jax
@@ -68,6 +69,8 @@ from sabi.metrics.scheduling import (
 from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
+from sabi.target_distribution import IntermediateTarget, TargetDistribution
+from sabi.tempering.base import InvarianceFlags
 from sabi.tempering.output_transform import OutputTransform
 
 
@@ -242,6 +245,406 @@ def _plan_round_update(
     return diff
 
 
+@dataclass(frozen=True)
+class RoundState:
+    """Per-round bundle of states + intermediates + invariance flags.
+
+    Cached once at the top of each acquisition round (via
+    `_resolve_round_state`) and threaded through the helpers that make
+    up the round body. Promoting these fields to a struct trims the
+    helper signatures from ~6 positional state args to a single
+    `round_state` plus the data tensors, and gives a single place to
+    look for "what state is this round operating at".
+
+    Attributes:
+        round_idx: 1-based round index (0 is the initial-design round
+            and is handled separately by `_run_initial_round`).
+        current_state: the round's own tempering state, from
+            ``algorithm.schedule.at(round_idx)``. The round-end emulator
+            and the round's `current_intermediate` live at this state.
+        target_state: state the acquisition optimizes against, from
+            `resolve_state(algorithm.acquisition_target, ...)`. May
+            equal `current_state` (the `CURRENT` policy or a no-op
+            tempering scheme), or differ (`NEXT`, `TERMINAL`, or a
+            policy that looks ahead).
+        current_intermediate: `IntermediateTarget` at `current_state`.
+            Owns `output_transform` (used for the round-end refit /
+            cheap-update plan) and `log_density_form` (used to build
+            the round-end SP for metrics).
+        target_intermediate: `IntermediateTarget` at `target_state`.
+            Owns the `output_transform` and `log_density_form` used to
+            materialize the acquisition's view (`Y_train_for_acq` and
+            the pre-round SP). Equals `current_intermediate` when
+            ``invariance.both`` is True — saves a redundant rebuild.
+        invariance: per-axis flags from
+            `algorithm.tempering_scheme.invariance(current_state,
+            target_state)`. Drives the look-ahead-vs-reuse decision in
+            `_resolve_acquisition_view`.
+    """
+
+    round_idx: int
+    current_state: Any
+    target_state: Any
+    current_intermediate: IntermediateTarget
+    target_intermediate: IntermediateTarget
+    invariance: InvarianceFlags
+
+
+def _resolve_round_state(
+    algorithm: Algorithm,
+    target: TargetDistribution,
+    round_idx: int,
+) -> RoundState:
+    """Resolve all round-level state up front.
+
+    Queries the schedule for `current_state`, resolves the acquisition's
+    `target_state` via `resolve_state`, builds both intermediates, and
+    computes the per-axis invariance flags. Reuses
+    `current_intermediate` for `target_intermediate` when both axes are
+    invariant (the common no-tempering / `CURRENT`-target case) — this
+    matches the previous inline behavior and avoids a redundant
+    `intermediate_target` call.
+    """
+    current_state, _is_terminal_state = algorithm.schedule.at(round_idx)
+    target_state = resolve_state(
+        algorithm.acquisition_target,
+        algorithm.schedule,
+        round_idx,
+        current_state,
+    )
+    current_intermediate = algorithm.tempering_scheme.intermediate_target(
+        target, current_state
+    )
+    invariance = algorithm.tempering_scheme.invariance(current_state, target_state)
+    if invariance.both:
+        target_intermediate = current_intermediate
+    else:
+        target_intermediate = algorithm.tempering_scheme.intermediate_target(
+            target, target_state
+        )
+    return RoundState(
+        round_idx=round_idx,
+        current_state=current_state,
+        target_state=target_state,
+        current_intermediate=current_intermediate,
+        target_intermediate=target_intermediate,
+        invariance=invariance,
+    )
+
+
+def _resolve_acquisition_view(
+    emulator: Emulator,
+    emulator_state: Any,
+    round_state: RoundState,
+    X: Array,
+    Y_raw: Array,
+    Y_train: Array,
+    algorithm: Algorithm,
+) -> tuple[Emulator, Array]:
+    """Return the `(emulator, Y_train)` pair the acquisition sees.
+
+    Two cases:
+
+    - ``invariance.target_map`` is True: the round-end ``Y_train`` and
+      ``emulator`` already live at the acquisition's target state, so
+      reuse them directly. No allocation, no dispatcher call.
+    - Otherwise: materialize ``Y_train_for_acq`` at ``target_state`` via
+      the target intermediate's `output_transform`, then dispatch a
+      state-only cheap-update plan (no new rows yet) through
+      `update_emulator`. The dispatcher falls back to a full refit when
+      no fast path is registered for this transform's diff.
+    """
+    if round_state.invariance.target_map:
+        return emulator, Y_train
+    Y_train_for_acq = round_state.target_intermediate.output_transform(
+        round_state.target_state, X, Y_raw
+    )
+    lookahead_plan = _plan_round_update(
+        round_state.target_intermediate.output_transform,
+        state_prev=emulator_state,
+        state_new=round_state.target_state,
+        X_new=None,
+        Y_new_at_new_state=None,
+    )
+    emulator_for_acq = update_emulator(
+        emulator,
+        lookahead_plan,
+        factory=algorithm.emulator_factory,
+        X_full=X,
+        Y_full=Y_train_for_acq,
+    )
+    return emulator_for_acq, Y_train_for_acq
+
+
+def _run_acquisition(
+    problem: Problem,
+    algorithm: Algorithm,
+    emulator_for_acq: Emulator,
+    X: Array,
+    Y_raw: Array,
+    Y_train_for_acq: Array,
+    round_state: RoundState,
+    key: Array,
+) -> tuple[Array, Array]:
+    """Build the acquisition-state SP, pick the next batch, evaluate the target.
+
+    The pre-round `SurrogateDistribution` wraps the acquisition-state
+    emulator + form. The weighted-empirical factory produces an SP with
+    ``emulator=None``; acquisitions that need a real emulator check
+    ``state.surrogate_distribution.emulator is None`` and raise.
+
+    Returns ``(x_new, y_new_raw)``: the new batch and its raw target
+    evaluations. ``y_new_raw`` is at the *un-transformed* base target —
+    output transformation to `current_state` happens in
+    `_append_round_evaluations`.
+    """
+    pre_round_posterior = _build_surrogate_distribution(
+        algorithm.surrogate_distribution_factory,
+        emulator=emulator_for_acq,
+        X=X,
+        Y=Y_train_for_acq,
+        log_density_form=round_state.target_intermediate.log_density_form,
+        problem=problem,
+    )
+    acq_state = AcquisitionState(
+        problem=problem,
+        surrogate_distribution=pre_round_posterior,
+        X=X,
+        Y_raw=Y_raw,
+        Y_train=Y_train_for_acq,
+        tempering_state=round_state.current_state,
+        target_tempering_state=round_state.target_state,
+    )
+    x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key)
+    y_new_raw = problem.target_map(x_new)
+    return x_new, y_new_raw
+
+
+def _append_round_evaluations(
+    X: Array,
+    Y_raw: Array,
+    x_new: Array,
+    y_new_raw: Array,
+    round_state: RoundState,
+) -> tuple[Array, Array, Array, Array]:
+    """Append the new batch and re-materialize ``Y_train`` at ``current_state``.
+
+    Returns ``(X, Y_raw, Y_train, y_new_at_current)``:
+
+    - ``X``, ``Y_raw``: full design + raw evaluations after appending
+      the round's ``q`` new rows.
+    - ``Y_train``: the full transformed dataset at ``current_state`` —
+      what the round-end emulator will be (re)fit against.
+    - ``y_new_at_current``: only the new rows, transformed to
+      ``current_state``. Passed into `_plan_round_update` so the
+      cheap-update fast path can append rather than recomputing the
+      whole transformed dataset.
+    """
+    X = jnp.concatenate([X, x_new], axis=0)
+    Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
+    Y_train = round_state.current_intermediate.output_transform(
+        round_state.current_state, X, Y_raw
+    )
+    y_new_at_current = round_state.current_intermediate.output_transform(
+        round_state.current_state, x_new, y_new_raw
+    )
+    return X, Y_raw, Y_train, y_new_at_current
+
+
+def _update_round_end_emulator(
+    emulator: Emulator,
+    emulator_state: Any,
+    round_state: RoundState,
+    X: Array,
+    Y_train: Array,
+    x_new: Array,
+    y_new_at_current: Array,
+    algorithm: Algorithm,
+) -> tuple[Emulator, Any]:
+    """Fit / cheap-update the round-end emulator at ``current_state``.
+
+    Builds the `EmulatorUpdate` plan that combines the transform's
+    structural diff (``emulator_state → current_state``) with the
+    new-rows append, then dispatches via `update_emulator`. The
+    dispatcher tries any registered fast paths and falls back to a full
+    refit on the new ``(X, Y_train)``.
+
+    Returns ``(emulator, emulator_state)``; ``emulator_state`` is now
+    ``round_state.current_state``.
+    """
+    round_plan = _plan_round_update(
+        round_state.current_intermediate.output_transform,
+        state_prev=emulator_state,
+        state_new=round_state.current_state,
+        X_new=x_new,
+        Y_new_at_new_state=y_new_at_current,
+    )
+    emulator = update_emulator(
+        emulator,
+        round_plan,
+        factory=algorithm.emulator_factory,
+        X_full=X,
+        Y_full=Y_train,
+    )
+    return emulator, round_state.current_state
+
+
+def _build_round_metrics_row(
+    *,
+    scheduled: Sequence[ScheduledMetric],
+    algorithm: Algorithm,
+    problem: Problem,
+    target: TargetDistribution,
+    current_intermediate: IntermediateTarget,
+    emulator: Emulator,
+    X: Array,
+    Y_raw: Array,
+    Y_train: Array,
+    current_state: Any,
+    target_state: Any,
+    round_idx: int,
+    key: Array,
+) -> dict[str, Any]:
+    """Run scheduled metrics that fire this round and attach bookkeeping fields.
+
+    SP/estimate construction inside `_eval_round` is lazy — when no
+    metric fires at this round, nothing is built. Bookkeeping fields
+    (``round``, ``tempering_state``, ``target_tempering_state``,
+    ``n_evals``) are always populated, so every round still emits a
+    row.
+
+    `target_state=None` is the round-0 convention (no acquisition runs
+    at round 0, hence no target state).
+    """
+    firing = tuple(s for s in scheduled if s.fires_at_round(round_idx))
+    row = _eval_round(
+        scheduled_firing=firing,
+        algorithm=algorithm,
+        problem=problem,
+        target=target,
+        current_intermediate=current_intermediate,
+        emulator=emulator,
+        X=X,
+        Y_raw=Y_raw,
+        Y_train=Y_train,
+        tempering_state=current_state,
+        round_idx=round_idx,
+        key=key,
+    )
+    row["round"] = round_idx
+    row["tempering_state"] = current_state
+    row["target_tempering_state"] = target_state
+    row["n_evals"] = int(X.shape[0])
+    return row
+
+
+def _run_initial_round(
+    problem: Problem,
+    algorithm: Algorithm,
+    scheduled: Sequence[ScheduledMetric],
+    target: TargetDistribution,
+    key_init: Array,
+    key_metric: Array,
+) -> tuple[Array, Array, Array, Emulator, Any, Any, dict[str, Any]]:
+    """Round 0: initial design, target eval, emulator fit, round-0 metrics row.
+
+    No acquisition runs at round 0 — the design is drawn directly via
+    ``algorithm.initial_sampler``. The round operates at
+    ``schedule.at(0)``'s state; ``Y_train`` is derived from ``Y_raw``
+    via that state's `output_transform` (identity under no tempering).
+
+    Returns
+    -------
+    ``(X, Y_raw, Y_train, emulator, emulator_state, state_0, round_0_metrics)``.
+    The metrics row carries ``target_tempering_state=None`` since no
+    acquisition ran.
+    """
+    X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
+    Y_raw = problem.target_map(X)
+
+    state_0, _ = algorithm.schedule.at(0)
+    target_0 = algorithm.tempering_scheme.intermediate_target(target, state_0)
+    Y_train = target_0.output_transform(state_0, X, Y_raw)
+
+    emulator = algorithm.emulator_factory()
+    emulator = emulator.fit(X, Y_train)
+    # Track the state of the emulator's last fit. Used as the "from"
+    # state when building cheap-update plans in subsequent rounds.
+    emulator_state: Any = state_0
+
+    round_0_metrics = _build_round_metrics_row(
+        scheduled=scheduled,
+        algorithm=algorithm,
+        problem=problem,
+        target=target,
+        current_intermediate=target_0,
+        emulator=emulator,
+        X=X,
+        Y_raw=Y_raw,
+        Y_train=Y_train,
+        current_state=state_0,
+        target_state=None,
+        round_idx=0,
+        key=key_metric,
+    )
+    return X, Y_raw, Y_train, emulator, emulator_state, state_0, round_0_metrics
+
+
+def _run_final_eval(
+    *,
+    problem: Problem,
+    emulator: Emulator,
+    X: Array,
+    Y_raw: Array,
+    Y_train: Array,
+    target: TargetDistribution,
+    algorithm: Algorithm,
+    scheduled: Sequence[ScheduledMetric],
+    last_state: Any,
+    key: Array,
+) -> tuple[Distribution, dict[str, float]]:
+    """Post-loop final eval at the un-tempered base form.
+
+    Always builds the final SP + estimate (so
+    ``RunResult.final_estimate`` is populated for downstream tooling
+    regardless of whether any metric has ``final=True``). Then runs
+    every scheduled metric whose ``final`` flag is set, with
+    ``metric_target=TERMINAL`` in the context — independent of the
+    metric's per-round ``target`` field, ``final_metrics`` is always
+    evaluated against the un-tempered base.
+    """
+    final_sp = _build_surrogate_distribution(
+        algorithm.surrogate_distribution_factory,
+        emulator=emulator,
+        X=X,
+        Y=Y_train,
+        log_density_form=target.log_density_form,
+        problem=problem,
+    )
+    final_estimate = algorithm.estimator(final_sp)
+
+    final_scheduled = tuple(s for s in scheduled if s.final)
+    final_metrics: dict[str, float] = {}
+    if final_scheduled:
+        keys_split = jax.random.split(key, len(final_scheduled))
+        for s, mkey in zip(final_scheduled, keys_split, strict=True):
+            _check_protocols(s.metric, final_estimate)
+            ctx = MetricContext(
+                estimate=final_estimate,
+                surrogate_distribution=final_sp,
+                problem=problem,
+                X=X,
+                Y_raw=Y_raw,
+                Y_train=Y_train,
+                tempering_state=last_state,
+                round_idx=algorithm.n_rounds,
+                metric_target=MetricTarget.TERMINAL,
+            )
+            out = s.apply_suffix(s.metric(ctx, key=mkey))
+            _merge_no_overwrite(final_metrics, out, repr(s))
+    return final_estimate, final_metrics
+
+
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential emulator-based inference loop.
 
@@ -271,6 +674,32 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     round. Metrics with `final=True` also evaluate at the post-loop
     final step against the un-tempered base target; results land in
     `RunResult.final_metrics`.
+
+    Round shape (paper-style outline). Each acquisition round
+    (``round_idx`` 1..n-1) executes these phases, each owned by a named
+    helper:
+
+    1. ``_resolve_round_state`` — current/target tempering states,
+       both `IntermediateTarget`s, and the per-axis invariance flags,
+       cached in a `RoundState`.
+    2. ``_resolve_acquisition_view`` — the ``(emulator, Y_train)``
+       pair the acquisition sees, possibly via a state-only cheap
+       update when ``target_state != current_state``.
+    3. ``_run_acquisition`` — build the pre-round
+       `SurrogateDistribution` + `AcquisitionState`, pick the next
+       ``q`` points, evaluate the raw target on them.
+    4. ``_append_round_evaluations`` — append the new rows; rebuild
+       ``Y_train`` at ``current_state`` (and the new-rows-only block
+       used by the round-end fast path).
+    5. ``_update_round_end_emulator`` — refit / cheap-update the
+       round-end emulator at ``current_state``.
+    6. ``_build_round_metrics_row`` — run scheduled metrics that fire
+       this round; attach bookkeeping fields. Lazy: nothing built when
+       no metric fires.
+
+    Round 0 (initial design, no acquisition) is handled by
+    `_run_initial_round`; the post-loop un-tempered final eval is
+    handled by `_run_final_eval`.
     """
     target = problem.target_distribution
     # `prior` is required; `target.support = prior.support` is always
@@ -285,221 +714,72 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     scheduled = normalize_metrics(algorithm.metrics)
     validate_metric_keys(scheduled, algorithm.n_rounds)
 
-    # Round 0: initial-design round. Draw n_initial points, evaluate
-    # target, fit emulator at the schedule's round-0 state.
-    X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
-    Y_raw = problem.target_map(X)
-
-    state_0, _ = algorithm.schedule.at(0)
-    target_0 = algorithm.tempering_scheme.intermediate_target(target, state_0)
-    Y_train = target_0.output_transform(state_0, X, Y_raw)
-
-    tempering_states: list[Any] = [state_0]
-    per_round_metrics: list[dict[str, Any]] = []
-
-    emulator = algorithm.emulator_factory()
-    emulator = emulator.fit(X, Y_train)
-    # Track the state of the emulator's last fit. Used as the "from"
-    # state when building cheap-update plans below; updated after each
-    # round-end fit to the round's current_state.
-    emulator_state: Any = state_0
-
-    # ---------- Round 0 metric eval ----------
-    # Always emit a per_round_metrics row for round 0 (one row per
-    # round including initial design). Lazy SP/estimate construction:
-    # nothing built when no metric fires this round.
+    # Round 0: initial-design round.
     key_metric_0, key_loop = jax.random.split(key_loop, 2)
-    firing_round_0 = tuple(s for s in scheduled if s.fires_at_round(0))
-    round_0_metrics = _eval_round(
-        scheduled_firing=firing_round_0,
-        algorithm=algorithm,
+    (
+        X,
+        Y_raw,
+        Y_train,
+        emulator,
+        emulator_state,
+        state_0,
+        round_0_metrics,
+    ) = _run_initial_round(
+        problem, algorithm, scheduled, target, key_init, key_metric_0
+    )
+    tempering_states: list[Any] = [state_0]
+    per_round_metrics: list[dict[str, Any]] = [round_0_metrics]
+
+    # Acquisition rounds: 1..n_rounds-1.
+    for round_idx in range(1, algorithm.n_rounds):
+        round_state = _resolve_round_state(algorithm, target, round_idx)
+        emulator_for_acq, Y_train_for_acq = _resolve_acquisition_view(
+            emulator, emulator_state, round_state, X, Y_raw, Y_train, algorithm
+        )
+        key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
+        x_new, y_new_raw = _run_acquisition(
+            problem, algorithm, emulator_for_acq,
+            X, Y_raw, Y_train_for_acq, round_state, key_acq,
+        )
+        X, Y_raw, Y_train, y_new_at_current = _append_round_evaluations(
+            X, Y_raw, x_new, y_new_raw, round_state
+        )
+        emulator, emulator_state = _update_round_end_emulator(
+            emulator, emulator_state, round_state, X, Y_train,
+            x_new, y_new_at_current, algorithm,
+        )
+        per_round_metrics.append(
+            _build_round_metrics_row(
+                scheduled=scheduled,
+                algorithm=algorithm,
+                problem=problem,
+                target=target,
+                current_intermediate=round_state.current_intermediate,
+                emulator=emulator,
+                X=X,
+                Y_raw=Y_raw,
+                Y_train=Y_train,
+                current_state=round_state.current_state,
+                target_state=round_state.target_state,
+                round_idx=round_idx,
+                key=key_metric,
+            )
+        )
+        tempering_states.append(round_state.current_state)
+
+    # Post-loop: final eval at the un-tempered base form.
+    final_estimate, final_metrics = _run_final_eval(
         problem=problem,
-        target=target,
-        current_intermediate=target_0,
         emulator=emulator,
         X=X,
         Y_raw=Y_raw,
         Y_train=Y_train,
-        tempering_state=state_0,
-        round_idx=0,
-        key=key_metric_0,
+        target=target,
+        algorithm=algorithm,
+        scheduled=scheduled,
+        last_state=tempering_states[-1] if tempering_states else None,
+        key=key_eval,
     )
-    round_0_metrics["round"] = 0
-    round_0_metrics["tempering_state"] = state_0
-    round_0_metrics["target_tempering_state"] = None
-    round_0_metrics["n_evals"] = int(X.shape[0])
-    per_round_metrics.append(round_0_metrics)
-
-    # Loop body: rounds 1 through n_rounds-1 inclusive — the
-    # acquisition rounds. Each round adds q evaluations chosen by the
-    # acquisition.
-    for round_idx in range(1, algorithm.n_rounds):
-        current_state, _is_terminal_state = algorithm.schedule.at(round_idx)
-        target_state = resolve_state(
-            algorithm.acquisition_target,
-            algorithm.schedule,
-            round_idx,
-            current_state,
-        )
-        current_intermediate = algorithm.tempering_scheme.intermediate_target(
-            target, current_state
-        )
-        # Per-axis invariance between the round's state and the
-        # acquisition's target state.
-        invariance = algorithm.tempering_scheme.invariance(
-            current_state, target_state
-        )
-
-        # Acquisition's intermediate may live at a different state.
-        # Reuse current_intermediate when both axes are invariant.
-        if invariance.both:
-            target_intermediate = current_intermediate
-        else:
-            target_intermediate = algorithm.tempering_scheme.intermediate_target(
-                target, target_state
-            )
-
-        # Path 1: Y_train and emulator the acquisition sees, derived at
-        # target_state. When target_state == emulator_state for the Y
-        # axis (`invariance.target_map`), reuse directly. Otherwise
-        # dispatch a state-only cheap update (no new rows yet); the
-        # dispatcher falls back to refit when no fast path is registered.
-        if invariance.target_map:
-            Y_train_for_acq = Y_train
-            emulator_for_acq = emulator
-        else:
-            Y_train_for_acq = target_intermediate.output_transform(
-                target_state, X, Y_raw
-            )
-            lookahead_plan = _plan_round_update(
-                target_intermediate.output_transform,
-                state_prev=emulator_state,
-                state_new=target_state,
-                X_new=None,
-                Y_new_at_new_state=None,
-            )
-            emulator_for_acq = update_emulator(
-                emulator,
-                lookahead_plan,
-                factory=algorithm.emulator_factory,
-                X_full=X,
-                Y_full=Y_train_for_acq,
-            )
-
-        key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
-        # Pre-acquisition SP wraps the acquisition-state emulator +
-        # form. The weighted-empirical factory produces a
-        # SurrogateDistribution with ``emulator=None``; acquisitions that
-        # need a real emulator check
-        # ``state.surrogate_distribution.emulator is None`` and raise.
-        pre_round_posterior = _build_surrogate_distribution(
-            algorithm.surrogate_distribution_factory,
-            emulator=emulator_for_acq,
-            X=X,
-            Y=Y_train_for_acq,
-            log_density_form=target_intermediate.log_density_form,
-            problem=problem,
-        )
-        acq_state = AcquisitionState(
-            problem=problem,
-            surrogate_distribution=pre_round_posterior,
-            X=X,
-            Y_raw=Y_raw,
-            Y_train=Y_train_for_acq,
-            tempering_state=current_state,
-            target_tempering_state=target_state,
-        )
-        x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key_acq)
-        y_new_raw = problem.target_map(x_new)
-
-        X = jnp.concatenate([X, x_new], axis=0)
-        Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
-        # Path 2: round-end emulator at current_state with the new q
-        # rows appended. Plan combines the existing-rows diff
-        # (transform.diff(emulator_state, current_state)) with the new-
-        # rows append into a single op; the dispatcher tries fast paths
-        # and falls back to refit otherwise.
-        Y_train = current_intermediate.output_transform(current_state, X, Y_raw)
-        y_new_at_current = current_intermediate.output_transform(
-            current_state, x_new, y_new_raw
-        )
-        round_plan = _plan_round_update(
-            current_intermediate.output_transform,
-            state_prev=emulator_state,
-            state_new=current_state,
-            X_new=x_new,
-            Y_new_at_new_state=y_new_at_current,
-        )
-        emulator = update_emulator(
-            emulator,
-            round_plan,
-            factory=algorithm.emulator_factory,
-            X_full=X,
-            Y_full=Y_train,
-        )
-        emulator_state = current_state
-
-        # ---------- Per-round metric eval ----------
-        firing = tuple(s for s in scheduled if s.fires_at_round(round_idx))
-        round_metrics = _eval_round(
-            scheduled_firing=firing,
-            algorithm=algorithm,
-            problem=problem,
-            target=target,
-            current_intermediate=current_intermediate,
-            emulator=emulator,
-            X=X,
-            Y_raw=Y_raw,
-            Y_train=Y_train,
-            tempering_state=current_state,
-            round_idx=round_idx,
-            key=key_metric,
-        )
-        round_metrics["round"] = round_idx
-        round_metrics["tempering_state"] = current_state
-        round_metrics["target_tempering_state"] = target_state
-        round_metrics["n_evals"] = int(X.shape[0])
-        per_round_metrics.append(round_metrics)
-        tempering_states.append(current_state)
-
-    # ---------- Post-loop final eval ----------
-    # Final SP/estimate at the un-tempered base form. Always built (so
-    # `RunResult.final_estimate` is always populated for downstream
-    # tooling), regardless of whether any metric has `final=True`.
-    final_form = target.log_density_form
-    final_sp = _build_surrogate_distribution(
-        algorithm.surrogate_distribution_factory,
-        emulator=emulator,
-        X=X,
-        Y=Y_train,
-        log_density_form=final_form,
-        problem=problem,
-    )
-    final_estimate = algorithm.estimator(final_sp)
-
-    final_scheduled = tuple(s for s in scheduled if s.final)
-    final_metrics: dict[str, float] = {}
-    if final_scheduled:
-        keys_split = jax.random.split(key_eval, len(final_scheduled))
-        # `final_metrics` always evaluates at the un-tempered base —
-        # `metric_target=TERMINAL` in the context regardless of the
-        # ScheduledMetric's per-round `target` field.
-        last_state = tempering_states[-1] if tempering_states else None
-        for s, mkey in zip(final_scheduled, keys_split, strict=True):
-            _check_protocols(s.metric, final_estimate)
-            ctx = MetricContext(
-                estimate=final_estimate,
-                surrogate_distribution=final_sp,
-                problem=problem,
-                X=X,
-                Y_raw=Y_raw,
-                Y_train=Y_train,
-                tempering_state=last_state,
-                round_idx=algorithm.n_rounds,
-                metric_target=MetricTarget.TERMINAL,
-            )
-            out = s.apply_suffix(s.metric(ctx, key=mkey))
-            _merge_no_overwrite(final_metrics, out, repr(s))
 
     return RunResult(
         X=X,
