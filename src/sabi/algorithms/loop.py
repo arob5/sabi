@@ -411,24 +411,22 @@ def _run_final_eval(
     final_estimate = algorithm.estimator(final_sp)
 
     final_scheduled = tuple(s for s in scheduled if s.final)
-    final_metrics: dict[str, float] = {}
-    if final_scheduled:
-        keys_split = jax.random.split(key, len(final_scheduled))
-        for s, mkey in zip(final_scheduled, keys_split, strict=True):
-            _check_protocols(s.metric, final_estimate)
-            ctx = MetricContext(
-                estimate=final_estimate,
-                surrogate_distribution=final_sp,
-                problem=problem,
-                X=X,
-                Y_raw=Y_raw,
-                Y_train=Y_train,
-                tempering_state=last_state,
-                round_idx=algorithm.n_rounds,
-                metric_target=MetricTarget.TERMINAL,
-            )
-            out = s.apply_suffix(s.metric(ctx, key=mkey))
-            _merge_no_overwrite(final_metrics, out, repr(s))
+    if not final_scheduled:
+        return final_estimate, {}
+
+    final_metrics = _run_metrics_against_pair(
+        metrics=final_scheduled,
+        keys=jax.random.split(key, len(final_scheduled)),
+        surrogate_distribution=final_sp,
+        estimate=final_estimate,
+        metric_target=MetricTarget.TERMINAL,
+        problem=problem,
+        X=X,
+        Y_raw=Y_raw,
+        Y_train=Y_train,
+        tempering_state=last_state,
+        round_idx=algorithm.n_rounds,
+    )
     return final_estimate, final_metrics
 
 
@@ -759,6 +757,54 @@ def _eval_round(
     )
 
 
+def _run_metrics_against_pair(
+    *,
+    metrics: Sequence[ScheduledMetric],
+    keys: Sequence[Array],
+    surrogate_distribution: SurrogateDistribution,
+    estimate: Distribution,
+    metric_target: MetricTarget,
+    problem: Problem,
+    X: Array,
+    Y_raw: Array,
+    Y_train: Array,
+    tempering_state: Any,
+    round_idx: int,
+) -> dict[str, float]:
+    """Run each metric in `metrics` against a fixed `(sp, estimate, metric_target)`.
+
+    Builds a `MetricContext` per metric, invokes the metric under its
+    pre-split PRNG key, applies the scheduled metric's suffix, and
+    merges the result row. Raises on key collisions within `metrics`
+    (runtime backstop for metrics that opted out of upfront key
+    declaration).
+
+    `keys` must be the same length as `metrics`. Callers split once
+    over the *full* metric list before partitioning by target so that
+    seed→output mapping is stable across refactors of the partition
+    step.
+    """
+    if not metrics:
+        return {}
+    merged: dict[str, float] = {}
+    for s, mkey in zip(metrics, keys, strict=True):
+        _check_protocols(s.metric, estimate)
+        ctx = MetricContext(
+            estimate=estimate,
+            surrogate_distribution=surrogate_distribution,
+            problem=problem,
+            X=X,
+            Y_raw=Y_raw,
+            Y_train=Y_train,
+            tempering_state=tempering_state,
+            round_idx=round_idx,
+            metric_target=metric_target,
+        )
+        out = s.apply_suffix(s.metric(ctx, key=mkey))
+        _merge_no_overwrite(merged, out, repr(s))
+    return merged
+
+
 def _evaluate_scheduled_metrics(
     *,
     scheduled: Sequence[ScheduledMetric],
@@ -774,9 +820,12 @@ def _evaluate_scheduled_metrics(
 ) -> dict[str, float]:
     """Run each scheduled metric at its target.
 
-    Lazy: builds the current and/or terminal `(SurrogateDistribution,
-    estimate)` pair only if at least one scheduled metric needs it.
-    Caches each so it's built at most once per call.
+    Splits `key` once over the full `scheduled` list, partitions the
+    `(metric, mkey)` pairs by target preserving order, and dispatches
+    each non-empty target group via `_run_metrics_against_pair`. The
+    current / terminal `(SurrogateDistribution, estimate)` pair is
+    built only when its partition is non-empty, preserving the
+    factory callables' lazy-build contract.
 
     Raises on key collisions across metrics (runtime backstop;
     upfront `validate_metric_keys` should have caught most).
@@ -785,39 +834,39 @@ def _evaluate_scheduled_metrics(
         return {}
 
     keys = jax.random.split(key, len(scheduled))
-    merged: dict[str, float] = {}
-
-    # Memoize the (SP, estimate) per target.
-    cache: dict[MetricTarget, tuple[SurrogateDistribution, Distribution]] = {}
-
-    def _get(target: MetricTarget) -> tuple[SurrogateDistribution, Distribution]:
-        cached = cache.get(target)
-        if cached is not None:
-            return cached
-        if target == MetricTarget.CURRENT:
-            cache[target] = current_estimate_fn()
-        elif target == MetricTarget.TERMINAL:
-            cache[target] = terminal_estimate_fn()
-        else:
-            raise ValueError(f"Unknown MetricTarget: {target!r}")
-        return cache[target]
-
+    by_target: dict[MetricTarget, list[tuple[ScheduledMetric, Array]]] = {}
     for s, mkey in zip(scheduled, keys, strict=True):
-        sp, estimate = _get(s.target)
-        _check_protocols(s.metric, estimate)
-        ctx = MetricContext(
-            estimate=estimate,
+        by_target.setdefault(s.target, []).append((s, mkey))
+
+    factories: dict[
+        MetricTarget,
+        Callable[[], tuple[SurrogateDistribution, Distribution]],
+    ] = {
+        MetricTarget.CURRENT: current_estimate_fn,
+        MetricTarget.TERMINAL: terminal_estimate_fn,
+    }
+
+    merged: dict[str, float] = {}
+    for target, pairs in by_target.items():
+        try:
+            factory = factories[target]
+        except KeyError as e:
+            raise ValueError(f"Unknown MetricTarget: {target!r}") from e
+        sp, estimate = factory()
+        out = _run_metrics_against_pair(
+            metrics=[s for s, _ in pairs],
+            keys=[mkey for _, mkey in pairs],
             surrogate_distribution=sp,
+            estimate=estimate,
+            metric_target=target,
             problem=problem,
             X=X,
             Y_raw=Y_raw,
             Y_train=Y_train,
             tempering_state=tempering_state,
             round_idx=round_idx,
-            metric_target=s.target,
         )
-        out = s.apply_suffix(s.metric(ctx, key=mkey))
-        _merge_no_overwrite(merged, out, repr(s))
+        _merge_no_overwrite(merged, out, f"metrics with target={target.name}")
 
     return merged
 
