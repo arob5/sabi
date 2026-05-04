@@ -34,7 +34,7 @@ from sabi.metrics import (
     Metric,
     MetricContext,
     MetricTarget,
-    ReferenceMMD,
+    MMD,
     ScheduledMetric,
     normalize_metrics,
     validate_metric_keys,
@@ -61,23 +61,23 @@ def _algorithm(*, metrics, n_rounds=4, **kwargs):
 
 def test_scheduled_metric_every_zero_raises():
     with pytest.raises(ValueError, match="every must be >= 1"):
-        ScheduledMetric(metric=ReferenceMMD(), every=0)
+        ScheduledMetric(metric=MMD(), every=0)
 
 
 def test_scheduled_metric_negative_every_raises():
     with pytest.raises(ValueError, match="every must be >= 1"):
-        ScheduledMetric(metric=ReferenceMMD(), every=-1)
+        ScheduledMetric(metric=MMD(), every=-1)
 
 
 def test_fires_at_round_default():
-    s = ScheduledMetric(metric=ReferenceMMD())
+    s = ScheduledMetric(metric=MMD())
     assert s.fires_at_round(0)
     assert s.fires_at_round(1)
     assert s.fires_at_round(5)
 
 
 def test_fires_at_round_every_5():
-    s = ScheduledMetric(metric=ReferenceMMD(), every=5)
+    s = ScheduledMetric(metric=MMD(), every=5)
     assert s.fires_at_round(0)
     assert not s.fires_at_round(1)
     assert not s.fires_at_round(4)
@@ -86,12 +86,12 @@ def test_fires_at_round_every_5():
 
 
 def test_output_keys_no_suffix():
-    s = ScheduledMetric(metric=ReferenceMMD())
+    s = ScheduledMetric(metric=MMD())
     assert s.output_keys() == ("mmd", "mmd2")
 
 
 def test_output_keys_with_suffix():
-    s = ScheduledMetric(metric=ReferenceMMD(), name_suffix="terminal")
+    s = ScheduledMetric(metric=MMD(), name_suffix="terminal")
     assert s.output_keys() == ("mmd_terminal", "mmd2_terminal")
 
 
@@ -109,8 +109,8 @@ def test_output_keys_empty_for_undeclared_metric():
 
 
 def test_normalize_metrics_wraps_bare_metrics():
-    bare = ReferenceMMD()
-    sched = ScheduledMetric(metric=ReferenceMMD(), every=3)
+    bare = MMD()
+    sched = ScheduledMetric(metric=MMD(), every=3)
     out = normalize_metrics([bare, sched])
     assert isinstance(out[0], ScheduledMetric)
     assert out[0].metric is bare
@@ -126,12 +126,12 @@ def test_normalize_metrics_wraps_bare_metrics():
 
 
 def test_validate_no_collisions_with_distinct_targets_and_no_suffix():
-    """Two ScheduledMetrics on the same underlying ReferenceMMD,
+    """Two ScheduledMetrics on the same underlying MMD,
     different targets, no name_suffix → keys collide upfront."""
     scheduled = normalize_metrics(
         [
-            ScheduledMetric(metric=ReferenceMMD(), target=MetricTarget.CURRENT),
-            ScheduledMetric(metric=ReferenceMMD(), target=MetricTarget.TERMINAL),
+            ScheduledMetric(metric=MMD(), target=MetricTarget.CURRENT),
+            ScheduledMetric(metric=MMD(), target=MetricTarget.TERMINAL),
         ]
     )
     with pytest.raises(ValueError, match=r"key collision .* round 0.*name_suffix"):
@@ -142,9 +142,9 @@ def test_validate_collision_resolved_with_name_suffix():
     """Adding a name_suffix to one of the colliding metrics resolves the collision."""
     scheduled = normalize_metrics(
         [
-            ScheduledMetric(metric=ReferenceMMD(), target=MetricTarget.CURRENT),
+            ScheduledMetric(metric=MMD(), target=MetricTarget.CURRENT),
             ScheduledMetric(
-                metric=ReferenceMMD(),
+                metric=MMD(),
                 target=MetricTarget.TERMINAL,
                 name_suffix="terminal",
             ),
@@ -180,8 +180,8 @@ def test_validate_final_metrics_collision_raises():
     final-only branch."""
     scheduled = normalize_metrics(
         [
-            ScheduledMetric(metric=ReferenceMMD(), final=True),
-            ScheduledMetric(metric=ReferenceMMD(), final=True),
+            ScheduledMetric(metric=MMD(), final=True),
+            ScheduledMetric(metric=MMD(), final=True),
         ]
     )
     with pytest.raises(ValueError, match=r"final_metrics key collision"):
@@ -217,8 +217,8 @@ def test_collision_caught_before_loop_starts():
         n_rounds=2,
         q=1,
         metrics=(
-            ScheduledMetric(metric=ReferenceMMD(), target=MetricTarget.CURRENT),
-            ScheduledMetric(metric=ReferenceMMD(), target=MetricTarget.TERMINAL),
+            ScheduledMetric(metric=MMD(), target=MetricTarget.CURRENT),
+            ScheduledMetric(metric=MMD(), target=MetricTarget.TERMINAL),
         ),
     )
     with pytest.raises(ValueError, match=r"key collision"):
@@ -247,10 +247,10 @@ def test_round_0_row_present_with_no_metrics():
 
 
 def test_bare_metric_back_compat_fires_every_round():
-    """Passing a bare ReferenceMMD (auto-wrapped at default config)
+    """Passing a bare MMD (auto-wrapped at default config)
     should fire on every round including round 0."""
     problem = gaussian2d()
-    alg = _algorithm(metrics=(ReferenceMMD(n_estimate_samples=256, n_reference_samples=256),), n_rounds=4)
+    alg = _algorithm(metrics=(MMD(n_estimate_samples=256, n_reference_samples=256),), n_rounds=4)
     result = run(problem, alg, jax.random.key(0))
     assert len(result.per_round_metrics) == 4
     for row in result.per_round_metrics:
@@ -265,7 +265,7 @@ def test_every_k_fires_only_on_matching_rounds():
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
-                metric=ReferenceMMD(n_estimate_samples=256, n_reference_samples=256),
+                metric=MMD(n_estimate_samples=256, n_reference_samples=256),
                 every=3,
             ),
         ),
@@ -283,7 +283,7 @@ def test_final_false_excludes_from_final_metrics():
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
-                metric=ReferenceMMD(n_estimate_samples=256, n_reference_samples=256),
+                metric=MMD(n_estimate_samples=256, n_reference_samples=256),
                 every=1,
                 final=False,
             ),
@@ -305,7 +305,7 @@ def test_final_only_metric_via_large_every():
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
-                metric=ReferenceMMD(n_estimate_samples=256, n_reference_samples=256),
+                metric=MMD(n_estimate_samples=256, n_reference_samples=256),
                 every=1000,
                 final=True,
             ),
@@ -342,11 +342,11 @@ def test_terminal_target_differs_from_current_under_tempering():
         schedule=FixedSchedule(states=(0.1, 0.5, 1.0)),
         metrics=(
             ScheduledMetric(
-                metric=ReferenceMMD(n_estimate_samples=256, n_reference_samples=256),
+                metric=MMD(n_estimate_samples=256, n_reference_samples=256),
                 target=MetricTarget.CURRENT,
             ),
             ScheduledMetric(
-                metric=ReferenceMMD(n_estimate_samples=256, n_reference_samples=256),
+                metric=MMD(n_estimate_samples=256, n_reference_samples=256),
                 target=MetricTarget.TERMINAL,
                 name_suffix="terminal",
             ),
@@ -405,7 +405,7 @@ def test_final_estimate_populated_when_all_metrics_final_false():
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
-                metric=ReferenceMMD(n_estimate_samples=256, n_reference_samples=256),
+                metric=MMD(n_estimate_samples=256, n_reference_samples=256),
                 final=False,
             ),
         ),

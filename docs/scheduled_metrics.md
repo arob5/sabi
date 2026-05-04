@@ -23,12 +23,12 @@ default config — preserves the pre-#6 behavior) and explicit
 
 ```python
 from sabi.algorithms import Algorithm
-from sabi.metrics import ReferenceMMD
+from sabi.metrics import MMD
 
 alg = Algorithm(
     emulator_factory=...,
     acquisition=...,
-    metrics=(ReferenceMMD(),),  # auto-wrapped: every=1, target=CURRENT, final=True
+    metrics=(MMD(),),  # auto-wrapped: every=1, target=CURRENT, final=True
 )
 ```
 
@@ -41,7 +41,7 @@ alg = Algorithm(
     ...,
     metrics=(
         ScheduledMetric(
-            metric=ReferenceMMD(),
+            metric=MMD(),
             every=1,
             target=MetricTarget.CURRENT,
             final=True,
@@ -62,7 +62,7 @@ alg = Algorithm(
     n_rounds=21,  # rounds 0..20
     metrics=(
         ScheduledMetric(
-            metric=ReferenceMMD(n_estimate_samples=8192, n_reference_samples=8192),
+            metric=MMD(n_estimate_samples=8192, n_reference_samples=8192),
             every=10,        # fires at rounds 0, 10, 20
             final=True,      # also fires at end-of-loop final eval
         ),
@@ -93,7 +93,7 @@ alg = Algorithm(
     schedule=FixedSchedule(states=(0.1, 0.3, 0.6, 1.0)),
     metrics=(
         ScheduledMetric(
-            metric=ReferenceMMD(),
+            metric=MMD(),
             target=MetricTarget.TERMINAL,
         ),
     ),
@@ -115,12 +115,12 @@ alg = Algorithm(
     ...,
     metrics=(
         ScheduledMetric(
-            metric=ReferenceMMD(),
+            metric=MMD(),
             target=MetricTarget.CURRENT,
             # bare keys: "mmd", "mmd2"
         ),
         ScheduledMetric(
-            metric=ReferenceMMD(),
+            metric=MMD(),
             target=MetricTarget.TERMINAL,
             name_suffix="terminal",
             # suffixed keys: "mmd_terminal", "mmd2_terminal"
@@ -187,18 +187,18 @@ emulator-training targets.
 
 ## YAML / Hydra
 
-Bare metric (back-compat):
+Bare metric:
 
 ```yaml
 metrics:
-  - name: reference_mmd
+  - name: mmd
 ```
 
 Scheduled metric with all fields:
 
 ```yaml
 metrics:
-  - name: reference_mmd
+  - name: mmd
     every: 5
     target: terminal     # or "current" (default)
     final: true

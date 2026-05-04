@@ -6,7 +6,7 @@ from sabi.algorithms import (
     weighted_empirical_factory,
 )
 from sabi.metrics import MetricTarget, ScheduledMetric
-from sabi.metrics.posterior_mmd import ReferenceMMD
+from sabi.metrics.mmd import MMD
 from sabi.problems.base import Problem
 from sabi.runner.build import build_algorithm, build_problem
 
@@ -25,7 +25,7 @@ def _cfg(with_metric=True):
         "seed": 0,
     }
     if with_metric:
-        d["metrics"] = [{"name": "reference_mmd"}]
+        d["metrics"] = [{"name": "mmd"}]
     return OmegaConf.create(d)
 
 
@@ -47,7 +47,7 @@ def test_build_algorithm_wires_components():
 
     assert isinstance(alg.emulator_factory(), TinyGPEmulator)
     assert len(alg.metrics) == 1
-    assert isinstance(alg.metrics[0], ReferenceMMD)
+    assert isinstance(alg.metrics[0], MMD)
 
 
 def test_build_algorithm_without_metrics_yields_empty_tuple():
@@ -74,7 +74,7 @@ def test_build_algorithm_parses_scheduled_metric_fields():
     # Replace bare metric with one carrying the new scheduling fields.
     cfg.metrics = [
         {
-            "name": "reference_mmd",
+            "name": "mmd",
             "every": 5,
             "target": "terminal",
             "final": False,
@@ -85,7 +85,7 @@ def test_build_algorithm_parses_scheduled_metric_fields():
     assert len(alg.metrics) == 1
     sm = alg.metrics[0]
     assert isinstance(sm, ScheduledMetric)
-    assert isinstance(sm.metric, ReferenceMMD)
+    assert isinstance(sm.metric, MMD)
     assert sm.every == 5
     assert sm.target == MetricTarget.TERMINAL
     assert sm.final is False
@@ -97,5 +97,5 @@ def test_build_algorithm_bare_metric_returns_metric_not_scheduled():
     loop auto-wraps with defaults at run time)."""
     cfg = _cfg()
     alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
-    # The default _cfg uses just `- name: reference_mmd` — bare.
-    assert isinstance(alg.metrics[0], ReferenceMMD)
+    # The default _cfg uses just `- name: mmd` — bare.
+    assert isinstance(alg.metrics[0], MMD)

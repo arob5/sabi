@@ -13,7 +13,7 @@ Two kinds of metrics fit naturally under this single protocol:
 
 - **Reference-comparison metrics** (the dominant family): compute a
   distance / divergence between `ctx.estimate` and
-  `ctx.problem.reference_distribution`. `ReferenceMMD` is the example.
+  `ctx.problem.reference_distribution`. `MMD` is the example.
 - **Surrogate-quality metrics**: read from `ctx.surrogate_distribution`
   (carrying the round's emulator + form) and possibly the design data
   to compute calibration / log-score quantities. These don't depend

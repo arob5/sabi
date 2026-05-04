@@ -14,7 +14,7 @@ from sabi.metrics import (
     MetricContext,
     MetricTarget,
     MissingProtocolError,
-    ReferenceMMD,
+    MMD,
 )
 from sabi.problems.gaussian import gaussian2d
 
@@ -25,10 +25,10 @@ def _problem_no_ref():
 
 
 def _ctx_for(estimate, problem) -> MetricContext:
-    """Build a minimal MetricContext sufficient for ReferenceMMD-style tests.
+    """Build a minimal MetricContext sufficient for MMD-style tests.
 
     `surrogate_distribution` and design data aren't read by
-    `ReferenceMMD`; pass placeholders.
+    `MMD`; pass placeholders.
     """
     n = 1
     X = jnp.zeros((n,) + problem.input_shape)
@@ -46,17 +46,17 @@ def _ctx_for(estimate, problem) -> MetricContext:
     )
 
 
-def test_reference_mmd_returns_empty_when_no_reference():
+def test_mmd_returns_empty_when_no_reference():
     posterior = NumericEmpiricalDistribution(
         samples=jax.random.normal(jax.random.key(0), shape=(64, 2)),
         name="posterior",
     )
     problem = _problem_no_ref()
-    out = ReferenceMMD()(_ctx_for(posterior, problem), key=jax.random.key(0))
+    out = MMD()(_ctx_for(posterior, problem), key=jax.random.key(0))
     assert out == {}
 
 
-def test_reference_mmd_low_for_samples_from_reference():
+def test_mmd_low_for_samples_from_reference():
     """Posterior samples drawn from the *same* reference should yield small MMD."""
     problem = gaussian2d()
     samples = jnp.asarray(
@@ -67,13 +67,13 @@ def test_reference_mmd_low_for_samples_from_reference():
         )
     )
     posterior = NumericEmpiricalDistribution(samples=samples, name="posterior")
-    out = ReferenceMMD()(_ctx_for(posterior, problem), key=jax.random.key(0))
+    out = MMD()(_ctx_for(posterior, problem), key=jax.random.key(0))
     assert set(out.keys()) == {"mmd", "mmd2"}
     assert out["mmd"] >= 0.0
     assert out["mmd2"] < 0.05
 
 
-def test_reference_mmd_detects_shifted_samples():
+def test_mmd_detects_shifted_samples():
     problem = gaussian2d()
     samples = jnp.asarray(
         sample(
@@ -81,20 +81,20 @@ def test_reference_mmd_detects_shifted_samples():
         )
     ) + 3.0
     posterior = NumericEmpiricalDistribution(samples=samples, name="posterior")
-    out = ReferenceMMD()(_ctx_for(posterior, problem), key=jax.random.key(0))
+    out = MMD()(_ctx_for(posterior, problem), key=jax.random.key(0))
     assert out["mmd2"] > 0.1
     assert out["mmd"] > 0.0
 
 
-def test_reference_mmd_declares_supports_sampling():
-    """Static check: ReferenceMMD's `requires` includes SupportsSampling."""
-    assert SupportsSampling in ReferenceMMD.requires
+def test_mmd_declares_supports_sampling():
+    """Static check: MMD's `requires` includes SupportsSampling."""
+    assert SupportsSampling in MMD.requires
 
 
-def test_reference_mmd_declares_keys():
-    """Static check: ReferenceMMD declares the keys it produces so the
+def test_mmd_declares_keys():
+    """Static check: MMD declares the keys it produces so the
     loop can validate collisions upfront."""
-    assert ReferenceMMD.keys == ("mmd", "mmd2")
+    assert MMD.keys == ("mmd", "mmd2")
 
 
 @dataclass(frozen=True)

@@ -25,7 +25,7 @@ from sabi.algorithms import (
     weighted_empirical_factory,
 )
 from sabi.metrics.base import Metric
-from sabi.metrics.posterior_mmd import ReferenceMMD
+from sabi.metrics.mmd import MMD
 from sabi.metrics.scheduling import MetricTarget, ScheduledMetric
 from sabi.problems.banana import banana
 from sabi.problems.base import Problem
@@ -159,9 +159,9 @@ def _build_acquisition(cfg: DictConfig) -> Acquisition:
 
 def _build_bare_metric(cfg: DictConfig) -> Metric:
     name = cfg.name
-    if name == "reference_mmd":
+    if name == "mmd":
         bw = cfg.get("bandwidth", None)
-        return ReferenceMMD(bandwidth=None if bw is None else float(bw))
+        return MMD(bandwidth=None if bw is None else float(bw))
     raise ValueError(f"Unknown metric.name={name!r}.")
 
 

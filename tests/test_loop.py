@@ -17,7 +17,7 @@ from sabi.algorithms import (
     run,
     weighted_empirical_factory,
 )
-from sabi.metrics.posterior_mmd import ReferenceMMD
+from sabi.metrics.mmd import MMD
 from sabi.problems.banana import banana
 from sabi.problems.gaussian import gaussian2d
 from sabi.emulators import TinyGPEmulator
@@ -26,7 +26,7 @@ from sabi.emulators import TinyGPEmulator
 def _algorithm(
     acquisition,
     n_rounds: int = 5,  # 1 initial-design round + 4 acquisition rounds
-    metrics=(ReferenceMMD(n_estimate_samples=512, n_reference_samples=512),),
+    metrics=(MMD(n_estimate_samples=512, n_reference_samples=512),),
     surrogate_distribution_factory=emulator_pushforward_factory,
 ):
     return Algorithm(
@@ -95,7 +95,7 @@ def test_loop_with_no_metrics_skips_estimator():
 def test_loop_with_weighted_empirical_baseline():
     """No-GP baseline path: WeightedEmpiricalSurrogateDistribution produces
     a NumericEmpiricalDistribution as the estimate, which satisfies
-    SupportsSampling, so ReferenceMMD runs end-to-end."""
+    SupportsSampling, so MMD runs end-to-end."""
     problem = gaussian2d()
     alg = _algorithm(
         PriorSampling(),
