@@ -215,31 +215,55 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         Y_train,
         emulator,
         emulator_state,
-        state_0,
         round_0_metrics,
     ) = _run_initial_round(
         problem, algorithm, scheduled, target, key_init, key_metric_0
     )
-    tempering_states: list[Any] = [state_0]
+    # `emulator_state` at this point is the round-0 tempering state —
+    # seed `tempering_states` from it rather than returning a redundant
+    # copy from `_run_initial_round`.
+    tempering_states: list[Any] = [emulator_state]
     per_round_metrics: list[dict[str, Any]] = [round_0_metrics]
 
     # Acquisition rounds: 1..n_rounds-1.
     for round_idx in range(1, algorithm.n_rounds):
+        # Resolve all PRNG keys at the top of the round — the
+        # `Main loops read like pseudocode` invariant
+        # (`docs/contributing.md`) prohibits interleaving key splits
+        # between algorithmic phases.
+        key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
         round_state = _resolve_round_state(algorithm, target, round_idx)
         emulator_for_acq, Y_train_for_acq = _resolve_acquisition_view(
-            emulator, emulator_state, round_state, X, Y_raw, Y_train, algorithm
+            emulator=emulator,
+            emulator_state=emulator_state,
+            round_state=round_state,
+            X=X,
+            Y_raw=Y_raw,
+            Y_train=Y_train,
+            algorithm=algorithm,
         )
-        key_acq, key_metric, key_loop = jax.random.split(key_loop, 3)
         x_new, y_new_raw = _run_acquisition(
-            problem, algorithm, emulator_for_acq,
-            X, Y_raw, Y_train_for_acq, round_state, key_acq,
+            problem=problem,
+            algorithm=algorithm,
+            emulator_for_acq=emulator_for_acq,
+            X=X,
+            Y_raw=Y_raw,
+            Y_train_for_acq=Y_train_for_acq,
+            round_state=round_state,
+            key=key_acq,
         )
         X, Y_raw, Y_train, y_new_at_current = _append_round_evaluations(
             X, Y_raw, x_new, y_new_raw, round_state
         )
         emulator, emulator_state = _update_round_end_emulator(
-            emulator, emulator_state, round_state, X, Y_train,
-            x_new, y_new_at_current, algorithm,
+            emulator=emulator,
+            emulator_state=emulator_state,
+            round_state=round_state,
+            X=X,
+            Y_train=Y_train,
+            x_new=x_new,
+            y_new_at_current=y_new_at_current,
+            algorithm=algorithm,
         )
         per_round_metrics.append(
             _build_round_metrics_row(
@@ -295,7 +319,7 @@ def _run_initial_round(
     target: TargetDistribution,
     key_init: Array,
     key_metric: Array,
-) -> tuple[Array, Array, Array, Emulator, Any, Any, dict[str, Any]]:
+) -> tuple[Array, Array, Array, Emulator, Any, dict[str, Any]]:
     """Round 0: initial design, target eval, emulator fit, round-0 metrics row.
 
     No acquisition runs at round 0 — the design is drawn directly via
@@ -311,7 +335,10 @@ def _run_initial_round(
 
     Returns
     -------
-    ``(X, Y_raw, Y_train, emulator, emulator_state, state_0, round_0_metrics)``.
+    ``(X, Y_raw, Y_train, emulator, emulator_state, round_0_metrics)``.
+    The round-0 tempering state is `emulator_state` (round-0 fit state
+    equals the schedule's state at round 0); `run()` uses it to seed
+    both the loop's `emulator_state` and `tempering_states[0]`.
     """
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
     Y_raw = problem.target_map(X)
@@ -347,7 +374,7 @@ def _run_initial_round(
     round_0_metrics["tempering_state"] = state_0
     round_0_metrics["target_tempering_state"] = None
     round_0_metrics["n_evals"] = int(X.shape[0])
-    return X, Y_raw, Y_train, emulator, emulator_state, state_0, round_0_metrics
+    return X, Y_raw, Y_train, emulator, emulator_state, round_0_metrics
 
 
 def _run_final_eval(
@@ -451,6 +478,7 @@ def _resolve_round_state(
 
 
 def _resolve_acquisition_view(
+    *,
     emulator: Emulator,
     emulator_state: Any,
     round_state: RoundState,
@@ -496,6 +524,7 @@ def _resolve_acquisition_view(
 
 
 def _run_acquisition(
+    *,
     problem: Problem,
     algorithm: Algorithm,
     emulator_for_acq: Emulator,
@@ -572,6 +601,7 @@ def _append_round_evaluations(
 
 
 def _update_round_end_emulator(
+    *,
     emulator: Emulator,
     emulator_state: Any,
     round_state: RoundState,
@@ -668,8 +698,8 @@ def _eval_round(
     scheduled_firing: Sequence[ScheduledMetric],
     algorithm: Algorithm,
     problem: Problem,
-    target,
-    current_intermediate,
+    target: TargetDistribution,
+    current_intermediate: IntermediateTarget,
     emulator: Emulator,
     X: Array,
     Y_raw: Array,
