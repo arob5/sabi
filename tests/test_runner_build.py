@@ -5,6 +5,7 @@ from sabi.algorithms import (
     emulator_pushforward_factory,
     weighted_empirical_factory,
 )
+from sabi.metrics import MetricTarget, ScheduledMetric
 from sabi.metrics.posterior_mmd import ReferenceMMD
 from sabi.problems.base import Problem
 from sabi.runner.build import build_algorithm, build_problem
@@ -66,3 +67,35 @@ def test_build_algorithm_can_select_weighted_empirical_factory():
     cfg.algorithm.surrogate_distribution = "weighted_empirical"
     alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
     assert alg.surrogate_distribution_factory is weighted_empirical_factory
+
+
+def test_build_algorithm_parses_scheduled_metric_fields():
+    cfg = _cfg()
+    # Replace bare metric with one carrying the new scheduling fields.
+    cfg.metrics = [
+        {
+            "name": "reference_mmd",
+            "every": 5,
+            "target": "terminal",
+            "final": False,
+            "name_suffix": "term",
+        }
+    ]
+    alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
+    assert len(alg.metrics) == 1
+    sm = alg.metrics[0]
+    assert isinstance(sm, ScheduledMetric)
+    assert isinstance(sm.metric, ReferenceMMD)
+    assert sm.every == 5
+    assert sm.target == MetricTarget.TERMINAL
+    assert sm.final is False
+    assert sm.name_suffix == "term"
+
+
+def test_build_algorithm_bare_metric_returns_metric_not_scheduled():
+    """A YAML entry without scheduling fields stays a bare Metric (the
+    loop auto-wraps with defaults at run time)."""
+    cfg = _cfg()
+    alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
+    # The default _cfg uses just `- name: reference_mmd` — bare.
+    assert isinstance(alg.metrics[0], ReferenceMMD)

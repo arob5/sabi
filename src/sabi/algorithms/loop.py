@@ -7,23 +7,36 @@ factories that build per-round `SurrogateDistribution` instances live in
 :mod:`sabi.algorithms.surrogate_distribution_factory`.
 
 Composition: initial design (drawn via `Algorithm.initial_sampler`) →
-emulator → acquisition → `SurrogateDistribution` → estimator function
-(`expected_target` by default) → metrics. Tempering hooks present
-(`tempering_state` per round, `current_form` built each round); the
-default `NoTempering` + `UntemperedSchedule` make the state `None`
+emulator → metrics at round 0 (firing per `ScheduledMetric.every`) →
+acquisition → `SurrogateDistribution` → estimator function
+(`expected_target` by default) → metrics at round t. Tempering hooks
+present (`tempering_state` per round, `current_form` built each round);
+the default `NoTempering` + `UntemperedSchedule` make the state `None`
 every round.
 
-Metrics consume a `Distribution[Array]` (the estimator's output) and
-declare their required ProbPipe `Supports*` protocols via the
-`requires` class attribute. The loop checks each metric's `requires`
-against the estimator distribution and raises `MissingProtocolError`
-on a mismatch.
+Per-metric scheduling: each metric in `Algorithm.metrics` is wrapped
+(if not already) in a `ScheduledMetric` carrying `every` (firing
+schedule), `target` (`CURRENT` vs `TERMINAL` intermediate), and
+`final` (also include in the post-loop `final_metrics`). Bare
+`Metric` instances auto-wrap at default config — preserves the
+"every metric every round + final eval" behavior.
+
+Metrics consume a `MetricContext` (estimate + surrogate distribution +
+problem + design data + round/state metadata) and declare their
+required ProbPipe `Supports*` protocols via the `requires` class
+attribute. The loop checks each metric's `requires` against the
+estimate distribution and raises `MissingProtocolError` on a
+mismatch. Output keys are validated upfront (via
+`validate_metric_keys`) before any emulator work happens; runtime
+collision check at the merge step catches metrics that opted out of
+upfront declaration (`keys = ()`).
 
 Shape / symbol conventions: see ``docs/notation.md``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import jax
@@ -45,14 +58,20 @@ from sabi.emulators.updates import (
     RescaleOutputs,
     RescaleThenAppend,
 )
-from sabi.metrics.base import MissingProtocolError, PosteriorMetric
+from sabi.metrics.base import Metric, MetricContext, MissingProtocolError
+from sabi.metrics.scheduling import (
+    MetricTarget,
+    ScheduledMetric,
+    normalize_metrics,
+    validate_metric_keys,
+)
 from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
 from sabi.problems.forms import LogDensityForm
 from sabi.tempering.output_transform import OutputTransform
 
 
-def _check_protocols(metric: PosteriorMetric, estimate: Distribution) -> None:
+def _check_protocols(metric: Metric, estimate: Distribution) -> None:
     """Raise `MissingProtocolError` if `estimate` doesn't satisfy `metric.requires`."""
     missing = [p.__name__ for p in metric.requires if not isinstance(estimate, p)]
     if missing:
@@ -62,29 +81,88 @@ def _check_protocols(metric: PosteriorMetric, estimate: Distribution) -> None:
         )
 
 
-def _evaluate_metrics(
-    estimate: Distribution,
+def _merge_no_overwrite(
+    dst: dict[str, Any],
+    src: dict[str, float],
+    source_repr: str,
+) -> None:
+    """Merge `src` into `dst`, raising on key collision.
+
+    Runtime backstop for collision detection: catches metrics that
+    didn't declare `keys` upfront (and so escaped
+    `validate_metric_keys`'s static check) when they actually
+    produce a key already in the row.
+    """
+    overlap = dst.keys() & src.keys()
+    if overlap:
+        raise ValueError(
+            f"Metric key collision: keys {sorted(overlap)} produced by "
+            f"{source_repr} are already present in this row. Set "
+            f"`ScheduledMetric.name_suffix` or rename keys to disambiguate."
+        )
+    dst.update(src)
+
+
+def _evaluate_scheduled_metrics(
+    *,
+    scheduled: Sequence[ScheduledMetric],
+    current_estimate_fn: Callable[[], tuple[SurrogateDistribution, Distribution]],
+    terminal_estimate_fn: Callable[[], tuple[SurrogateDistribution, Distribution]],
     problem: Problem,
-    metrics: tuple[PosteriorMetric, ...],
+    X: Array,
+    Y_raw: Array,
+    Y_train: Array,
+    tempering_state: Any,
+    round_idx: int,
     key: Array,
 ) -> dict[str, float]:
-    """Run every metric on the estimate distribution.
+    """Run each scheduled metric at its target.
 
-    Each metric:
-    1. Has its `requires` checked against the estimate; mismatches raise.
-    2. Is called with `(posterior, problem, key=metric_key)`; the returned dict
-       is merged into the round's metric row.
+    Lazy: builds the current and/or terminal `(SurrogateDistribution,
+    estimate)` pair only if at least one scheduled metric needs it.
+    Caches each so it's built at most once per call.
 
-    A separate PRNG key is split per metric so each metric gets independent
-    randomness if it samples internally.
+    Raises on key collisions across metrics (runtime backstop;
+    upfront `validate_metric_keys` should have caught most).
     """
-    if not metrics:
+    if not scheduled:
         return {}
-    keys = jax.random.split(key, len(metrics))
+
+    keys = jax.random.split(key, len(scheduled))
     merged: dict[str, float] = {}
-    for metric, metric_key in zip(metrics, keys, strict=True):
-        _check_protocols(metric, estimate)
-        merged.update(metric(estimate, problem, key=metric_key))
+
+    # Memoize the (SP, estimate) per target.
+    cache: dict[MetricTarget, tuple[SurrogateDistribution, Distribution]] = {}
+
+    def _get(target: MetricTarget) -> tuple[SurrogateDistribution, Distribution]:
+        cached = cache.get(target)
+        if cached is not None:
+            return cached
+        if target == MetricTarget.CURRENT:
+            cache[target] = current_estimate_fn()
+        elif target == MetricTarget.TERMINAL:
+            cache[target] = terminal_estimate_fn()
+        else:
+            raise ValueError(f"Unknown MetricTarget: {target!r}")
+        return cache[target]
+
+    for s, mkey in zip(scheduled, keys, strict=True):
+        sp, estimate = _get(s.target)
+        _check_protocols(s.metric, estimate)
+        ctx = MetricContext(
+            estimate=estimate,
+            surrogate_distribution=sp,
+            problem=problem,
+            X=X,
+            Y_raw=Y_raw,
+            Y_train=Y_train,
+            tempering_state=tempering_state,
+            round_idx=round_idx,
+            metric_target=s.target,
+        )
+        out = s.apply_suffix(s.metric(ctx, key=mkey))
+        _merge_no_overwrite(merged, out, repr(s))
+
     return merged
 
 
@@ -185,12 +263,27 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     refit the emulator on the look-ahead-state's training data before
     the acquisition runs. Issue #4 will add a cheap-update dispatch
     that avoids redundant full refits.
+
+    Per-round metric rows: the loop emits one `per_round_metrics` row
+    per round (`0..n_rounds-1`), populated with bookkeeping fields
+    (`round`, `tempering_state`, `target_tempering_state`,
+    `n_evals`) plus values from any `ScheduledMetric` firing that
+    round. Metrics with `final=True` also evaluate at the post-loop
+    final step against the un-tempered base target; results land in
+    `RunResult.final_metrics`.
     """
     target = problem.target_distribution
     # `prior` is required; `target.support = prior.support` is always
     # defined (possibly unbounded — algorithms that need bounded
     # support raise where they need it, not here).
     key_init, key_loop, key_eval = jax.random.split(key, 3)
+
+    # Normalize and validate metrics up front — before any emulator
+    # work happens. `validate_metric_keys` enumerates every round and
+    # every `final=True` slot, raising on collisions among declared
+    # output keys (or against bookkeeping fields).
+    scheduled = normalize_metrics(algorithm.metrics)
+    validate_metric_keys(scheduled, algorithm.n_rounds)
 
     # Round 0: initial-design round. Draw n_initial points, evaluate
     # target, fit emulator at the schedule's round-0 state.
@@ -210,6 +303,32 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     # state when building cheap-update plans below; updated after each
     # round-end fit to the round's current_state.
     emulator_state: Any = state_0
+
+    # ---------- Round 0 metric eval ----------
+    # Always emit a per_round_metrics row for round 0 (one row per
+    # round including initial design). Lazy SP/estimate construction:
+    # nothing built when no metric fires this round.
+    key_metric_0, key_loop = jax.random.split(key_loop, 2)
+    firing_round_0 = tuple(s for s in scheduled if s.fires_at_round(0))
+    round_0_metrics = _eval_round(
+        scheduled_firing=firing_round_0,
+        algorithm=algorithm,
+        problem=problem,
+        target=target,
+        current_intermediate=target_0,
+        emulator=emulator,
+        X=X,
+        Y_raw=Y_raw,
+        Y_train=Y_train,
+        tempering_state=state_0,
+        round_idx=0,
+        key=key_metric_0,
+    )
+    round_0_metrics["round"] = 0
+    round_0_metrics["tempering_state"] = state_0
+    round_0_metrics["target_tempering_state"] = None
+    round_0_metrics["n_evals"] = int(X.shape[0])
+    per_round_metrics.append(round_0_metrics)
 
     # Loop body: rounds 1 through n_rounds-1 inclusive — the
     # acquisition rounds. Each round adds q evaluations chosen by the
@@ -320,16 +439,22 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         )
         emulator_state = current_state
 
-        sp = _build_surrogate_distribution(
-            algorithm.surrogate_distribution_factory,
+        # ---------- Per-round metric eval ----------
+        firing = tuple(s for s in scheduled if s.fires_at_round(round_idx))
+        round_metrics = _eval_round(
+            scheduled_firing=firing,
+            algorithm=algorithm,
+            problem=problem,
+            target=target,
+            current_intermediate=current_intermediate,
             emulator=emulator,
             X=X,
-            Y=Y_train,
-            log_density_form=current_intermediate.log_density_form,
-            problem=problem,
+            Y_raw=Y_raw,
+            Y_train=Y_train,
+            tempering_state=current_state,
+            round_idx=round_idx,
+            key=key_metric,
         )
-        estimate = algorithm.estimator(sp)
-        round_metrics = _evaluate_metrics(estimate, problem, algorithm.metrics, key_metric)
         round_metrics["round"] = round_idx
         round_metrics["tempering_state"] = current_state
         round_metrics["target_tempering_state"] = target_state
@@ -337,9 +462,10 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         per_round_metrics.append(round_metrics)
         tempering_states.append(current_state)
 
-    # Final evaluation at the base target (un-tempered form) so
-    # downstream tooling always has a reference row at the terminal
-    # distribution, regardless of where the schedule ended.
+    # ---------- Post-loop final eval ----------
+    # Final SP/estimate at the un-tempered base form. Always built (so
+    # `RunResult.final_estimate` is always populated for downstream
+    # tooling), regardless of whether any metric has `final=True`.
     final_form = target.log_density_form
     final_sp = _build_surrogate_distribution(
         algorithm.surrogate_distribution_factory,
@@ -350,9 +476,30 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         problem=problem,
     )
     final_estimate = algorithm.estimator(final_sp)
-    final_metrics = _evaluate_metrics(
-        final_estimate, problem, algorithm.metrics, key_eval
-    )
+
+    final_scheduled = tuple(s for s in scheduled if s.final)
+    final_metrics: dict[str, float] = {}
+    if final_scheduled:
+        keys_split = jax.random.split(key_eval, len(final_scheduled))
+        # `final_metrics` always evaluates at the un-tempered base —
+        # `metric_target=TERMINAL` in the context regardless of the
+        # ScheduledMetric's per-round `target` field.
+        last_state = tempering_states[-1] if tempering_states else None
+        for s, mkey in zip(final_scheduled, keys_split, strict=True):
+            _check_protocols(s.metric, final_estimate)
+            ctx = MetricContext(
+                estimate=final_estimate,
+                surrogate_distribution=final_sp,
+                problem=problem,
+                X=X,
+                Y_raw=Y_raw,
+                Y_train=Y_train,
+                tempering_state=last_state,
+                round_idx=algorithm.n_rounds,
+                metric_target=MetricTarget.TERMINAL,
+            )
+            out = s.apply_suffix(s.metric(ctx, key=mkey))
+            _merge_no_overwrite(final_metrics, out, repr(s))
 
     return RunResult(
         X=X,
@@ -363,4 +510,70 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         per_round_metrics=per_round_metrics,
         final_estimate=final_estimate,
         final_metrics=final_metrics,
+    )
+
+
+def _eval_round(
+    *,
+    scheduled_firing: Sequence[ScheduledMetric],
+    algorithm: Algorithm,
+    problem: Problem,
+    target,
+    current_intermediate,
+    emulator: Emulator,
+    X: Array,
+    Y_raw: Array,
+    Y_train: Array,
+    tempering_state: Any,
+    round_idx: int,
+    key: Array,
+) -> dict[str, float]:
+    """Evaluate a round's firing scheduled metrics against current/terminal estimates.
+
+    Builds the SP+estimate at each target lazily: nothing constructed
+    when ``scheduled_firing`` is empty; current/terminal pairs built
+    independently and only when at least one firing metric needs that
+    target.
+    """
+    if not scheduled_firing:
+        return {}
+
+    # Lazy current-state SP+estimate.
+    def _current() -> tuple[SurrogateDistribution, Distribution]:
+        sp = _build_surrogate_distribution(
+            algorithm.surrogate_distribution_factory,
+            emulator=emulator,
+            X=X,
+            Y=Y_train,
+            log_density_form=current_intermediate.log_density_form,
+            problem=problem,
+        )
+        return sp, algorithm.estimator(sp)
+
+    # Lazy terminal-state SP+estimate. Uses `target.log_density_form`
+    # (un-tempered base) with the round's emulator + Y_train at the
+    # current state — matches the previous "final eval" semantics
+    # (preserved for `MetricTarget.TERMINAL` mid-loop).
+    def _terminal() -> tuple[SurrogateDistribution, Distribution]:
+        sp = _build_surrogate_distribution(
+            algorithm.surrogate_distribution_factory,
+            emulator=emulator,
+            X=X,
+            Y=Y_train,
+            log_density_form=target.log_density_form,
+            problem=problem,
+        )
+        return sp, algorithm.estimator(sp)
+
+    return _evaluate_scheduled_metrics(
+        scheduled=scheduled_firing,
+        current_estimate_fn=_current,
+        terminal_estimate_fn=_terminal,
+        problem=problem,
+        X=X,
+        Y_raw=Y_raw,
+        Y_train=Y_train,
+        tempering_state=tempering_state,
+        round_idx=round_idx,
+        key=key,
     )

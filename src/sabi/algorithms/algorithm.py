@@ -24,7 +24,8 @@ from sabi.algorithms.surrogate_distribution_factory import (
     emulator_pushforward_factory,
 )
 from sabi.emulators.base import Emulator
-from sabi.metrics.base import PosteriorMetric
+from sabi.metrics.base import Metric
+from sabi.metrics.scheduling import ScheduledMetric
 from sabi.surrogate.estimators import expected_target
 from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.sampling import BatchSampler, PriorSampler
@@ -47,7 +48,7 @@ class Algorithm:
     acquisition_target: AcquisitionTarget = AcquisitionTarget.CURRENT
     surrogate_distribution_factory: SurrogateDistributionFactory = emulator_pushforward_factory
     estimator: Callable[[SurrogateDistribution], Distribution] = expected_target
-    metrics: tuple[PosteriorMetric, ...] = ()
+    metrics: tuple[ScheduledMetric | Metric, ...] = ()
 
 
 @dataclass

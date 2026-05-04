@@ -1,5 +1,5 @@
-"""`ReferenceMMD` — `PosteriorMetric` comparing samples from the posterior
-estimate to samples from the problem's `reference_distribution`."""
+"""`ReferenceMMD` — `Metric` comparing samples from the posterior estimate
+to samples from the problem's `reference_distribution`."""
 
 from __future__ import annotations
 
@@ -10,16 +10,14 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from probpipe import sample
-from probpipe.core._distribution_base import Distribution
 from probpipe.core.protocols import SupportsSampling
 
-from sabi.metrics.base import PosteriorMetric
+from sabi.metrics.base import Metric, MetricContext
 from sabi.metrics.mmd import mmd2_unbiased
-from sabi.problems.base import Problem
 
 
 @dataclass(frozen=True)
-class ReferenceMMD(PosteriorMetric):
+class ReferenceMMD(Metric):
     """MMD² (and MMD) against `problem.reference_distribution` under an RBF kernel.
 
     Bandwidth defaults to the median heuristic (inside `mmd2_unbiased`).
@@ -31,21 +29,21 @@ class ReferenceMMD(PosteriorMetric):
     n_reference_samples: int = 2048
 
     requires: ClassVar[tuple[type, ...]] = (SupportsSampling,)
+    keys: ClassVar[tuple[str, ...]] = ("mmd", "mmd2")
 
     def __call__(
         self,
-        posterior: Distribution,
-        problem: Problem,
+        ctx: MetricContext,
         *,
         key: Array,
     ) -> dict[str, float]:
-        ref = problem.reference_distribution
+        ref = ctx.problem.reference_distribution
         if ref is None or not isinstance(ref, SupportsSampling):
             return {}
 
         key_est, key_ref = jax.random.split(key)
         est_samples = jnp.asarray(
-            sample(posterior, key=key_est, sample_shape=(self.n_estimate_samples,))
+            sample(ctx.estimate, key=key_est, sample_shape=(self.n_estimate_samples,))
         )
         ref_samples = jnp.asarray(
             sample(ref, key=key_ref, sample_shape=(self.n_reference_samples,))

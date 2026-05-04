@@ -47,8 +47,8 @@ def test_loop_runs_on_gaussian2d_with_prior_sampling_acq():
     result = run(problem, alg, jax.random.key(0))
     # 16 initial + 4 acquisition rounds * q=1 = 20.
     assert result.X.shape == (16 + 4,) + problem.input_shape
-    # 4 acquisition rounds → 4 per-round metric rows.
-    assert len(result.per_round_metrics) == 4
+    # One row per round, including round 0 (initial design) → 5 rows.
+    assert len(result.per_round_metrics) == 5
     assert all(m["tempering_state"] is None for m in result.per_round_metrics)
     assert "mmd2" in result.final_metrics
     assert result.final_metrics["mmd2"] >= -1e-6
@@ -78,9 +78,9 @@ def test_loop_grows_dataset_and_records_metrics():
     assert result.X.shape == (19, 2)
     assert result.Y_raw.shape == (19,)
     assert result.Y_train.shape == (19,)
-    # Acquisition rounds are 1, 2, 3 (round 0 has no per-round metric row).
-    assert [m["round"] for m in result.per_round_metrics] == [1, 2, 3]
-    assert [m["n_evals"] for m in result.per_round_metrics] == [17, 18, 19]
+    # One row per round including round 0 (initial design): 0, 1, 2, 3.
+    assert [m["round"] for m in result.per_round_metrics] == [0, 1, 2, 3]
+    assert [m["n_evals"] for m in result.per_round_metrics] == [16, 17, 18, 19]
 
 
 def test_loop_with_no_metrics_skips_estimator():
