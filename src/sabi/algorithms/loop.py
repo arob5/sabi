@@ -87,7 +87,7 @@ from sabi.tempering.output_transform import OutputTransform
 
 @dataclass(frozen=True)
 class RoundState:
-    """Per-round bundle of states + intermediates + invariance flags.
+    """Per-round bundle of intermediates + invariance flags.
 
     Models an **acquisition round** (rounds 1..n_rounds-1). Round 0
     (initial design) has no acquisition target and is handled by
@@ -95,39 +95,39 @@ class RoundState:
 
     Cached once at the top of each acquisition round (via
     `_resolve_round_state`) and threaded through the helpers that make
-    up the round body. Promoting these fields to a struct trims the
-    helper signatures from ~6 positional state args to a single
-    `round_state` plus the data tensors, and gives a single place to
-    look for "what state is this round operating at".
+    up the round body.
+
+    The tempering states themselves are not stored — `IntermediateTarget`
+    already carries `.state` as a field, so the canonical "current state"
+    is `current_intermediate.state` and likewise for target. Helpers
+    that touch a state more than once typically alias the relevant
+    intermediate to a local variable; helpers that touch it once just
+    use the attribute chain inline.
 
     Attributes:
         round_idx: 1-based round index (round 0 is handled separately).
-        current_state: the round's own tempering state, from
-            ``algorithm.schedule.at(round_idx)``. The round-end emulator
-            and the round's `current_intermediate` live at this state.
-        target_state: state the acquisition optimizes against, from
-            `resolve_state(algorithm.acquisition_target, ...)`. May
-            equal `current_state` (the `CURRENT` policy or a no-op
-            tempering scheme), or differ (`NEXT`, `TERMINAL`, or a
-            policy that looks ahead).
-        current_intermediate: `IntermediateTarget` at `current_state`.
+        current_intermediate: `IntermediateTarget` at the round's own
+            tempering state (from ``algorithm.schedule.at(round_idx)``).
             Owns `output_transform` (used for the round-end refit /
             cheap-update plan) and `log_density_form` (used to build
-            the round-end SP for metrics).
-        target_intermediate: `IntermediateTarget` at `target_state`.
+            the round-end SP for metrics). The state itself is
+            ``current_intermediate.state``.
+        target_intermediate: `IntermediateTarget` at the state the
+            acquisition optimizes against (from
+            ``resolve_state(algorithm.acquisition_target, ...)``).
             Owns the `output_transform` and `log_density_form` used to
             materialize the acquisition's view (`Y_train_for_acq` and
             the pre-round SP). Equals `current_intermediate` when
             ``invariance.both`` is True — saves a redundant rebuild.
+            The state itself is ``target_intermediate.state``.
         invariance: per-axis flags from
-            `algorithm.tempering_scheme.invariance(current_state,
-            target_state)`. Drives the look-ahead-vs-reuse decision in
-            `_resolve_acquisition_view`.
+            ``algorithm.tempering_scheme.invariance(current_state,
+            target_state)``. Drives the look-ahead-vs-reuse decision in
+            `_resolve_acquisition_view`. Stored (rather than recomputed
+            on demand) because the scheme isn't on `RoundState`.
     """
 
     round_idx: int
-    current_state: Any
-    target_state: Any
     current_intermediate: IntermediateTarget
     target_intermediate: IntermediateTarget
     invariance: InvarianceFlags
@@ -255,7 +255,7 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
                 key=key_metric,
             )
         )
-        tempering_states.append(round_state.current_state)
+        tempering_states.append(round_state.current_intermediate.state)
 
     # Post-loop: final eval at the un-tempered base form.
     final_estimate, final_metrics = _run_final_eval(
@@ -444,8 +444,6 @@ def _resolve_round_state(
         )
     return RoundState(
         round_idx=round_idx,
-        current_state=current_state,
-        target_state=target_state,
         current_intermediate=current_intermediate,
         target_intermediate=target_intermediate,
         invariance=invariance,
@@ -476,13 +474,14 @@ def _resolve_acquisition_view(
     """
     if round_state.invariance.target_map:
         return emulator, Y_train
-    Y_train_for_acq = round_state.target_intermediate.output_transform(
-        round_state.target_state, X, Y_raw
+    target_intermediate = round_state.target_intermediate
+    Y_train_for_acq = target_intermediate.output_transform(
+        target_intermediate.state, X, Y_raw
     )
     lookahead_plan = _plan_round_update(
-        round_state.target_intermediate.output_transform,
+        target_intermediate.output_transform,
         state_prev=emulator_state,
-        state_new=round_state.target_state,
+        state_new=target_intermediate.state,
         X_new=None,
         Y_new_at_new_state=None,
     )
@@ -532,8 +531,8 @@ def _run_acquisition(
         X=X,
         Y_raw=Y_raw,
         Y_train=Y_train_for_acq,
-        tempering_state=round_state.current_state,
-        target_tempering_state=round_state.target_state,
+        tempering_state=round_state.current_intermediate.state,
+        target_tempering_state=round_state.target_intermediate.state,
     )
     x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key)
     y_new_raw = problem.target_map(x_new)
@@ -562,11 +561,12 @@ def _append_round_evaluations(
     """
     X = jnp.concatenate([X, x_new], axis=0)
     Y_raw = jnp.concatenate([Y_raw, y_new_raw], axis=0)
-    Y_train = round_state.current_intermediate.output_transform(
-        round_state.current_state, X, Y_raw
+    current_intermediate = round_state.current_intermediate
+    Y_train = current_intermediate.output_transform(
+        current_intermediate.state, X, Y_raw
     )
-    y_new_at_current = round_state.current_intermediate.output_transform(
-        round_state.current_state, x_new, y_new_raw
+    y_new_at_current = current_intermediate.output_transform(
+        current_intermediate.state, x_new, y_new_raw
     )
     return X, Y_raw, Y_train, y_new_at_current
 
@@ -590,12 +590,13 @@ def _update_round_end_emulator(
     refit on the new ``(X, Y_train)``.
 
     Returns ``(emulator, emulator_state)``; ``emulator_state`` is now
-    ``round_state.current_state``.
+    ``round_state.current_intermediate.state``.
     """
+    current_intermediate = round_state.current_intermediate
     round_plan = _plan_round_update(
-        round_state.current_intermediate.output_transform,
+        current_intermediate.output_transform,
         state_prev=emulator_state,
-        state_new=round_state.current_state,
+        state_new=current_intermediate.state,
         X_new=x_new,
         Y_new_at_new_state=y_new_at_current,
     )
@@ -606,7 +607,7 @@ def _update_round_end_emulator(
         X_full=X,
         Y_full=Y_train,
     )
-    return emulator, round_state.current_state
+    return emulator, current_intermediate.state
 
 
 def _build_round_metrics_row(
@@ -633,26 +634,26 @@ def _build_round_metrics_row(
     Acquisition rounds only — round 0 builds its row inline in
     `_run_initial_round` (no `target_state`).
     """
-    firing = tuple(
-        s for s in scheduled if s.fires_at_round(round_state.round_idx)
-    )
+    current_intermediate = round_state.current_intermediate
+    round_idx = round_state.round_idx
+    firing = tuple(s for s in scheduled if s.fires_at_round(round_idx))
     row = _eval_round(
         scheduled_firing=firing,
         algorithm=algorithm,
         problem=problem,
         target=target,
-        current_intermediate=round_state.current_intermediate,
+        current_intermediate=current_intermediate,
         emulator=emulator,
         X=X,
         Y_raw=Y_raw,
         Y_train=Y_train,
-        tempering_state=round_state.current_state,
-        round_idx=round_state.round_idx,
+        tempering_state=current_intermediate.state,
+        round_idx=round_idx,
         key=key,
     )
-    row["round"] = round_state.round_idx
-    row["tempering_state"] = round_state.current_state
-    row["target_tempering_state"] = round_state.target_state
+    row["round"] = round_idx
+    row["tempering_state"] = current_intermediate.state
+    row["target_tempering_state"] = round_state.target_intermediate.state
     row["n_evals"] = int(X.shape[0])
     return row
 
