@@ -59,6 +59,7 @@ autodoc2_docstring_parser_regexes = [
 nb_execution_mode = "force"
 nb_execution_timeout = 300
 nb_execution_raise_on_error = True
+nb_execution_show_tb = True
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
