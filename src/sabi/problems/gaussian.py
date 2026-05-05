@@ -100,24 +100,3 @@ def gaussian(
         reference_distribution=posterior,
         name="gaussian",
     )
-
-
-def gaussian2d(
-    mean: tuple[float, float] = (0.0, 0.0),
-    cov: tuple[tuple[float, float], tuple[float, float]] = ((1.0, 0.5), (0.5, 1.0)),
-    bounds_radius: float = 5.0,
-) -> Problem:
-    """Build a 2-D Gaussian benchmark — historical entry point.
-
-    Thin wrapper around `gaussian(d=2, ...)` preserving the original
-    correlated-covariance default. Kept for back-compat with existing
-    configs and tests; new code should call `gaussian(d=…)` directly or
-    use `sabi.problems.benchmarks.gaussian_2d()` for the validated
-    `BenchmarkProblem` form.
-    """
-    p = gaussian(d=2, mean=mean, cov=cov, bounds_radius=bounds_radius)
-    return Problem(
-        target_distribution=p.target_distribution,
-        reference_distribution=p.reference_distribution,
-        name="gaussian2d",
-    )

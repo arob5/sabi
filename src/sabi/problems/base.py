@@ -14,7 +14,7 @@ because:
 - A `TargetDistribution` is a self-contained mathematical object that
   can be consumed by ProbPipe ops directly (`condition_on`,
   `unnormalized_log_prob`, etc.). No `Problem` wrapping required.
-- `TemperingScheme` (Step 3) operates on `TargetDistribution` to produce
+- `TemperingScheme` operates on `TargetDistribution` to produce
   intermediate targets, with no awareness of `Problem`-level metadata.
 - A future `BenchmarkProblem` (issue #2) can subclass / extend `Problem`
   with validated reference artifacts without touching the math layer.
@@ -52,7 +52,7 @@ class Problem:
             reference-based metrics (analytic when one fits naturally,
             otherwise an `EmpiricalDistribution` over precomputed
             samples).
-        name: human-readable benchmark name (e.g. ``"gaussian2d"``,
+        name: human-readable benchmark name (e.g. ``"gaussian"``,
             ``"banana"``). Used for cache keys and metadata.
     """
 

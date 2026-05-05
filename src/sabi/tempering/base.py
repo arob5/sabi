@@ -1,51 +1,21 @@
 """`TemperingScheme` — family of intermediate target distributions.
 
-A `TemperingScheme` defines, for each state from a `TemperingSchedule`,
-the intermediate target distribution at that state — represented as an
-`IntermediateTarget` (a `TargetDistribution` carrying both the
-state-specific target function `f_state` and form `phi_state`, plus an
-``output_transform`` adapter for cheap derivation of training data
-from cached raw evaluations).
+A `TemperingScheme` maps each state from a `TemperingSchedule` to an
+`IntermediateTarget` (a `TargetDistribution` carrying ``f_state``,
+``phi_state``, and an ``output_transform`` adapter for cheap derivation
+of training data from cached raw evaluations).
 
-**"Tempering" is sabi's name for the more general bridging
-abstraction**: a sequence of intermediate distributions connecting a
-tractable starting point to a target. Likelihood tempering (the
-schemes shipped today), annealed importance sampling,
-normalising-flow bridges, score-based bridges, and emulator
-warm-starts are all instances of the same conceptual pattern. sabi
-keeps the name `TemperingScheme` for the abstraction; if a
-non-tempering bridge lands later, the abstraction may be renamed
-`BridgingScheme` (with `LikelihoodTempering*` becoming concrete
-subtypes whose names already encode "tempering"). Until then, treat
-the docstring's "tempering" as a stand-in for the broader bridging
-operation.
-
-The scheme is the single object that the algorithm uses to advance the
-intermediate target between rounds. The `TemperingSchedule` produces
-states; the scheme consumes them to produce `IntermediateTarget`s.
-Both must agree on the state PyTree type — that's a convention
-enforced at the user / config level (the schedule and scheme need to
-be paired sensibly).
-
-Two orthogonal axes can be tempered (per ``docs/tempering.md``):
-
-- **Target axis**: the emulator's training target ``f_state`` varies
-  with state (e.g., ``f_state = beta * log_likelihood``). The
-  ``output_transform`` is non-identity; the form is invariant.
-- **Form axis**: the log-density form ``phi_state`` varies with state
-  (e.g., the form scales the likelihood term by ``beta``). The
-  ``output_transform`` is identity; the form is non-invariant.
-
-Naturally-occurring schemes pick one axis at a time. Combining both
-(`f_state` AND `phi_state` both vary) is mathematically definable but
-rarely useful.
+"Tempering" here is the general bridging abstraction; the name is kept
+because likelihood tempering is the current concrete instance. See
+``docs/design.md`` §4.11 and ``docs/tempering.md`` for the two-axes
+(target / form) decomposition and worked examples.
 
 Concrete schemes:
 
-- `NoTempering`: identity on both axes. The intermediate is just the
-  base target distribution wrapped with ``state=state``. Default.
-- (Step 4 will add) `LikelihoodTemperingViaForm` and
-  `LikelihoodTemperingViaTarget`.
+- `NoTempering`: identity on both axes. The intermediate equals the
+  base target wrapped with ``state=state``. Default.
+- `LikelihoodTemperingViaForm` and `LikelihoodTemperingViaTarget` (in
+  ``sabi.tempering.likelihood``).
 """
 
 from __future__ import annotations

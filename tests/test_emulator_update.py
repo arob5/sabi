@@ -213,3 +213,119 @@ def test_registered_handler_check_returning_infeasible_falls_back_to_refit():
         emulator_update_registry._methods.remove(handler)
         del emulator_update_registry._name_index[handler.name]
         emulator_update_registry._sort_methods()
+
+
+# -------------------------------------------------------------------------
+# TinyGP cheap-update equivalence — mirrors the DSPGPEmulator coverage
+# in tests/test_dsp_gp.py. Handlers are typed against the abstract
+# `GPEmulator` base, so the math is shared with DSPGPEmulator; covering
+# it for TinyGPEmulator here verifies the dispatch lands on the right
+# handler and the resulting predictions match a fresh fit.
+# -------------------------------------------------------------------------
+
+
+def _fitted_tinygp(seed: int = 401, n: int = 12):
+    import jax.random as jr
+
+    key = jr.key(seed)
+    X = jr.uniform(key, (n, 2))
+    Y = jnp.sin(X[:, 0])
+    return TinyGPEmulator(input_shape=(2,)).fit(X, Y), X, Y
+
+
+def test_tinygp_rescale_outputs_factor_one_is_exact_no_op():
+    """`RescaleOutputs(factor=1.0)` is structurally a no-op: the
+    handler short-circuits and returns the input emulator unchanged.
+    Predictions should be bit-identical (no recomputation)."""
+    em, X, Y = _fitted_tinygp(seed=411)
+
+    def _exploding_factory():
+        raise AssertionError("factor=1.0 short-circuit; factory should not be called")
+
+    out = update_emulator(
+        em,
+        RescaleOutputs(factor=1.0),
+        factory=_exploding_factory,
+        X_full=X,
+        Y_full=Y,
+    )
+    # The handler returns the original instance for factor=1.0.
+    assert out is em
+
+
+def test_tinygp_rescale_then_append_dispatch_matches_compose_of_steps():
+    """`RescaleThenAppend(factor=β, X_new, Y_new)` should produce the
+    same predictions as: rescale by β, then condition_on `Y_new` in
+    new-state units. Mirrors `test_dspgp_rescale_then_append_dispatch_matches_compose_of_steps`
+    for the TinyGP backend — the handler is typed against the abstract
+    `GPEmulator` base, so coverage here verifies the right handler is
+    picked and produces the right predictions on the tinygp cache."""
+    import jax.random as jr
+
+    em, X, Y = _fitted_tinygp(seed=421)
+
+    X_new = jr.uniform(jr.key(422), (3, 2))
+    beta = 2.5
+    Y_new_at_new_state = beta * jnp.sin(X_new[:, 0])
+
+    def _exploding_factory():
+        raise AssertionError("cheap path should fire; factory should not be called")
+
+    plan = RescaleThenAppend(factor=beta, X_new=X_new, Y_new=Y_new_at_new_state)
+    em_after = update_emulator(
+        em,
+        plan,
+        factory=_exploding_factory,
+        X_full=jnp.concatenate([X, X_new], axis=0),
+        Y_full=jnp.concatenate([beta * Y, Y_new_at_new_state], axis=0),
+    )
+
+    # Two-step path: rescale (cache untouched), then condition_on the new rows.
+    em_rescaled = update_emulator(
+        em,
+        RescaleOutputs(factor=beta),
+        factory=_exploding_factory,
+        X_full=X,
+        Y_full=beta * Y,
+    )
+    em_two_step = em_rescaled.condition_on(X_new, Y_new_at_new_state)
+
+    X_test = jr.uniform(jr.key(423), (6, 2))
+    assert jnp.allclose(
+        em_after.predict_mean(X_test),
+        em_two_step.predict_mean(X_test),
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    assert jnp.allclose(
+        em_after.predict_variance(X_test),
+        em_two_step.predict_variance(X_test),
+        rtol=1e-10,
+        atol=1e-12,
+    )
+
+
+def test_tinygp_rescale_then_append_rejects_nonpositive_factor():
+    """Factor ≤ 0 is infeasible (z-scoring requires positive scale);
+    dispatch falls back to refit on the user-supplied (X_full, Y_full)."""
+    import jax.random as jr
+
+    em, X, Y = _fitted_tinygp(seed=431, n=8)
+    X_new = jr.uniform(jr.key(432), (2, 2))
+    Y_new = -jnp.sin(X_new[:, 0])
+
+    factory_calls = {"n": 0}
+
+    def _counting_factory():
+        factory_calls["n"] += 1
+        return TinyGPEmulator(input_shape=(2,))
+
+    out = update_emulator(
+        em,
+        RescaleThenAppend(factor=-1.0, X_new=X_new, Y_new=Y_new),
+        factory=_counting_factory,
+        X_full=jnp.concatenate([X, X_new], axis=0),
+        Y_full=jnp.concatenate([-Y, Y_new], axis=0),
+    )
+    assert factory_calls["n"] == 1
+    assert out._predict_cache is not None

@@ -1,43 +1,19 @@
 """Sequential-acquisition loop body.
 
-The `run` function executes one full algorithm run end-to-end given a
-`Problem`, an `Algorithm`, and a PRNG key. The `Algorithm` and
-`RunResult` dataclasses live in :mod:`sabi.algorithms.algorithm`;
-factories that build per-round `SurrogateDistribution` instances live in
-:mod:`sabi.algorithms.surrogate_distribution_factory`.
+`run()` executes one full algorithm run end-to-end. The `Algorithm`
+and `RunResult` dataclasses live in :mod:`sabi.algorithms.algorithm`;
+SP factories live in :mod:`sabi.algorithms.surrogate_distribution_factory`.
 
-Composition: initial design (drawn via `Algorithm.initial_sampler`) →
-emulator → metrics at round 0 (firing per `ScheduledMetric.every`) →
-acquisition → `SurrogateDistribution` → estimator function
-(`expected_target` by default) → metrics at round t. Tempering hooks
-present (`tempering_state` per round, `current_form` built each round);
-the default `NoTempering` + `UntemperedSchedule` make the state `None`
-every round.
+Composition (per round): initial design via `Algorithm.initial_sampler`
+→ emulator → acquisition → `SurrogateDistribution` → estimator (default
+`expected_target`) → scheduled metrics. See ``docs/design.md`` §4.14
+for the loop sketch and ``docs/notation.md`` for shape / symbol
+conventions.
 
-Per-metric scheduling: each metric in `Algorithm.metrics` is wrapped
-(if not already) in a `ScheduledMetric` carrying `every` (firing
-schedule), `target` (`CURRENT` vs `TERMINAL` intermediate), and
-`final` (also include in the post-loop `final_metrics`). Bare
-`Metric` instances auto-wrap at default config — preserves the
-"every metric every round + final eval" behavior.
-
-Metrics consume a `MetricContext` (estimate + surrogate distribution +
-problem + design data + round/state metadata) and declare their
-required ProbPipe `Supports*` protocols via the `requires` class
-attribute. The loop checks each metric's `requires` against the
-estimate distribution and raises `MissingProtocolError` on a
-mismatch. Output keys are validated upfront (via
-`validate_metric_keys`) before any emulator work happens; runtime
-collision check at the merge step catches metrics that opted out of
-upfront declaration (`keys = ()`).
-
-Shape / symbol conventions: see ``docs/notation.md``.
-
-File layout: `RoundState` (the per-round value type), then `run()`
-(public entry point), then the round-lifecycle helpers
-(`_run_initial_round`, `_run_final_eval`), then the round-orchestration
-helpers in calling order, then the inner machinery (metric eval, SP
-construction, update planning, protocol/merge utilities).
+File layout: `RoundState` (per-round value type) → `run()` (public
+entry) → round-lifecycle helpers (`_run_initial_round`,
+`_run_final_eval`) → per-round orchestration helpers in calling order
+→ inner machinery (metric eval, SP construction, update planning).
 """
 
 from __future__ import annotations
@@ -141,9 +117,9 @@ class RoundState:
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential emulator-based inference loop.
 
-    State is explicit and flat. The emulator is re-fit each round on the
-    full `(X, Y_train)` (no incremental updates in v1.2; design doc lists
-    `condition_on`-backed updates as a v2 item).
+    State is explicit and flat. The emulator is re-fit each round on
+    the full `(X, Y_train)` unless a registered cheap-update handler
+    accepts the round's plan (see `sabi.emulators.dispatch`).
 
     Tempering integration: each round, the `tempering_scheme` produces
     an `IntermediateTarget` at the round's state. ``Y_train`` is derived

@@ -1,5 +1,5 @@
 defaults:
-  - problem: gaussian2d
+  - problem: gaussian_2d
   - emulator: gp
   - acquisition: ei
   - algorithm: default

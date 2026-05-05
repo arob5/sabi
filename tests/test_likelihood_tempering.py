@@ -287,3 +287,96 @@ def test_via_form_and_via_target_match_explicit_likelihood_tempering():
     assert float(via_target._unnormalized_log_prob(x)) == pytest.approx(
         explicit, abs=1e-6
     )
+
+
+# -------------------------------------------------------------------------
+# β=0 endpoint: the prior limit. With the likelihood term zeroed out,
+# the intermediate distribution should collapse to the prior. Checks the
+# (1-β) / β factor wiring on each form variant — a sign or factor flip
+# that survives the β=1 endpoint test would surface here.
+# -------------------------------------------------------------------------
+
+
+def test_via_form_log_lik_plus_prior_at_beta_zero_recovers_prior():
+    """β=0 with `LogLikPlusPrior`: β·y + log_prior → log_prior(x)."""
+    target = _log_lik_plus_prior_target()
+    intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=0.0)
+    x = jnp.asarray([0.5, -0.3])
+    y = _quadratic_log_lik(x)  # arbitrary log-likelihood value
+    out = float(intermediate.log_density_form._call_single(x, y, prior=target.prior))
+    expected = float(jnp.asarray(log_prob(target.prior, x)))
+    assert out == pytest.approx(expected, abs=1e-6)
+
+
+def test_via_form_forward_model_at_beta_zero_recovers_prior():
+    """β=0 with `ForwardModel`: β·log_lik(x, y) + log_prior → log_prior(x)."""
+    prior = _flat_prior()
+
+    def log_lik(x, y):
+        return -0.5 * jnp.sum((y - 1.0) ** 2)
+
+    target = TargetDistribution(
+        target_single=lambda x: x,
+        name="fm_target",
+        input_shape=(2,),
+        output_shape=(2,),
+        log_density_form=ForwardModel(log_lik_from_outputs=log_lik),
+        prior=prior,
+    )
+    intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=0.0)
+    x = jnp.asarray([0.5, -0.3])
+    y = jnp.asarray([1.5, 0.5])
+    out = float(intermediate.log_density_form._call_single(x, y, prior=prior))
+    expected = float(jnp.asarray(log_prob(prior, x)))
+    assert out == pytest.approx(expected, abs=1e-6)
+
+
+def test_via_form_identity_at_beta_zero_is_pure_prior():
+    """β=0 with the geometric bridge for `Identity`:
+    (1-β)·log_prior + β·y → log_prior(x). The y term drops entirely."""
+    target = _identity_target()
+    intermediate = LikelihoodTemperingViaForm().intermediate_target(target, state=0.0)
+    x = jnp.asarray([0.5, -0.3])
+    y = jnp.asarray(3.14)  # arbitrary; should be multiplied by β=0 and disappear
+    out = float(intermediate.log_density_form._call_single(x, y, prior=target.prior))
+    expected = float(jnp.asarray(log_prob(target.prior, x)))
+    assert out == pytest.approx(expected, abs=1e-6)
+
+
+def test_via_target_at_beta_zero_recovers_prior():
+    """β=0 with `LikelihoodTemperingViaTarget`: f_state(x) = 0, so the
+    intermediate's unnormalized log-prob is `Identity-of-zero + log_prior`
+    via `LogLikPlusPrior` = log_prior(x)."""
+    target = _log_lik_plus_prior_target()
+    intermediate = LikelihoodTemperingViaTarget().intermediate_target(target, state=0.0)
+    x = jnp.asarray([0.5, -0.3])
+    # f_state(x) is identically zero at β=0.
+    assert float(intermediate.target_single(x)) == pytest.approx(0.0, abs=1e-12)
+    # _unnormalized_log_prob(x) = 0 + log_prior(x).
+    out = float(intermediate._unnormalized_log_prob(x))
+    expected = float(jnp.asarray(log_prob(target.prior, x)))
+    assert out == pytest.approx(expected, abs=1e-6)
+
+
+def test_via_target_output_transform_at_beta_zero_zeros_y_raw():
+    """β=0 collapses Y_train = β·Y_raw to the zero vector."""
+    target = _log_lik_plus_prior_target()
+    intermediate = LikelihoodTemperingViaTarget().intermediate_target(target, state=0.0)
+    X = jnp.asarray([[0.5, -0.3], [1.0, 0.0]])
+    Y_raw = jnp.asarray([1.0, -2.0])
+    out = intermediate.output_transform(intermediate.state, X, Y_raw)
+    assert jnp.allclose(out, jnp.zeros_like(Y_raw), atol=1e-12)
+
+
+def test_via_form_and_via_target_agree_at_beta_zero():
+    """Both schemes encode the same intermediate distribution; at β=0
+    both should return the prior."""
+    target = _log_lik_plus_prior_target()
+    via_form = LikelihoodTemperingViaForm().intermediate_target(target, state=0.0)
+    via_target = LikelihoodTemperingViaTarget().intermediate_target(target, state=0.0)
+    x = jnp.asarray([0.5, -0.3])
+    out_form = float(via_form._unnormalized_log_prob(x))
+    out_target = float(via_target._unnormalized_log_prob(x))
+    expected = float(jnp.asarray(log_prob(target.prior, x)))
+    assert out_form == pytest.approx(expected, abs=1e-6)
+    assert out_target == pytest.approx(expected, abs=1e-6)

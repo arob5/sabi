@@ -19,7 +19,7 @@ from sabi.algorithms import (
 )
 from sabi.metrics.mmd import MMD
 from sabi.problems.banana import banana
-from sabi.problems.gaussian import gaussian2d
+from sabi.problems.benchmarks import gaussian_2d
 from sabi.emulators import TinyGPEmulator
 
 
@@ -40,8 +40,8 @@ def _algorithm(
     )
 
 
-def test_loop_runs_on_gaussian2d_with_prior_sampling_acq():
-    problem = gaussian2d()
+def test_loop_runs_on_gaussian_2d_with_prior_sampling_acq():
+    problem = gaussian_2d()
     # n_rounds=5 = round 0 (initial design) + rounds 1..4 (acquisition).
     alg = _algorithm(PriorSampling(), n_rounds=5)
     result = run(problem, alg, jax.random.key(0))
@@ -67,7 +67,7 @@ def test_loop_runs_on_banana_with_ei_acq():
 
 
 def test_loop_grows_dataset_and_records_metrics():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     # n_rounds=4 = round 0 (initial) + rounds 1, 2, 3 (acquisition).
     alg = _algorithm(
         ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)),
@@ -84,7 +84,7 @@ def test_loop_grows_dataset_and_records_metrics():
 
 
 def test_loop_with_no_metrics_skips_estimator():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(PriorSampling(), n_rounds=3, metrics=())
     result = run(problem, alg, jax.random.key(4))
     assert result.final_metrics == {}
@@ -96,7 +96,7 @@ def test_loop_with_weighted_empirical_baseline():
     """No-GP baseline path: WeightedEmpiricalSurrogateDistribution produces
     a NumericEmpiricalDistribution as the estimate, which satisfies
     SupportsSampling, so MMD runs end-to-end."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(
         PriorSampling(),
         n_rounds=3,
@@ -116,17 +116,17 @@ def test_loop_with_weighted_empirical_baseline():
     assert bool(jnp.all(matches))
 
 
-def test_loop_continuous_ei_beats_candidate_set_ei_on_gaussian2d():
+def test_loop_continuous_ei_beats_candidate_set_ei_on_gaussian_2d():
     """v1.4 exit criterion: ContinuousMultiStartOptimizer-backed EI should
     yield at-or-below MMD compared to CandidateSetOptimizer-backed EI at
-    matched evaluation budgets, on gaussian2d.
+    matched evaluation budgets, on gaussian_2d.
 
     Tolerance: continuous EI must be no worse than candidate-set EI by
     more than 5 % of the candidate-set MMD². This is loose enough to
     survive seed-dependent variance with 4 acquisition rounds, but tight
     enough that a regression in the continuous optimizer would surface.
     """
-    problem = gaussian2d()
+    problem = gaussian_2d()
 
     cs_acq = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512))
     cm_acq = ExpectedImprovement(

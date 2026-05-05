@@ -69,6 +69,47 @@ def test_unnormalized_log_prob_batched():
     assert jnp.allclose(out, expected, atol=1e-6)
 
 
+def test_unnormalized_log_prob_dispatches_by_ndim_not_shape_equality():
+    """A `(n=2, d=2)` batch with `input_shape=(2,)` is unambiguously a
+    batch (rank 2, not rank 1), even though `(n, d) == input_shape` is
+    True for the leading-axis match. Previous shape-equality detection
+    misidentified this as a single point. Now dispatch is by `ndim`."""
+    td = _gaussian_target()
+    # Two 2-D points, in batched form. Both `value.shape` (= (2, 2))
+    # and `input_shape` (= (2,)) start with `2`, so a shape-equality
+    # check `value.shape == input_shape` would be False here, but a
+    # single-rank check `value.ndim == 1` is also False. Either way the
+    # batched path should fire.
+    X = jnp.asarray([[1.0, 0.5], [-0.5, 1.0]])
+    out = td._unnormalized_log_prob(X)
+    expected = jax.vmap(_gaussian_target_single)(X)
+    assert out.shape == (2,)
+    assert jnp.allclose(out, expected, atol=1e-6)
+
+
+def test_unnormalized_log_prob_rejects_wrong_input_shape():
+    """A rank-1 array of the wrong size raises (single-point branch
+    expects `input_shape`)."""
+    td = _gaussian_target()
+    with pytest.raises(ValueError, match="single-point input expects"):
+        td._unnormalized_log_prob(jnp.asarray([1.0, 2.0, 3.0]))
+
+
+def test_unnormalized_log_prob_rejects_wrong_batched_trailing_shape():
+    """A rank-2 array whose trailing dims don't match `input_shape`
+    raises (batched branch validates the suffix)."""
+    td = _gaussian_target()
+    with pytest.raises(ValueError, match="batched input expects shape"):
+        td._unnormalized_log_prob(jnp.zeros((4, 3)))
+
+
+def test_unnormalized_log_prob_rejects_unsupported_ndim():
+    """Inputs neither single-point nor batched (e.g. rank-3) raise."""
+    td = _gaussian_target()
+    with pytest.raises(ValueError, match="expected ndim"):
+        td._unnormalized_log_prob(jnp.zeros((2, 3, 2)))
+
+
 def test_satisfies_supports_unnormalized_log_prob():
     td = _gaussian_target()
     assert isinstance(td, SupportsUnnormalizedLogProb)

@@ -16,11 +16,15 @@ from sabi.metrics import (
     MissingProtocolError,
     MMD,
 )
-from sabi.problems.gaussian import gaussian2d
+from sabi.problems.benchmarks import gaussian_2d
+from sabi.problems.gaussian import gaussian
 
 
 def _problem_no_ref():
-    p = gaussian2d()
+    # Build a bare Problem (not BenchmarkProblem) so the test can set
+    # `reference_distribution=None`. The benchmark factory enforces a
+    # non-None reference at __post_init__, which would defeat the test.
+    p = gaussian(d=2, mean=(0.0, 0.0), cov=((1.0, 0.5), (0.5, 1.0)))
     return replace(p, reference_distribution=None)
 
 
@@ -58,7 +62,7 @@ def test_mmd_returns_empty_when_no_reference():
 
 def test_mmd_low_for_samples_from_reference():
     """Posterior samples drawn from the *same* reference should yield small MMD."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     samples = jnp.asarray(
         sample(
             problem.reference_distribution,
@@ -74,7 +78,7 @@ def test_mmd_low_for_samples_from_reference():
 
 
 def test_mmd_detects_shifted_samples():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     samples = jnp.asarray(
         sample(
             problem.reference_distribution, key=jax.random.key(7), sample_shape=(2048,)

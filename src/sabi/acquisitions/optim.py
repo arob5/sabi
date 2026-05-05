@@ -1,10 +1,10 @@
 r"""Pointwise optimizers for `PointwiseScoredAcquisition`.
 
-Three concrete optimizers ship in v1.4:
+Three concrete optimizers ship today:
 
 - ``CandidateSetOptimizer`` — random candidates from the design
-  distribution, scored via ``acq.score(X, state)``, top-q returned. The
-  v1.x EI behavior; cheap and the default for backwards compatibility.
+  distribution, scored via ``acq.score(X, state)``, top-q returned.
+  Cheap and the default.
 - ``ContinuousMultiStartOptimizer`` — random candidates, score-filter
   to top-`n_starts`, BFGS each in unconstrained reparameterization
   space (TFP bijector dispatched on the support `Constraint`), return
@@ -18,8 +18,8 @@ Three concrete optimizers ship in v1.4:
 
 For non-trivial supports (anything other than ``interval(low, high)``),
 ``ContinuousMultiStartOptimizer`` raises with a pointer to the
-``Constraint`` → bijector gap in ``docs/probpipe_issues.md``. The
-v1.x benchmarks all have box supports.
+``Constraint`` → bijector gap in ``docs/probpipe_issues.md``. All
+shipped benchmarks have box supports.
 
 Multi-start currently uses a Python loop over BFGS solves
 (``# TODO(vmap-multistart)``). JAX-vmap of ``optimistix.minimise``
@@ -68,7 +68,7 @@ class PointwiseOptimizer(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Candidate-set: random candidates → top-q. v1.x EI's default.
+# Candidate-set: random candidates → top-q. The default optimizer.
 # ---------------------------------------------------------------------------
 
 
@@ -76,9 +76,8 @@ class PointwiseOptimizer(ABC):
 class CandidateSetOptimizer(PointwiseOptimizer):
     r"""Random candidates from a `BatchSampler`, score each, return top-q.
 
-    Cheap; gradient-free; matches v1.x EI behavior. Quality is governed
-    by ``n_candidates`` and the sampler's coverage of the high-score
-    regions. Concretely: draw
+    Cheap; gradient-free. Quality is governed by ``n_candidates`` and
+    the sampler's coverage of the high-score regions. Concretely: draw
     :math:`X \sim \text{sampler}^{n_{\text{candidates}}}`, evaluate
     :math:`s = \text{acq.score}(X, \text{state})`, return the rows of
     :math:`X` corresponding to the top-q entries of :math:`s`.
@@ -284,13 +283,13 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
 def _make_bijector(constraint: Constraint) -> Bijector:
     """Return a TFP `Bijector` mapping unconstrained ℝ ↔ `constraint`'s support.
 
-    v1.4 supports only ``interval(low, high)`` constraints; the dispatch
-    here delegates to TFP's :class:`Sigmoid(low, high)`. For other
-    constraint types, raises ``NotImplementedError`` with a pointer to
-    the ``Constraint`` → bijector ProbPipe gap in
+    Currently supports only ``interval(low, high)`` constraints; the
+    dispatch here delegates to TFP's :class:`Sigmoid(low, high)`. For
+    other constraint types, raises ``NotImplementedError`` with a
+    pointer to the ``Constraint`` → bijector ProbPipe gap in
     ``docs/probpipe_issues.md`` (the gap is the inverse Constraint →
-    Bijector mapping ProbPipe doesn't yet ship; the bijector itself comes
-    from TFP).
+    Bijector mapping ProbPipe doesn't yet ship; the bijector itself
+    comes from TFP).
     """
     if isinstance(constraint, _Interval):
         return Sigmoid(
@@ -299,7 +298,7 @@ def _make_bijector(constraint: Constraint) -> Bijector:
         )
     raise NotImplementedError(
         f"ContinuousMultiStartOptimizer: no bijector dispatch for "
-        f"Constraint of type {type(constraint).__name__}. v1.4 supports "
-        f"only `interval(low, high)` supports. See "
+        f"Constraint of type {type(constraint).__name__}. Only "
+        f"`interval(low, high)` supports are implemented. See "
         f"docs/probpipe_issues.md: 'Constraint -> Bijector mapping'."
     )

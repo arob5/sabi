@@ -6,7 +6,7 @@ Submodules expose their public API directly — there is intentionally
 1. **Cycle-breaking.** ``sabi.target_distribution`` imports
    ``sabi.problems.forms.LogDensityForm``. Loading the parent package
    runs this ``__init__``; if it eagerly imported ``Problem`` /
-   ``banana`` / ``gaussian2d`` (which all transitively depend on
+   ``banana`` / ``gaussian`` (which all transitively depend on
    ``sabi.target_distribution``), Python would see ``target_distribution``
    as partially-loaded and raise ``ImportError`` whenever the import
    chain entered via ``sabi.tempering`` or any other path that hit the
@@ -20,7 +20,7 @@ Use submodule paths for everything:
 
     from sabi.problems.forms import LogDensityForm, Identity, LogLikPlusPrior
     from sabi.problems.base import Problem, BenchmarkProblem
-    from sabi.problems.gaussian import gaussian, gaussian2d
+    from sabi.problems.gaussian import gaussian
     from sabi.problems.banana import banana
     from sabi.problems.neals_funnel import neals_funnel
     from sabi.problems.benchmarks import (

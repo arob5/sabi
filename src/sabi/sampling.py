@@ -8,14 +8,13 @@ parameter space" — used by:
 - pointwise optimizers' candidate / seed sets (`CandidateSetOptimizer`,
   `ContinuousMultiStartOptimizer`)
 
-Each call site previously rolled its own logic on top of `sample_initial`.
-Unifying under `BatchSampler` lets users swap in Sobol, LHS, or any other
-sampling strategy at the same field they would swap a prior sampler — no
-changes to the loop or the optimizers.
+Unifying under `BatchSampler` lets users swap in Sobol, LHS, or any
+other sampling strategy at the same field they would swap a prior
+sampler — no changes to the loop or the optimizers.
 
-v1.4.1 ships one concrete sampler: `PriorSampler`, which draws i.i.d.
-samples from `problem.prior`. Sobol and LHS land alongside the first
-benchmark that needs deterministic / low-discrepancy sequences.
+Currently ships one concrete sampler: `PriorSampler`, which draws
+i.i.d. samples from `problem.prior`. Sobol and LHS land alongside the
+first benchmark that needs deterministic / low-discrepancy sequences.
 
 Output shape follows `docs/notation.md`:
 ``X.shape == (n,) + problem.input_shape``.

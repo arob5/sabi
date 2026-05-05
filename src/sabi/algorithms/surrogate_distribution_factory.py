@@ -2,7 +2,7 @@
 
 A `SurrogateDistributionFactory` packages the per-round
 `(emulator, form, support, prior, ...)` math primitives into a
-`SurrogateDistribution`. Two factories ship in v1.4.x:
+`SurrogateDistribution`. Two factories ship today:
 
 - `emulator_pushforward_factory` (default): wraps a fitted emulator and
   the round's log-density form into a `SurrogateDistribution` that

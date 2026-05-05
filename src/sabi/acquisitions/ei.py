@@ -6,11 +6,11 @@ improvement is
 
 .. math::
 
-    \mathrm{EI}(x) = (\mu(x) - f^* - \xi)\, \Phi(z) + \sigma(x)\, \phi(z),
-    \quad z = \frac{\mu(x) - f^* - \xi}{\sigma(x)},
+    \mathrm{EI}(x) = (\mu(x) - f^* - \mathrm{offset})\, \Phi(z) + \sigma(x)\, \phi(z),
+    \quad z = \frac{\mu(x) - f^* - \mathrm{offset}}{\sigma(x)},
 
 where :math:`\Phi`, :math:`\phi` are the standard-Normal CDF / PDF and
-:math:`\xi \ge 0` is an `offset` controlling exploration / exploitation
+:math:`\mathrm{offset} \ge 0` controls exploration / exploitation
 (larger `offset` → more exploration). Setting :math:`\sigma(x) = 0`
 collapses EI to zero (already-evaluated points contribute nothing).
 
@@ -48,17 +48,18 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
     """Expected-improvement scoring; optimization delegated to `optimizer`.
 
     Args:
-        optimizer: pointwise optimizer that searches the score. Default is
-            `CandidateSetOptimizer()` (v1.x behavior). Use
-            `ContinuousMultiStartOptimizer()` for gradient-based maxima
-            or wrap with `GreedyMultiPointOptimizer(inner=...)` for `q > 1`.
-        offset: exploration offset :math:`\\xi \\ge 0` (larger → more
+        optimizer: pointwise optimizer that searches the score. Default
+            is `CandidateSetOptimizer()`. Use `ContinuousMultiStartOptimizer()`
+            for gradient-based maxima or wrap with
+            `GreedyMultiPointOptimizer(inner=...)` for `q > 1`.
+        offset: exploration offset :math:`\\ge 0` (larger → more
             exploration). Default `0.0` for noiseless surrogates;
             small positive values can stabilize EI for noisy ones.
         best_from: ``"data"`` uses `max(state.Y_train)` (the surrogate's
-            training-data max); ``"mean"`` uses the
-            emulator's predictive-mean max at `state.X` (more robust
-            for noisy labels — unused in v0/v1 noiseless setting).
+            training-data max); ``"mean"`` uses the emulator's
+            predictive-mean max at `state.X` (more robust for noisy
+            labels — currently unused since the supported targets are
+            deterministic).
     """
 
     optimizer: PointwiseOptimizer = field(default_factory=CandidateSetOptimizer)

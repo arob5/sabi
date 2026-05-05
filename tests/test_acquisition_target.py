@@ -21,7 +21,7 @@ from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.acquisitions.base import AcquisitionTarget
 from sabi.algorithms import Algorithm, run
 from sabi.emulators import TinyGPEmulator
-from sabi.problems.gaussian import gaussian2d
+from sabi.problems.benchmarks import gaussian_2d
 from sabi.tempering.likelihood import LikelihoodTemperingViaForm
 from sabi.tempering.schedule import (
     FixedSchedule,
@@ -99,7 +99,7 @@ def test_current_default_target_state_equals_current():
     """Untempered loop with default acquisition_target=CURRENT:
     target_tempering_state == tempering_state == None for every
     acquisition round."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(AcquisitionTarget.CURRENT)
     run(problem, alg, jax.random.key(0))
 
@@ -121,7 +121,7 @@ def test_next_with_fixed_schedule_advances_one_step():
     round 0 (initial design, no acquisition call) is at state 0.1.
     Round 1 acquisition: current=0.5, target=1.0.
     Round 2 acquisition: current=1.0, target=1.0 (clamped)."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
@@ -151,7 +151,7 @@ def test_terminal_target_state_is_terminal_for_every_round():
     `acquisition_target=TERMINAL`: every acquisition round sees
     target=1.0; currents walk through the schedule (skipping
     round 0's state, which is the initial-design round)."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
@@ -184,7 +184,7 @@ def test_default_acquisition_target_preserves_untempered_metrics():
     we just confirm the run completes cleanly."""
     from sabi.acquisitions.random import PriorSampling
 
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=PriorSampling(),
@@ -256,7 +256,7 @@ def test_via_target_with_next_lookahead_runs_to_completion():
 def test_acquisition_state_carries_target_tempering_state():
     """Smoke check the AcquisitionState constructor accepts the new field."""
     state = AcquisitionState(
-        problem=gaussian2d(),
+        problem=gaussian_2d(),
         surrogate_distribution=None,  # type: ignore[arg-type]
         X=jnp.zeros((1, 2)),
         Y_raw=jnp.zeros((1,)),

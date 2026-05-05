@@ -15,13 +15,13 @@ import jax.numpy as jnp
 import pytest
 
 from sabi.problems.forms import Identity
-from sabi.problems.gaussian import gaussian2d
+from sabi.problems.benchmarks import gaussian_2d
 from sabi.target_distribution import TargetDistribution
 from sabi.sampling import PriorSampler
 
 
 def test_prior_sampler_shape_and_support():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     sampler = PriorSampler()
     X = sampler.sample(problem, jax.random.key(0), n=32)
     assert X.shape == (32,) + problem.input_shape
@@ -29,7 +29,7 @@ def test_prior_sampler_shape_and_support():
 
 
 def test_prior_sampler_seed_determinism_and_independence():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     sampler = PriorSampler()
     X_a = sampler.sample(problem, jax.random.key(7), n=8)
     X_b = sampler.sample(problem, jax.random.key(7), n=8)

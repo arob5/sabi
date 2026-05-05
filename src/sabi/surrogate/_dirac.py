@@ -3,10 +3,10 @@
 A `_DiracDistribution` is a degenerate `Distribution[Array]` concentrated at
 a single value; a `_DiracArrayRandomFunction` is a degenerate
 `RandomFunction` whose marginals are Diracs at deterministic per-input
-values. They support the protocols sabi's v1.2 random-measure plumbing
+values. They support the protocols sabi's random-measure plumbing
 needs (sampling, mean, single-point evaluation) without committing to a
-density representation, since a Dirac on a continuous space has no proper
-density.
+density representation, since a Dirac on a continuous space has no
+proper density.
 
 ProbPipe doesn't yet ship a general Dirac abstraction. These shims live in
 sabi for now; once ProbPipe lands a `Dirac[T]` (and the related

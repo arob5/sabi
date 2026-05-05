@@ -1,8 +1,8 @@
 """Factories mapping resolved Hydra configs to sabi objects.
 
-v0 uses plain dispatch on a `name` field rather than hydra.utils.instantiate so
-that the entry-point code is easy to read; we can migrate to `_target_` strings
-in v1 once the component tree stabilizes.
+Uses plain dispatch on a `name` field rather than `hydra.utils.instantiate`
+so that the entry-point code is easy to read; migration to `_target_`
+strings is a follow-up once the component tree stabilizes.
 """
 
 from __future__ import annotations
@@ -29,21 +29,13 @@ from sabi.metrics.mmd import MMD
 from sabi.metrics.scheduling import MetricTarget, ScheduledMetric
 from sabi.problems.banana import banana
 from sabi.problems.base import Problem
-from sabi.problems.gaussian import gaussian, gaussian2d
+from sabi.problems.gaussian import gaussian
 from sabi.problems.neals_funnel import neals_funnel
 from sabi.emulators import TinyGPEmulator
 
 
 def build_problem(cfg: DictConfig) -> Problem:
     name = cfg.name
-    if name == "gaussian2d":
-        # Back-compat dispatch: the historical 2-D wrapper. Use `name:
-        # gaussian` with `d: 2` for the generic d-D form.
-        return gaussian2d(
-            mean=tuple(cfg.get("mean", (0.0, 0.0))),
-            cov=tuple(tuple(row) for row in cfg.get("cov", ((1.0, 0.5), (0.5, 1.0)))),
-            bounds_radius=float(cfg.get("bounds_radius", 5.0)),
-        )
     if name == "gaussian":
         # Generic d-D dispatch. `mean` / `cov` are optional; omit to use
         # gaussian()'s defaults (zero mean, identity covariance).
@@ -138,8 +130,8 @@ def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
     if name == "greedy":
         # Greedy wraps an inner optimizer. Inner config under `cfg.inner`.
         inner = _build_optimizer(cfg.get("inner", None))
-        # Imputer wiring is left minimal in v1.4: kriging_believer is the
-        # default; richer config support lands when v1.5 needs it.
+        # Imputer wiring is left minimal: kriging_believer is the
+        # default; richer config support lands when a benchmark needs it.
         return GreedyMultiPointOptimizer(inner=inner)
     raise ValueError(f"Unknown acquisition.optimizer.name={name!r}.")
 
@@ -151,7 +143,7 @@ def _build_acquisition(cfg: DictConfig) -> Acquisition:
     if name == "ei":
         return ExpectedImprovement(
             optimizer=_build_optimizer(cfg.get("optimizer", None)),
-            offset=float(cfg.get("offset", cfg.get("xi", 0.0))),
+            offset=float(cfg.get("offset", 0.0)),
             best_from=str(cfg.get("best_from", "data")),
         )
     raise ValueError(f"Unknown acquisition.name={name!r}.")
