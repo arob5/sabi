@@ -162,11 +162,25 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         )
 
     def _sample(self, key, sample_shape: tuple[int, ...] = ()) -> Array:
+        """Draw posterior samples via ProbPipe ``condition_on``.
+
+        Note:
+            This method **cannot** be called inside ``jax.jit`` /
+            ``jax.vmap`` / ``jax.grad``. The ``int(...).item()`` cast
+            below is required because ProbPipe's
+            ``condition_on(..., random_seed=int)`` accepts only a
+            Python ``int``, not a JAX key. Calling ``.item()`` on a
+            traced array raises ``ConcretizationTypeError``. The cast
+            can be dropped once ProbPipe's MCMC dispatch grows a
+            JAX-key-aware ``random_seed`` argument; tracked in
+            ``docs/probpipe_issues.md``.
+        """
         kwargs = dict(self._sampler_kwargs)
         if self._sampler is not None:
             kwargs["method"] = self._sampler
         # condition_on accepts a `random_seed` int; derive deterministically
-        # from the JAX key so callers see reproducible draws.
+        # from the JAX key so callers see reproducible draws. The
+        # ``.item()`` is what blocks tracing — see method docstring.
         kwargs.setdefault(
             "random_seed",
             int(jax.random.randint(key, (), 0, 2**31 - 1).item()),

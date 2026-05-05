@@ -211,3 +211,17 @@ This is closely related to the long-standing "pushforward not first-class" gap b
 **Why it matters for sabi.** Until ProbPipe ships pushforward, `LogDensityForm` is sabi-local and explicitly described as "sabi's local pushforward operator" in the design doc. The eventual ProbPipe pushforward should subsume it.
 
 **What we'd want.** Land the pushforward PR (with whatever design adjustments sabi's experience suggests). The stale branch is a starting point but probably needs significant updates given the recent record/distribution refactors.
+
+---
+
+## `condition_on` accepts only a Python `int` for `random_seed`
+
+**Status:** open.
+
+**Sabi context.** `_ExpectedTargetDistribution._sample` in `src/sabi/surrogate/estimators.py` delegates posterior sampling to `condition_on(self, random_seed=...)`. The method receives a JAX `key`, but ProbPipe's MCMC dispatch accepts only a Python `int` for `random_seed` — so we fold the key into an int via `int(jax.random.randint(key, ...).item())`.
+
+**What we observed.** The `.item()` call breaks tracing: any caller that wraps `_sample` (or a downstream `sample(expected_target(...))`) in `jax.jit` / `vmap` / `grad` hits `ConcretizationTypeError`. No current sabi caller does so today, so the failure mode is latent — but `_sample`'s docstring now flags the limitation.
+
+**What we'd want.** ProbPipe's `condition_on(..., random_seed=...)` (and any MCMC method underneath) should accept a JAX key as well as a Python `int`. With key-aware MCMC, sabi's `_sample` can drop the `.item()` cast and trace cleanly under all transforms.
+
+**Why it matters for sabi.** Item 2 of issue #35; tracking here so we can drop the workaround the moment upstream lands key-aware seeds.
