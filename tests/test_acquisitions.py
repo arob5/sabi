@@ -9,7 +9,7 @@ from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.optim import CandidateSetOptimizer
 from sabi.acquisitions.random import PriorSampling
 from sabi.emulators.base import Emulator
-from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import EmulatedDistribution
 from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.benchmarks import gaussian_2d
 from sabi.sampling import PriorSampler
@@ -111,7 +111,7 @@ def test_ei_collapses_to_zero_at_zero_variance():
     X = PriorSampler().sample(problem, jax.random.key(0), 4)
     Y = problem.target_map(X)
     emulator = _ConstantEmulator(loc=0.0, scale=0.0, input_shape=problem.input_shape)
-    sp = SurrogateDistribution(
+    surrogate_distribution = EmulatedDistribution(
         emulator=emulator,
         log_density_form=problem.log_density_form,
         support=problem.support,
@@ -120,7 +120,7 @@ def test_ei_collapses_to_zero_at_zero_variance():
     )
     state = AcquisitionState(
         problem=problem,
-        surrogate_distribution=sp,
+        surrogate_distribution=surrogate_distribution,
         X=X,
         Y_raw=Y,
         Y_train=Y,
@@ -130,15 +130,15 @@ def test_ei_collapses_to_zero_at_zero_variance():
     assert score == pytest.approx(0.0, abs=1e-12)
 
 
-def test_ei_raises_on_degenerate_surrogate_emulator():
-    """`ExpectedImprovement` requires a non-None emulator. Using a
-    `WeightedEmpiricalRandomMeasure` (the no-emulator baseline) at
-    `state.surrogate_distribution` should raise with a message that
-    points the user at the swap."""
+def test_ei_raises_on_degenerate_surrogate_distribution():
+    """`ExpectedImprovement` requires an emulator-backed
+    `EmulatedDistribution`. Passing a `WeightedEmpiricalRandomMeasure`
+    (the no-emulator baseline) should raise from the isinstance narrow
+    in `_score_single`, with a message naming `EmulatedDistribution`."""
     problem = gaussian_2d()
     X = PriorSampler().sample(problem, jax.random.key(0), 8)
     Y = problem.target_map(X)
-    sp = WeightedEmpiricalRandomMeasure(
+    surrogate_distribution = WeightedEmpiricalRandomMeasure(
         X=X,
         log_weights=Y,
         support=problem.support,
@@ -146,10 +146,10 @@ def test_ei_raises_on_degenerate_surrogate_emulator():
     )
     state = AcquisitionState(
         problem=problem,
-        surrogate_distribution=sp,
+        surrogate_distribution=surrogate_distribution,
         X=X,
         Y_raw=Y,
         Y_train=Y,
     )
-    with pytest.raises(ValueError, match="non-degenerate emulator"):
+    with pytest.raises(ValueError, match="EmulatedDistribution"):
         ExpectedImprovement().select_batch(state, q=1, key=jax.random.key(0))

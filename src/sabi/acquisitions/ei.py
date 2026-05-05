@@ -41,6 +41,7 @@ from probpipe import mean, variance
 
 from sabi.acquisitions.base import AcquisitionState, PointwiseScoredAcquisition
 from sabi.acquisitions.optim import CandidateSetOptimizer, PointwiseOptimizer
+from sabi.surrogate.surrogate_distribution import EmulatedDistribution
 
 
 @dataclass(frozen=True)
@@ -69,11 +70,17 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
     def _score_single(self, x: Array, state: AcquisitionState) -> Array:
         """Single-point EI at `x` (shape `state.problem.input_shape`).
         Returns scalar."""
-        emulator = state.surrogate_distribution.require_emulator(
-            "ExpectedImprovement"
-        )
+        surrogate_distribution = state.surrogate_distribution
+        if not isinstance(surrogate_distribution, EmulatedDistribution):
+            raise ValueError(
+                f"ExpectedImprovement requires an emulator-backed "
+                f"`EmulatedDistribution`; got "
+                f"{type(surrogate_distribution).__name__} (the no-emulator "
+                f"baseline). Switch to a real emulator or use a "
+                f"sampling-style acquisition like PriorSampling."
+            )
         # emulator.__call__ expects a leading batch axis.
-        pred = emulator(x[None])
+        pred = surrogate_distribution.emulator(x[None])
         mu = jnp.asarray(mean(pred))[0]
         var_ = jnp.asarray(variance(pred))[0]
         std = jnp.sqrt(jnp.maximum(var_, 1e-30))
@@ -88,9 +95,13 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
         if self.best_from == "data":
             return jnp.max(state.Y_train)
         if self.best_from == "mean":
-            emulator = state.surrogate_distribution.require_emulator(
-                "ExpectedImprovement(best_from='mean')"
-            )
-            train_pred = emulator(state.X)
+            surrogate_distribution = state.surrogate_distribution
+            if not isinstance(surrogate_distribution, EmulatedDistribution):
+                raise ValueError(
+                    f"ExpectedImprovement(best_from='mean') requires an "
+                    f"emulator-backed `EmulatedDistribution`; got "
+                    f"{type(surrogate_distribution).__name__}."
+                )
+            train_pred = surrogate_distribution.emulator(state.X)
             return jnp.max(jnp.asarray(mean(train_pred)))
         raise ValueError(f"Unknown best_from={self.best_from!r}.")

@@ -43,6 +43,7 @@ from tensorflow_probability.substrates.jax.bijectors import Bijector, Sigmoid
 from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.fantasize import FantasyImputer, KrigingBeliever
 from sabi.sampling import BatchSampler, PriorSampler
+from sabi.surrogate.surrogate_distribution import EmulatedDistribution
 
 if TYPE_CHECKING:
     from sabi.acquisitions.base import PointwiseScoredAcquisition
@@ -270,22 +271,27 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                 # emulator only consumes Y_train anyway).
                 new_Y_train = jnp.concatenate([state.Y_train, y_pending], axis=0)
                 # Refit the emulator on the augmented training design.
-                # Mutate the surrogate_distribution copy so downstream
+                # Build a fresh `EmulatedDistribution` so downstream
                 # score calls see the new emulator.
-                old_sp = state.surrogate_distribution
-                old_emulator = old_sp.require_emulator("GreedyMultiPointOptimizer")
-                new_emulator = old_emulator.fit(new_X, new_Y_train)
-                new_sp = type(old_sp)(
+                current = state.surrogate_distribution
+                if not isinstance(current, EmulatedDistribution):
+                    raise ValueError(
+                        f"GreedyMultiPointOptimizer requires an emulator-backed "
+                        f"`EmulatedDistribution`; got "
+                        f"{type(current).__name__}."
+                    )
+                new_emulator = current.emulator.fit(new_X, new_Y_train)
+                new_surrogate_distribution = EmulatedDistribution(
                     emulator=new_emulator,
-                    log_density_form=old_sp.log_density_form,
-                    support=old_sp.inner_support,
-                    input_shape=old_sp.inner_event_shape,
-                    prior=old_sp.prior,
-                    name=old_sp.name,
+                    log_density_form=current.log_density_form,
+                    support=current.inner_support,
+                    input_shape=current.inner_event_shape,
+                    prior=current.prior,
+                    name=current.name,
                 )
                 cur_state = replace(
                     state,
-                    surrogate_distribution=new_sp,
+                    surrogate_distribution=new_surrogate_distribution,
                     X=new_X,
                     Y_train=new_Y_train,
                 )

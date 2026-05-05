@@ -68,11 +68,10 @@ class MetricContext:
             Built from `surrogate_distribution` via
             `algorithm.estimator`.
         surrogate_distribution: the round's `SurrogateDistribution`
-            (carries the fitted emulator and the round's
-            log-density form). Available for metrics that need to
-            inspect the surrogate directly. May have
-            `emulator=None` when the loop is running the
-            weighted-empirical baseline.
+            — either an `EmulatedDistribution` (emulator-backed) or
+            a `WeightedEmpiricalRandomMeasure` (no-emulator baseline).
+            Metrics that need to inspect the emulator narrow to
+            `EmulatedDistribution` via `isinstance`.
         problem: the inference problem (provides `prior`,
             `reference_distribution`, `support`, `input_shape`,
             etc.).

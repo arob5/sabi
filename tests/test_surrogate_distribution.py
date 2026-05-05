@@ -1,9 +1,11 @@
-"""Tests for the v1.2-refactor SurrogateDistribution + WeightedEmpiricalRandomMeasure.
+"""Tests for SurrogateDistribution / EmulatedDistribution / WeightedEmpiricalRandomMeasure.
 
 Coverage:
-- Inheritance: SurrogateDistribution is a NumericRandomMeasure;
-  WeightedEmpiricalRandomMeasure is a SurrogateDistribution subclass with
-  ``emulator=None`` (the degenerate / no-emulator case).
+- Sibling-structure invariants: ``EmulatedDistribution`` and
+  ``WeightedEmpiricalRandomMeasure`` are sibling subclasses of the
+  abstract ``SurrogateDistribution`` base; neither is a subclass of
+  the other.
+- ``EmulatedDistribution`` rejects ``None`` emulator / form at construction.
 - Inner-support / inner-event-shape derived from constructor args.
 - Decoupling from Problem (constructed from math primitives only).
 - Protocol opt-in matrix per class.
@@ -13,10 +15,9 @@ Coverage:
     - (Normal, LogLikPlusPrior) → Normal with shifted loc
     - (MultivariateNormal, Identity / LogLikPlusPrior) — closed-form joint
     - (samplable non-Gaussian, any) → MC empirical via workflow_function
-    - (non-samplable non-Gaussian, any) → raises NotImplementedError
-- expected_target on the SP returns a Distribution that satisfies
-  SupportsUnnormalizedLogProb and SupportsSampling, and sampling delegates
-  to ProbPipe condition_on (NUTS).
+- expected_target on an EmulatedDistribution returns a Distribution
+  that satisfies SupportsUnnormalizedLogProb and SupportsSampling, and
+  sampling delegates to ProbPipe condition_on (NUTS).
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from probpipe.distributions.continuous import Normal
 from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.surrogate import (
+    EmulatedDistribution,
     SurrogateDistribution,
     WeightedEmpiricalRandomMeasure,
     expected_target,
@@ -74,19 +76,19 @@ def _werm(n: int = 16, d: int = 2, seed: int = 0):
     )
 
 
-def _sp(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
-    """A SurrogateDistribution fit on a 2-D Gaussian log-density."""
+def _emulated(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
+    """An `EmulatedDistribution` fit on a 2-D Gaussian log-density."""
     key = jax.random.key(seed)
     X = jax.random.uniform(key, shape=(n, d), minval=-3.0, maxval=3.0)
     Y = -0.5 * jnp.sum(X ** 2, axis=-1)
     emulator = TinyGPEmulator(input_shape=(d,)).fit(X, Y)
-    return SurrogateDistribution(
+    return EmulatedDistribution(
         emulator=emulator,
         log_density_form=form if form is not None else Identity(),
         support=_box_support(d),
         input_shape=(d,),
         prior=prior,
-        name="sp_test",
+        name="emulated_test",
     )
 
 
@@ -95,29 +97,45 @@ def _sp(n: int = 20, d: int = 2, seed: int = 1, form=None, prior=None):
 # -------------------------------------------------------------------------
 
 
-def test_werm_is_surrogate_distribution_subclass():
+def test_sibling_structure_invariants():
+    """`EmulatedDistribution` and `WeightedEmpiricalRandomMeasure` are
+    sibling subclasses of the abstract `SurrogateDistribution`. Neither
+    is a subclass of the other; the abstract base is what lets the loop
+    type their union without committing to either."""
+    assert issubclass(EmulatedDistribution, SurrogateDistribution)
+    assert issubclass(WeightedEmpiricalRandomMeasure, SurrogateDistribution)
+    assert not issubclass(WeightedEmpiricalRandomMeasure, EmulatedDistribution)
+    assert not issubclass(EmulatedDistribution, WeightedEmpiricalRandomMeasure)
+
+
+def test_surrogate_distribution_is_abstract():
+    """The base class can't be instantiated directly — `inner_support`
+    and `inner_event_shape` are abstract."""
+    with pytest.raises(TypeError, match="abstract"):
+        SurrogateDistribution(name="bad")  # type: ignore[abstract]
+
+
+def test_werm_is_random_measure():
     werm = _werm()
     assert isinstance(werm, NumericRandomMeasure)
     assert isinstance(werm, RandomMeasure)
-    # WERM is a SurrogateDistribution subclass with degenerate emulator.
     assert isinstance(werm, SurrogateDistribution)
-    assert werm.emulator is None
-    assert werm.log_density_form is None
 
 
-def test_sp_is_numeric_random_measure():
-    sp = _sp()
-    assert isinstance(sp, SurrogateDistribution)
-    assert isinstance(sp, NumericRandomMeasure)
-    assert isinstance(sp, RandomMeasure)
+def test_emulated_is_random_measure():
+    emulated = _emulated()
+    assert isinstance(emulated, EmulatedDistribution)
+    assert isinstance(emulated, SurrogateDistribution)
+    assert isinstance(emulated, NumericRandomMeasure)
+    assert isinstance(emulated, RandomMeasure)
 
 
 def test_inner_support_and_event_shape_match_constructor_args():
     werm = _werm()
     assert werm.inner_event_shape == (2,)
     assert werm.inner_support is werm._support  # type: ignore[attr-defined]
-    sp = _sp()
-    assert sp.inner_event_shape == (2,)
+    emulated = _emulated()
+    assert emulated.inner_event_shape == (2,)
 
 
 def test_werm_requires_support():
@@ -130,12 +148,12 @@ def test_werm_requires_support():
         )
 
 
-def test_sp_requires_support():
+def test_emulated_distribution_requires_support():
     emulator = TinyGPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="support"):
-        SurrogateDistribution(
+        EmulatedDistribution(
             emulator=emulator,
             log_density_form=Identity(),
             support=None,  # type: ignore[arg-type]
@@ -143,29 +161,37 @@ def test_sp_requires_support():
         )
 
 
-def test_require_emulator_returns_emulator_when_present():
-    """Success path: ``require_emulator`` returns ``self.emulator`` unchanged."""
-    sp = _sp()
-    emulator = sp.require_emulator("TestCaller")
-    assert emulator is sp.emulator
-    assert emulator is not None
+def test_emulated_distribution_rejects_none_emulator():
+    """`EmulatedDistribution` requires a non-None emulator. The
+    no-emulator baseline is `WeightedEmpiricalRandomMeasure`."""
+    with pytest.raises(ValueError, match="non-None `emulator`"):
+        EmulatedDistribution(
+            emulator=None,  # type: ignore[arg-type]
+            log_density_form=Identity(),
+            support=_box_support(2),
+            input_shape=(2,),
+        )
 
 
-def test_require_emulator_raises_when_none():
-    """Raise path: ``require_emulator`` raises ``ValueError`` naming the
-    caller and the canonical "non-degenerate emulator" message."""
-    werm = _werm()
-    assert werm.emulator is None
-    with pytest.raises(ValueError, match="MyCaller.*non-degenerate emulator"):
-        werm.require_emulator("MyCaller")
+def test_emulated_distribution_rejects_none_log_density_form():
+    emulator = TinyGPEmulator(input_shape=(2,)).fit(
+        jnp.zeros((4, 2)), jnp.zeros(4)
+    )
+    with pytest.raises(ValueError, match="log_density_form"):
+        EmulatedDistribution(
+            emulator=emulator,
+            log_density_form=None,  # type: ignore[arg-type]
+            support=_box_support(2),
+            input_shape=(2,),
+        )
 
 
-def test_sp_input_shape_must_match_emulator_input_shape():
+def test_emulated_distribution_input_shape_must_match_emulator_input_shape():
     emulator = TinyGPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
     with pytest.raises(ValueError, match="input_shape"):
-        SurrogateDistribution(
+        EmulatedDistribution(
             emulator=emulator,
             log_density_form=Identity(),
             support=_box_support(3),
@@ -326,44 +352,44 @@ def test_pushforward_forward_model_with_normal_falls_to_mc():
 # -------------------------------------------------------------------------
 
 
-def test_sp_random_unnormalized_log_prob_identity_returns_normal():
-    sp = _sp(form=Identity())
+def test_emulated_random_unnormalized_log_prob_identity_returns_normal():
+    emulated = _emulated(form=Identity())
     # Single-point query: must be presented as batch (per ArrayRandomFunction).
     X = jnp.asarray([[0.4, -0.1], [0.2, 0.3]])
-    marginal = random_unnormalized_log_prob(sp, X)
+    marginal = random_unnormalized_log_prob(emulated, X)
     assert isinstance(marginal, Normal)
-    pred = sp.emulator(X)
+    pred = emulated.emulator(X)
     assert jnp.allclose(jnp.asarray(marginal.loc), jnp.asarray(pred.loc), atol=1e-5)
 
 
-def test_sp_random_unnormalized_log_prob_log_lik_plus_prior_shifts_mean():
+def test_emulated_random_unnormalized_log_prob_log_lik_plus_prior_shifts_mean():
     from probpipe import log_prob as pp_log_prob
     from sabi._probpipe_compat import independent_uniform
 
     prior = independent_uniform(
         low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
     )
-    sp = _sp(form=LogLikPlusPrior(), prior=prior)
+    emulated = _emulated(form=LogLikPlusPrior(), prior=prior)
     X = jnp.asarray([[0.4, -0.1], [0.2, 0.3]])
-    marginal = random_unnormalized_log_prob(sp, X)
+    marginal = random_unnormalized_log_prob(emulated, X)
     assert isinstance(marginal, Normal)
-    pred = sp.emulator(X)
+    pred = emulated.emulator(X)
     expected_shifts = jax.vmap(lambda x: jnp.asarray(pp_log_prob(prior, x)))(X)
     expected_loc = jnp.asarray(pred.loc) + expected_shifts
     assert jnp.allclose(jnp.asarray(marginal.loc), expected_loc, atol=1e-5)
 
 
-def test_sp_does_not_satisfy_supports_mean():
-    sp = _sp()
-    assert not isinstance(sp, SupportsMean)
+def test_emulated_does_not_satisfy_supports_mean():
+    emulated = _emulated()
+    assert not isinstance(emulated, SupportsMean)
     with pytest.raises(TypeError, match="support"):
-        mean(sp)
+        mean(emulated)
 
 
-def test_sp_does_not_satisfy_supports_random_log_prob():
-    sp = _sp()
-    assert not isinstance(sp, SupportsRandomLogProb)
-    assert isinstance(sp, SupportsRandomUnnormalizedLogProb)
+def test_emulated_does_not_satisfy_supports_random_log_prob():
+    emulated = _emulated()
+    assert not isinstance(emulated, SupportsRandomLogProb)
+    assert isinstance(emulated, SupportsRandomUnnormalizedLogProb)
 
 
 # -------------------------------------------------------------------------
@@ -379,28 +405,28 @@ def test_expected_target_for_werm_is_inner_empirical():
     assert et is mean(werm)
 
 
-def test_expected_target_for_sp_satisfies_unnormalized_log_prob_and_sampling():
-    sp = _sp()
-    et = expected_target(sp)
+def test_expected_target_for_emulated_satisfies_unnormalized_log_prob_and_sampling():
+    emulated = _emulated()
+    et = expected_target(emulated)
     assert isinstance(et, Distribution)
     assert isinstance(et, SupportsUnnormalizedLogProb)
     assert isinstance(et, SupportsSampling)
 
 
-def test_expected_target_for_sp_unnormalized_log_prob_matches_form():
-    sp = _sp()
-    et = expected_target(sp)
+def test_expected_target_for_emulated_unnormalized_log_prob_matches_form():
+    emulated = _emulated()
+    et = expected_target(emulated)
     x = jnp.asarray([0.3, -0.2])
-    pred = sp.emulator(x[None])
+    pred = emulated.emulator(x[None])
     pred_mean = jnp.asarray(mean(pred))[0]
-    expected = float(sp.log_density_form(x, pred_mean, prior=sp.prior))
+    expected = float(emulated.log_density_form(x, pred_mean, prior=emulated.prior))
     assert float(et._unnormalized_log_prob(x)) == pytest.approx(expected, abs=1e-5)
 
 
-def test_expected_target_for_sp_sampling_runs_mcmc():
-    sp = _sp(n=20)
+def test_expected_target_for_emulated_sampling_runs_mcmc():
+    emulated = _emulated(n=20)
     et = expected_target(
-        sp,
+        emulated,
         sampler_kwargs={"num_results": 100, "num_warmup": 50},
     )
     samples = sample(et, key=jax.random.key(0), sample_shape=(40,))
