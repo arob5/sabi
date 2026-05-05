@@ -1,3 +1,4 @@
+import pytest
 from omegaconf import OmegaConf
 
 from sabi.algorithms import (
@@ -99,3 +100,63 @@ def test_build_algorithm_bare_metric_returns_metric_not_scheduled():
     alg = build_algorithm(cfg, problem=build_problem(cfg.problem))
     # The default _cfg uses just `- name: mmd` — bare.
     assert isinstance(alg.metrics[0], MMD)
+
+
+# -------------------------------------------------------------------------
+# Error paths: each `raise ValueError` in build.py exercised directly.
+# Catches typos in YAML configs at the test stage rather than at run time.
+# -------------------------------------------------------------------------
+
+
+def test_build_problem_unknown_name_raises():
+    cfg = _cfg()
+    cfg.problem.name = "not_a_real_problem"
+    with pytest.raises(ValueError, match="problem.name"):
+        build_problem(cfg.problem)
+
+
+def test_build_algorithm_unknown_emulator_name_raises():
+    cfg = _cfg()
+    problem = build_problem(cfg.problem)
+    cfg.emulator.name = "not_a_real_emulator"
+    with pytest.raises(ValueError, match="emulator.name"):
+        build_algorithm(cfg, problem=problem)
+
+
+def test_build_algorithm_unknown_acquisition_name_raises():
+    cfg = _cfg()
+    problem = build_problem(cfg.problem)
+    cfg.acquisition.name = "not_a_real_acquisition"
+    with pytest.raises(ValueError, match="acquisition.name"):
+        build_algorithm(cfg, problem=problem)
+
+
+def test_build_algorithm_unknown_optimizer_name_raises():
+    """`acquisition.optimizer.name` is a sub-dispatch under EI; a bad
+    name should raise from `_build_optimizer`."""
+    cfg = _cfg()
+    cfg.acquisition = OmegaConf.create(
+        {
+            "name": "ei",
+            "optimizer": {"name": "not_a_real_optimizer"},
+        }
+    )
+    problem = build_problem(cfg.problem)
+    with pytest.raises(ValueError, match="acquisition.optimizer.name"):
+        build_algorithm(cfg, problem=problem)
+
+
+def test_build_algorithm_unknown_metric_name_raises():
+    cfg = _cfg()
+    cfg.metrics = [{"name": "not_a_real_metric"}]
+    problem = build_problem(cfg.problem)
+    with pytest.raises(ValueError, match="metric.name"):
+        build_algorithm(cfg, problem=problem)
+
+
+def test_build_algorithm_unknown_surrogate_distribution_factory_raises():
+    cfg = _cfg()
+    cfg.algorithm.surrogate_distribution = "not_a_real_factory"
+    problem = build_problem(cfg.problem)
+    with pytest.raises(ValueError, match="surrogate_distribution"):
+        build_algorithm(cfg, problem=problem)
