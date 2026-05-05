@@ -1,12 +1,16 @@
 import jax
 import jax.numpy as jnp
+import pytest
 from probpipe import mean
+from probpipe.distributions.continuous import Normal
 
 from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.optim import CandidateSetOptimizer
 from sabi.acquisitions.random import PriorSampling
+from sabi.emulators.base import Emulator
 from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.gaussian import gaussian2d
 from sabi.sampling import PriorSampler
 from sabi.emulators import TinyGPEmulator
@@ -89,3 +93,90 @@ def test_ei_average_best_beats_random_average_best_across_seeds():
         ei_bests.append(float(jnp.max(problem.target_map(ei_batch))))
         rand_bests.append(float(jnp.max(problem.target_map(rand_batch))))
     assert sum(ei_bests) / len(ei_bests) > sum(rand_bests) / len(rand_bests)
+
+
+# -------------------------------------------------------------------------
+# Edge cases: σ=0 collapse and degenerate (emulator=None) surrogates.
+# -------------------------------------------------------------------------
+
+
+class _ConstantEmulator(Emulator):
+    """Stub emulator returning a Normal with caller-supplied loc / scale.
+
+    Used to drive `ExpectedImprovement._score_single` to the σ ≤ 1e-30
+    branch. The real `TinyGPEmulator` floors variance at `jitter`
+    (default 1e-3) so it can't reach the σ=0 path naturally.
+    """
+
+    def __init__(self, *, loc: float, scale: float, input_shape=(2,)):
+        super().__init__(input_shape=input_shape, output_shape=(), name="constant_em")
+        self._loc = float(loc)
+        self._scale = float(scale)
+
+    def fit(self, X, Y):
+        return self
+
+    def predict(self, X, *, joint_inputs=False, joint_outputs=False):
+        n = X.shape[0]
+        return Normal(
+            loc=jnp.full((n,), self._loc),
+            scale=jnp.full((n,), self._scale),
+            name="constant_pred",
+        )
+
+
+def test_ei_collapses_to_zero_at_zero_variance():
+    """`EI(x) = 0` whenever `σ(x) ≤ 1e-30` — the docstring promise at
+    [src/sabi/acquisitions/ei.py:14]. Uses a stub emulator since the
+    real GP's jitter floor keeps σ orders of magnitude above 1e-30."""
+    problem = gaussian2d()
+    # Train Y_train so `best = max(Y_train)` is a finite scalar.
+    X = PriorSampler().sample(problem, jax.random.key(0), 4)
+    Y = problem.target_map(X)
+    emulator = _ConstantEmulator(loc=0.0, scale=0.0, input_shape=problem.input_shape)
+    sp = SurrogateDistribution(
+        emulator=emulator,
+        log_density_form=problem.log_density_form,
+        support=problem.support,
+        input_shape=problem.input_shape,
+        prior=problem.prior,
+    )
+    state = AcquisitionState(
+        problem=problem,
+        surrogate_distribution=sp,
+        X=X,
+        Y_raw=Y,
+        Y_train=Y,
+        tempering_state=None,
+        target_tempering_state=None,
+    )
+    x = jnp.zeros(problem.input_shape)
+    score = float(ExpectedImprovement()._score_single(x, state))
+    assert score == pytest.approx(0.0, abs=1e-12)
+
+
+def test_ei_raises_on_degenerate_surrogate_emulator():
+    """`ExpectedImprovement` requires a non-None emulator. Using a
+    `WeightedEmpiricalRandomMeasure` (the no-emulator baseline) at
+    `state.surrogate_distribution` should raise with a message that
+    points the user at the swap."""
+    problem = gaussian2d()
+    X = PriorSampler().sample(problem, jax.random.key(0), 8)
+    Y = problem.target_map(X)
+    sp = WeightedEmpiricalRandomMeasure(
+        X=X,
+        log_weights=Y,
+        support=problem.support,
+        input_shape=problem.input_shape,
+    )
+    state = AcquisitionState(
+        problem=problem,
+        surrogate_distribution=sp,
+        X=X,
+        Y_raw=Y,
+        Y_train=Y,
+        tempering_state=None,
+        target_tempering_state=None,
+    )
+    with pytest.raises(ValueError, match="non-degenerate emulator"):
+        ExpectedImprovement().select_batch(state, q=1, key=jax.random.key(0))
