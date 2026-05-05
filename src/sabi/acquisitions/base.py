@@ -95,8 +95,9 @@ def resolve_state(
     - `TERMINAL`: returns `schedule.terminal_state()`.
 
     Lives next to `AcquisitionTarget` because it's the canonical
-    consumer of the enum — `target_tempering_state` on
-    `AcquisitionState` is what acquisitions actually see.
+    consumer of the enum. The resolved state is the one at which the
+    loop builds the acquisition's `SurrogateDistribution`; it is not
+    re-exposed on `AcquisitionState` (the SP itself is the carrier).
     """
     if acquisition_target == AcquisitionTarget.CURRENT:
         return current_state
@@ -135,28 +136,28 @@ class AcquisitionState:
     data). Diagnostic / logging code can use ``Y_raw`` to access the
     raw evaluations.
 
+    Note on tempering state. The round's tempering states (current and
+    target) are not re-exposed here: ``surrogate_distribution`` is
+    already built at the target state, and the per-round metric row
+    (`round`, `tempering_state`, `target_tempering_state`, `n_evals`)
+    captures them for ablation logging. Acquisitions that need
+    state-dependent behavior should read the emulator / form via
+    ``surrogate_distribution`` rather than introspect the scalar state.
+
     Attributes:
         problem: the inference problem (provides `prior`, `support`,
             `input_shape`, etc.).
         surrogate_distribution: round's surrogate-posterior random measure
-            built at ``target_tempering_state`` (the state the
-            acquisition optimizes against — see `AcquisitionTarget`).
-            Always set; ``surrogate_distribution.emulator`` may be
-            ``None`` for the weighted-empirical baseline.
+            built at the acquisition's target tempering state (see
+            `AcquisitionTarget`). Always set;
+            ``surrogate_distribution.emulator`` may be ``None`` for the
+            weighted-empirical baseline.
         X: design inputs, shape `(n,) + problem.input_shape`.
         Y_raw: raw target evaluations, shape `(n,) + problem.output_shape`.
-        Y_train: emulator-training targets *at the
-            target_tempering_state*, same shape as Y_raw. Consistent
-            with the SP's emulator. Equal to Y_raw when no
-            target-side tempering is in effect.
-        tempering_state: round's current state from the schedule.
-            Available for acquisitions that want to introspect the
-            round's intermediate distribution independently of the
-            target.
-        target_tempering_state: state at which the
-            ``surrogate_distribution`` is built — the state the
-            acquisition optimizes against. Equal to ``tempering_state``
-            when ``Algorithm.acquisition_target == CURRENT`` (default).
+        Y_train: emulator-training targets at the acquisition's target
+            tempering state, same shape as Y_raw. Consistent with the
+            SP's emulator. Equal to Y_raw when no target-side tempering
+            is in effect.
     """
 
     problem: Problem
@@ -164,8 +165,6 @@ class AcquisitionState:
     X: Array
     Y_raw: Array
     Y_train: Array
-    tempering_state: Any
-    target_tempering_state: Any
 
 
 class Acquisition(ABC):

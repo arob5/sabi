@@ -124,8 +124,6 @@ def test_ei_collapses_to_zero_at_zero_variance():
         X=X,
         Y_raw=Y,
         Y_train=Y,
-        tempering_state=None,
-        target_tempering_state=None,
     )
     x = jnp.zeros(problem.input_shape)
     score = float(ExpectedImprovement()._score_single(x, state))
@@ -152,8 +150,6 @@ def test_ei_raises_on_degenerate_surrogate_emulator():
         X=X,
         Y_raw=Y,
         Y_train=Y,
-        tempering_state=None,
-        target_tempering_state=None,
     )
     with pytest.raises(ValueError, match="non-degenerate emulator"):
         ExpectedImprovement().select_batch(state, q=1, key=jax.random.key(0))

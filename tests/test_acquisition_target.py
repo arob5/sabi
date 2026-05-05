@@ -5,8 +5,10 @@ Verifies:
   no-acquisition-target loop (i.e., behavior preserved).
 - `NEXT` and `TERMINAL` build the SP at a different state than the
   round's current state.
-- `AcquisitionState.target_tempering_state` reflects the resolved
-  state for each acquisition_target value.
+- Per-round metric rows reflect the resolved
+  `(tempering_state, target_tempering_state)` for each
+  `acquisition_target` value (the row is the canonical place these
+  are surfaced — `AcquisitionState` itself does not re-expose them).
 - Schedule's `terminal_state()` returns the correct state for both
   built-in schedules.
 """
@@ -15,10 +17,9 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-import pytest
 
-from sabi.acquisitions.base import Acquisition, AcquisitionState
 from sabi.acquisitions.base import AcquisitionTarget, resolve_state
+from sabi.acquisitions.random import PriorSampling
 from sabi.algorithms import Algorithm, run
 from sabi.emulators import TinyGPEmulator
 from sabi.problems.benchmarks import gaussian_2d
@@ -120,37 +121,19 @@ def test_resolve_state_terminal_returns_terminal_state():
 
 
 # -------------------------------------------------------------------------
-# Acquisition that captures the target_tempering_state it sees
+# Helpers — read (current, target) tempering states off the per-round
+# metric row, which is where the loop surfaces them.
 # -------------------------------------------------------------------------
 
 
-class _RecordingAcquisition(Acquisition):
-    """Records each round's `(tempering_state, target_tempering_state)`
-    pair, then returns a deterministic batch."""
-
-    def __init__(self):
-        self.calls: list[tuple] = []
-
-    def select_batch(self, state: AcquisitionState, q: int, key):
-        self.calls.append((state.tempering_state, state.target_tempering_state))
-        # Deterministic batch — sample uniformly from support.
-        problem = state.problem
-        lower, upper = problem.support.low, problem.support.high
-        return lower + (upper - lower) * jax.random.uniform(
-            key, shape=(q,) + problem.input_shape
-        )
-
-
-def _algorithm(acquisition_target: AcquisitionTarget, **kwargs):
-    return Algorithm(
-        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=_RecordingAcquisition(),
-        n_initial=8,
-        n_rounds=3,  # round 0 (initial) + rounds 1, 2 (acquisition).
-        q=1,
-        acquisition_target=acquisition_target,
-        **kwargs,
-    )
+def _acq_round_states(result) -> list[tuple]:
+    """Return ``[(tempering_state, target_tempering_state), ...]`` for
+    each acquisition round (skipping round 0, the initial design)."""
+    return [
+        (row["tempering_state"], row["target_tempering_state"])
+        for row in result.per_round_metrics
+        if row["round"] >= 1
+    ]
 
 
 # -------------------------------------------------------------------------
@@ -163,13 +146,19 @@ def test_current_default_target_state_equals_current():
     target_tempering_state == tempering_state == None for every
     acquisition round."""
     problem = gaussian_2d()
-    alg = _algorithm(AcquisitionTarget.CURRENT)
-    run(problem, alg, jax.random.key(0))
+    alg = Algorithm(
+        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
+        acquisition=PriorSampling(),
+        n_initial=8,
+        n_rounds=3,  # round 0 (initial) + rounds 1, 2 (acquisition).
+        q=1,
+        acquisition_target=AcquisitionTarget.CURRENT,
+    )
+    result = run(problem, alg, jax.random.key(0))
 
-    # n_rounds=3 → round 0 (initial) + rounds 1, 2 (acquisition).
-    acq = alg.acquisition
-    assert len(acq.calls) == 2
-    for current, target in acq.calls:
+    rounds = _acq_round_states(result)
+    assert len(rounds) == 2
+    for current, target in rounds:
         assert current is None
         assert target is None
 
@@ -188,7 +177,7 @@ def test_next_with_fixed_schedule_advances_one_step():
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=_RecordingAcquisition(),
+        acquisition=PriorSampling(),
         n_initial=8,
         n_rounds=3,  # round 0 + acquisition rounds 1, 2.
         q=1,
@@ -196,12 +185,12 @@ def test_next_with_fixed_schedule_advances_one_step():
         schedule=schedule,
         acquisition_target=AcquisitionTarget.NEXT,
     )
-    run(problem, alg, jax.random.key(1))
+    result = run(problem, alg, jax.random.key(1))
 
-    calls = alg.acquisition.calls
-    assert len(calls) == 2  # only acquisition rounds 1, 2.
-    assert calls[0] == (0.5, 1.0)
-    assert calls[1] == (1.0, 1.0)
+    rounds = _acq_round_states(result)
+    assert len(rounds) == 2  # only acquisition rounds 1, 2.
+    assert rounds[0] == (0.5, 1.0)
+    assert rounds[1] == (1.0, 1.0)
 
 
 # -------------------------------------------------------------------------
@@ -218,7 +207,7 @@ def test_terminal_target_state_is_terminal_for_every_round():
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=_RecordingAcquisition(),
+        acquisition=PriorSampling(),
         n_initial=8,
         n_rounds=3,  # round 0 + acquisition rounds 1, 2.
         q=1,
@@ -226,13 +215,13 @@ def test_terminal_target_state_is_terminal_for_every_round():
         schedule=schedule,
         acquisition_target=AcquisitionTarget.TERMINAL,
     )
-    run(problem, alg, jax.random.key(2))
+    result = run(problem, alg, jax.random.key(2))
 
-    calls = alg.acquisition.calls
-    assert len(calls) == 2
-    for _, target in calls:
+    rounds = _acq_round_states(result)
+    assert len(rounds) == 2
+    for _, target in rounds:
         assert target == 1.0
-    assert [current for current, _ in calls] == [0.5, 1.0]
+    assert [current for current, _ in rounds] == [0.5, 1.0]
 
 
 # -------------------------------------------------------------------------
@@ -245,8 +234,6 @@ def test_default_acquisition_target_preserves_untempered_metrics():
     should yield bit-for-bit identical metrics as the v1.4 baseline.
     Smoke check via runner is exercised by the manual smoke tests; here
     we just confirm the run completes cleanly."""
-    from sabi.acquisitions.random import PriorSampling
-
     problem = gaussian_2d()
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
@@ -269,7 +256,6 @@ def test_via_target_with_next_lookahead_runs_to_completion():
     refit-emulator-at-target-state path. Just verify the run completes
     without error; numerical correctness is covered by the per-scheme
     tests."""
-    from sabi.acquisitions.random import PriorSampling
     from sabi._probpipe_compat import independent_uniform
     from sabi.problems.base import Problem
     from sabi.problems.forms import LogLikPlusPrior
@@ -309,23 +295,3 @@ def test_via_target_with_next_lookahead_runs_to_completion():
     # Acquisition rounds 1, 2 follow.
     assert result.per_round_metrics[1]["target_tempering_state"] == 1.0
     assert result.per_round_metrics[2]["target_tempering_state"] == 1.0  # clamped
-
-
-# -------------------------------------------------------------------------
-# AcquisitionState convenience
-# -------------------------------------------------------------------------
-
-
-def test_acquisition_state_carries_target_tempering_state():
-    """Smoke check the AcquisitionState constructor accepts the new field."""
-    state = AcquisitionState(
-        problem=gaussian_2d(),
-        surrogate_distribution=None,  # type: ignore[arg-type]
-        X=jnp.zeros((1, 2)),
-        Y_raw=jnp.zeros((1,)),
-        Y_train=jnp.zeros((1,)),
-        tempering_state=0.3,
-        target_tempering_state=0.6,
-    )
-    assert state.tempering_state == 0.3
-    assert state.target_tempering_state == 0.6
