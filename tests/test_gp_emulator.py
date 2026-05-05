@@ -238,6 +238,147 @@ def test_tinygp_dispatch_handler_fires_for_append_rows():
     assert out._predict_cache.Xs_train.shape == (19, 2)
 
 
+# --- Hand-computed Cholesky pinning (issue #32) -----------------------------
+#
+# Bit-equivalence between ``_TinyGPCache.build`` and ``append_rows`` (above)
+# catches regressions where one path drifts from the other, but it can't catch
+# bugs where *both* paths share the same flawed math (e.g. a sign flip in the
+# Schur complement). The tests below pin the cache's outputs to values
+# derived independently from the cache's own code path:
+#
+# - Kernel: ``Matern52(scale=1.0)``, ``noise=0``, ``jitter=0``.
+# - Dataset: 1-D inputs ``X = [0.0, 1.0, 2.0]^T`` (column vector,
+#   ``shape=(3, 1)``), targets ``Y = [0.5, -1.0, 2.0]``.
+# - Test point: ``Xt = [0.5]`` (``shape=(1, 1)``).
+#
+# Reference values were computed offline via ``numpy.linalg.cholesky`` +
+# ``scipy.linalg.solve_triangular`` on a hand-built kernel matrix using
+# the closed-form Matern52 expression, NOT via ``jnp.linalg.cholesky``. This
+# keeps the reference path independent of the cache's internal solver.
+#
+# Closed-form Matern52 with scale 1:
+#
+# .. math::
+#     k(d) = \left(1 + \sqrt{5}\, d + \tfrac{5}{3} d^2\right) \exp(-\sqrt{5}\, d).
+#
+# Hand-computed:
+#
+# - ``k(0) = 1``
+# - ``k(0.5) ~ 0.8286491424181253``
+# - ``k(1)   ~ 0.5239941088318203``
+# - ``k(1.5) ~ 0.2831632713397992``
+# - ``k(2)   ~ 0.13866021913850426``
+#
+# Resulting full-fit values:
+#
+# - ``L_sigma`` = ``[[1, 0, 0],
+#                   [k(1), sqrt(1 - k(1)^2), 0],
+#                   [k(2), (k(1) - k(1) k(2)) / sqrt(1 - k(1)^2),
+#                          sqrt(1 - k(2)^2 - ((k(1) - k(1) k(2))/sqrt(1-k(1)^2))^2)]]``
+#   ~ ``[[1, 0, 0], [0.5239941, 0.8517219, 0],
+#         [0.1386602, 0.5299112, 0.8366406]]``
+# - ``alpha`` = ``L_sigma^{-1} Y`` ~ ``[0.5, -1.4817009, 3.2461249]``
+# - ``predict_latent([[0.5]])`` mean ~ ``[-0.5711871]``,
+#   var ~ ``[0.0903663]``.
+
+_HAND_COMPUTED_L = jnp.array(
+    [
+        [1.0, 0.0, 0.0],
+        [0.5239941088318203, 0.8517218876543836, 0.0],
+        [0.13866021913850426, 0.5299112038988257, 0.8366405797061],
+    ],
+    dtype=jnp.float64,
+)
+_HAND_COMPUTED_ALPHA = jnp.array(
+    [0.5, -1.4817008611712585, 3.2461248515413543], dtype=jnp.float64
+)
+_HAND_COMPUTED_MEAN_AT_HALF = jnp.array([-0.5711870801337865], dtype=jnp.float64)
+_HAND_COMPUTED_VAR_AT_HALF = jnp.array([0.09036633090275048], dtype=jnp.float64)
+# 2-point partial-fit values (X = [0, 1], Y = [0.5, -1]) used by the
+# append_rows test as the starting cache.
+_HAND_COMPUTED_L_PARTIAL = jnp.array(
+    [[1.0, 0.0], [0.5239941088318203, 0.8517218876543836]], dtype=jnp.float64
+)
+_HAND_COMPUTED_ALPHA_PARTIAL = jnp.array(
+    [0.5, -1.4817008611712585], dtype=jnp.float64
+)
+
+
+def _cholesky_pinning_dataset():
+    """Inputs/targets/test-point used by all hand-computed Cholesky tests."""
+    X = jnp.array([[0.0], [1.0], [2.0]], dtype=jnp.float64)
+    Y = jnp.array([0.5, -1.0, 2.0], dtype=jnp.float64)
+    Xt = jnp.array([[0.5]], dtype=jnp.float64)
+    return X, Y, Xt
+
+
+def test_tinygp_cache_build_matches_hand_computed_cholesky():
+    """``_TinyGPCache.build`` on a 3-point Matern52 dataset must produce
+    ``L_sigma``, ``alpha``, and ``predict_latent`` outputs that match
+    closed-form values derived independently of the cache's own solver
+    (numpy + scipy on a hand-built kernel matrix). This pins the math
+    against sign-flip / transpose regressions that bit-equivalence
+    against a refit can't catch."""
+    from tinygp import kernels
+
+    from sabi.emulators.tinygp._cache import _TinyGPCache
+
+    X, Y, Xt = _cholesky_pinning_dataset()
+    kernel = kernels.Matern52(scale=1.0)
+    cache = _TinyGPCache.build(kernel, X, Y, noise=0.0, jitter=0.0)
+
+    assert jnp.allclose(cache.L_sigma, _HAND_COMPUTED_L, rtol=0, atol=1e-10)
+    assert jnp.allclose(cache.alpha, _HAND_COMPUTED_ALPHA, rtol=0, atol=1e-10)
+
+    mean, var = cache.predict_latent(Xt)
+    assert jnp.allclose(mean, _HAND_COMPUTED_MEAN_AT_HALF, rtol=0, atol=1e-10)
+    assert jnp.allclose(var, _HAND_COMPUTED_VAR_AT_HALF, rtol=0, atol=1e-10)
+
+
+def test_tinygp_cache_append_rows_matches_hand_computed_cholesky():
+    """Starting from the 2-point partial fit (``X = [0, 1]``,
+    ``Y = [0.5, -1]``) and appending the third row ``X_new = [2]``,
+    ``Y_new = 2``, the augmented cache must equal the from-scratch
+    3-point Cholesky / alpha — pinned to hand-computed reference values
+    (not just to a refit). This catches Schur-complement sign flips,
+    ``L_22`` transposition errors, and residual-update mistakes that
+    bit-equivalence between two flawed paths would absorb."""
+    from tinygp import kernels
+
+    from sabi.emulators.tinygp._cache import _TinyGPCache
+
+    X, Y, Xt = _cholesky_pinning_dataset()
+    kernel = kernels.Matern52(scale=1.0)
+
+    partial = _TinyGPCache.build(
+        kernel, X[:2], Y[:2], noise=0.0, jitter=0.0
+    )
+    # Pin the partial fit too — guards the build path on the prefix
+    # used as input to append_rows.
+    assert jnp.allclose(
+        partial.L_sigma, _HAND_COMPUTED_L_PARTIAL, rtol=0, atol=1e-10
+    )
+    assert jnp.allclose(
+        partial.alpha, _HAND_COMPUTED_ALPHA_PARTIAL, rtol=0, atol=1e-10
+    )
+
+    appended = partial.append_rows(X[2:], Y[2:])
+
+    assert jnp.allclose(
+        appended.L_sigma, _HAND_COMPUTED_L, rtol=0, atol=1e-10
+    )
+    assert jnp.allclose(
+        appended.alpha, _HAND_COMPUTED_ALPHA, rtol=0, atol=1e-10
+    )
+
+    mean, var = appended.predict_latent(Xt)
+    assert jnp.allclose(mean, _HAND_COMPUTED_MEAN_AT_HALF, rtol=0, atol=1e-10)
+    assert jnp.allclose(var, _HAND_COMPUTED_VAR_AT_HALF, rtol=0, atol=1e-10)
+
+
+# --- (end issue #32 hand-computed pinning) ----------------------------------
+
+
 def test_tinygp_dispatch_handler_fires_for_rescale_outputs():
     """``RescaleOutputs(factor=β)`` should rescale the y-scaler in
     O(1); ``predict_mean`` should return β times the original
