@@ -158,6 +158,28 @@ def test_greedy_multi_point_with_constant_liar_min():
     assert not jnp.allclose(batch[0], batch[1], atol=1e-6)
 
 
+def test_candidate_set_optimizer_raises_when_q_exceeds_n_candidates():
+    """q > n_candidates would silently return < q rows; require a clear
+    `ValueError` instead, with `n_candidates` in the message."""
+    state = _state()
+    optimizer = CandidateSetOptimizer(n_candidates=4)
+    acq = ExpectedImprovement(optimizer=optimizer)
+    with pytest.raises(ValueError, match="n_candidates"):
+        optimizer.optimize(acq, state, q=8, key=jax.random.key(0))
+
+
+def test_continuous_multistart_raises_when_q_exceeds_n_starts():
+    """q > n_starts would silently return < q rows; require a clear
+    `ValueError` instead, with `n_starts` in the message."""
+    state = _state()
+    optimizer = ContinuousMultiStartOptimizer(
+        n_starts=2, n_seeding_candidates=16, bfgs_max_steps=10
+    )
+    acq = _ConcaveScore(target=jnp.zeros(2), optimizer=optimizer)
+    with pytest.raises(ValueError, match="n_starts"):
+        optimizer.optimize(acq, state, q=4, key=jax.random.key(0))
+
+
 def test_continuous_multistart_finds_higher_score_than_candidate_set():
     """At matched cost, continuous-multistart should match-or-beat
     candidate-set. We give continuous a strictly smaller seeding budget,
