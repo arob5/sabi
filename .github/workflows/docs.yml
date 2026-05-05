@@ -28,10 +28,10 @@ jobs:
           ref="$(grep -m1 -E '^[^#[:space:]]+' .probpipe-pin || true)"
           if [ -n "$ref" ]; then
             echo "Pinning prob-pipe to: $ref"
-            git clone https://github.com/arob5/prob-pipe.git ../prob-pipe
+            git clone https://github.com/TARPS-group/prob-pipe.git ../prob-pipe
             git -C ../prob-pipe checkout "$ref"
           else
-            git clone --depth 1 https://github.com/arob5/prob-pipe.git ../prob-pipe
+            git clone --depth 1 https://github.com/TARPS-group/prob-pipe.git ../prob-pipe
           fi
 
       - name: Install uv
