@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import pytest
 from probpipe import sample
 from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.distributions.multivariate import MultivariateNormal
@@ -162,3 +163,20 @@ def test_all_benchmark_names_distinct():
         neals_funnel_3d().name,
     }
     assert len(names) == 5
+
+
+def test_benchmark_problem_rejects_empty_name():
+    """A `BenchmarkProblem` constructed with `name=""` must raise — the
+    name is the benchmark's identity (posteriordb invariant), and a
+    nameless validated benchmark cannot be addressed in the suite.
+
+    Built from `gaussian_2d()` so we have a concretely valid
+    target/reference distribution pair to work with.
+    """
+    bp = gaussian_2d()
+    with pytest.raises(ValueError, match="non-empty name"):
+        BenchmarkProblem(
+            target_distribution=bp.target_distribution,
+            reference_distribution=bp.reference_distribution,
+            name="",
+        )
