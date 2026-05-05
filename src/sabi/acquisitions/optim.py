@@ -252,12 +252,8 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                 # Mutate the surrogate_distribution copy so downstream
                 # score calls see the new emulator.
                 old_sp = state.surrogate_distribution
-                if old_sp.emulator is None:
-                    raise ValueError(
-                        "GreedyMultiPointOptimizer requires a non-degenerate "
-                        "emulator; got `surrogate_distribution.emulator=None`."
-                    )
-                new_emulator = old_sp.emulator.fit(new_X, new_Y_train)
+                old_emulator = old_sp.require_emulator("GreedyMultiPointOptimizer")
+                new_emulator = old_emulator.fit(new_X, new_Y_train)
                 new_sp = type(old_sp)(
                     emulator=new_emulator,
                     log_density_form=old_sp.log_density_form,
