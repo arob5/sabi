@@ -18,7 +18,7 @@ def make_acquisition_state(
     """Build an `AcquisitionState` for tests of acquisitions / optimizers / imputers.
 
     Defaults to the validated `gaussian_2d()` benchmark with a fitted
-    `TinyGPEmulator` and a `SurrogateDistribution` wrapping it. Design
+    `TinyGPEmulator` and an `EmulatedDistribution` wrapping it. Design
     points come from `PriorSampler` — the same path used by acquisition
     candidate sets, so the GP is trained on the same support the
     acquisitions will explore.
@@ -32,20 +32,20 @@ def make_acquisition_state(
         seed: PRNG seed for the initial-design draw.
 
     Returns:
-        `AcquisitionState` populated from the fitted SP / design.
+        `AcquisitionState` populated from the fitted emulator-backed SP.
     """
     from sabi.acquisitions.base import AcquisitionState
     from sabi.emulators import TinyGPEmulator
     from sabi.problems.benchmarks import gaussian_2d
     from sabi.sampling import PriorSampler
-    from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+    from sabi.surrogate.surrogate_distribution import EmulatedDistribution
 
     if problem is None:
         problem = gaussian_2d()
     X = PriorSampler().sample(problem, jax.random.key(seed), n)
     Y = problem.target_map(X)
     emulator = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
-    sp = SurrogateDistribution(
+    surrogate_distribution = EmulatedDistribution(
         emulator=emulator,
         log_density_form=problem.log_density_form,
         support=problem.support,
@@ -54,7 +54,7 @@ def make_acquisition_state(
     )
     return AcquisitionState(
         problem=problem,
-        surrogate_distribution=sp,
+        surrogate_distribution=surrogate_distribution,
         X=X,
         Y_raw=Y,
         Y_train=Y,
