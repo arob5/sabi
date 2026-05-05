@@ -134,6 +134,27 @@ def sabi_submit() -> None:
         help="SCC only: call qsub automatically after writing the script.",
     )
     parser.add_argument(
+        "--group-by-experiment",
+        action="store_true",
+        default=False,
+        dest="group_by_experiment",
+        help=(
+            "SCC only: group specs sharing the same non-seed overrides into "
+            "one array task, so all replicates of an experiment run on the "
+            "same node.  Writes groups.tsv alongside the manifest."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        dest="dry_run",
+        help=(
+            "Print what would be dispatched (spec count, override combinations, "
+            "estimated array size) without running anything."
+        ),
+    )
+    parser.add_argument(
         "overrides",
         nargs="*",
         metavar="KEY=VALUE[,VALUE...]",
@@ -153,9 +174,32 @@ def sabi_submit() -> None:
         print("sabi-submit: no run specs generated — check your overrides.", file=sys.stderr)
         sys.exit(1)
 
+    if args.dry_run:
+        _print_dry_run(specs, args)
+        return
+
     print(f"Dispatching {len(specs)} runs via {args.backend}...")
     backend.dispatch(specs)
     print("Done.")
+
+
+def _print_dry_run(specs: list, args: argparse.Namespace) -> None:
+    from sabi.runner.backends import _group_by_experiment
+
+    print(f"DRY RUN — {len(specs)} spec(s), backend={args.backend}")
+    print(f"Output dir: {args.output_dir}")
+    if args.backend == "scc_array":
+        if args.group_by_experiment:
+            _, groups = _group_by_experiment(specs)
+            n_tasks = len(groups)
+            print(f"group_by_experiment=True → {n_tasks} array task(s)")
+        else:
+            import math
+            n_tasks = math.ceil(len(specs) / args.scc_batch_size)
+            print(f"batch_size={args.scc_batch_size} → {n_tasks} array task(s)")
+    print("Specs:")
+    for spec in specs:
+        print(f"  {' '.join(spec.overrides)}  →  {spec.output_dir}")
 
 
 def _build_backend(args: argparse.Namespace) -> RunBackend:
@@ -173,6 +217,7 @@ def _build_backend(args: argparse.Namespace) -> RunBackend:
             modules=tuple(args.scc_modules),
             python_exe=args.scc_python,
             submit=args.submit,
+            group_by_experiment=args.group_by_experiment,
         )
     raise ValueError(f"Unknown backend: {args.backend!r}")  # unreachable
 

@@ -18,6 +18,7 @@ import math
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -148,6 +149,12 @@ class SCCArrayBackend(RunBackend):
     submit:
         When ``True``, call ``qsub qsub_array.sh`` automatically after
         writing the script.  Requires ``qsub`` to be on ``PATH``.
+    group_by_experiment:
+        When ``True``, group specs that share the same non-``seed`` overrides
+        into a single array task, so that all replicates of one experiment run
+        sequentially on the same node.  A companion ``groups.tsv`` is written
+        alongside the manifest so the script knows each task's row range.
+        ``batch_size`` is ignored when this flag is set.
     """
 
     cores: int = 4
@@ -158,6 +165,7 @@ class SCCArrayBackend(RunBackend):
     modules: tuple[str, ...] = field(default_factory=tuple)
     python_exe: str = sys.executable
     submit: bool = False
+    group_by_experiment: bool = False
 
     def dispatch(self, specs: list[RunSpec]) -> None:
         if not specs:
@@ -165,8 +173,16 @@ class SCCArrayBackend(RunBackend):
         sweep_dir = specs[0].output_dir.parent
         sweep_dir.mkdir(parents=True, exist_ok=True)
         (sweep_dir / "logs").mkdir(exist_ok=True)
-        self._write_manifest(specs, sweep_dir)
-        self._write_qsub_script(specs, sweep_dir)
+
+        if self.group_by_experiment:
+            ordered, groups = _group_by_experiment(specs)
+            self._write_manifest(ordered, sweep_dir)
+            self._write_groups_file(groups, sweep_dir)
+            self._write_qsub_script_grouped(groups, sweep_dir)
+        else:
+            self._write_manifest(specs, sweep_dir)
+            self._write_qsub_script(specs, sweep_dir)
+
         if self.submit:
             script_path = sweep_dir / "qsub_array.sh"
             subprocess.run(["qsub", str(script_path)], check=True, cwd=sweep_dir)
@@ -222,3 +238,79 @@ for ROW in $(seq $START $END); do
 done
 """
         (sweep_dir / "qsub_array.sh").write_text(script)
+
+    def _write_groups_file(
+        self, groups: list[list[RunSpec]], sweep_dir: Path
+    ) -> None:
+        """Write groups.tsv: task_id → (start_row, end_row) in the manifest."""
+        groups_path = sweep_dir / "groups.tsv"
+        row = 1
+        with groups_path.open("w") as f:
+            f.write("task_id\tstart_row\tend_row\n")
+            for task_id, group in enumerate(groups, start=1):
+                f.write(f"{task_id}\t{row}\t{row + len(group) - 1}\n")
+                row += len(group)
+
+    def _write_qsub_script_grouped(
+        self, groups: list[list[RunSpec]], sweep_dir: Path
+    ) -> None:
+        """Write qsub_array.sh for group_by_experiment mode.
+
+        Each array task reads its row range from groups.tsv and runs
+        all specs in that range sequentially.
+        """
+        n_array_tasks = len(groups)
+        module_lines = (
+            "\n".join(f"module load {m}" for m in self.modules) if self.modules else ""
+        )
+        mem_per_core = max(1, self.mem_gb // self.cores)
+
+        script = f"""\
+#!/bin/bash
+#$ -N sabi_sweep
+#$ -t 1-{n_array_tasks}
+#$ -pe omp {self.cores}
+#$ -l h_rt={self.walltime}
+#$ -l mem_per_core={mem_per_core}G
+#$ -q {self.queue}
+#$ -j y
+#$ -o {sweep_dir}/logs/
+#$ -cwd
+
+{module_lines}
+
+MANIFEST={sweep_dir}/manifest.tsv
+GROUPS={sweep_dir}/groups.tsv
+
+GROUP_LINE=$(awk -v t="$SGE_TASK_ID" 'NR == t + 1' "$GROUPS")
+START=$(printf '%s' "$GROUP_LINE" | cut -f2)
+END=$(printf '%s' "$GROUP_LINE" | cut -f3)
+
+for ROW in $(seq "$START" "$END"); do
+    LINE=$(awk -v r="$ROW" 'NR == r + 1' "$MANIFEST")
+    OUTPUT_DIR=$(printf '%s' "$LINE" | cut -f2)
+    OVERRIDES=$(printf '%s' "$LINE" | cut -f3)
+    mkdir -p "$OUTPUT_DIR"
+    {self.python_exe} -m sabi.runner hydra.run.dir="$OUTPUT_DIR" $OVERRIDES
+done
+"""
+        (sweep_dir / "qsub_array.sh").write_text(script)
+
+
+def _group_by_experiment(
+    specs: list[RunSpec],
+) -> tuple[list[RunSpec], list[list[RunSpec]]]:
+    """Group specs sharing the same non-seed overrides.
+
+    Returns a tuple of:
+    - *ordered*: specs sorted so all seeds of each experiment are consecutive.
+    - *groups*: the same specs partitioned into per-experiment lists,
+      preserving the order in which experiments first appear in *specs*.
+    """
+    group_map: dict[tuple[str, ...], list[RunSpec]] = defaultdict(list)
+    for spec in specs:
+        key = tuple(o for o in spec.overrides if not o.startswith("seed="))
+        group_map[key].append(spec)
+    groups = list(group_map.values())
+    ordered = [s for group in groups for s in group]
+    return ordered, groups

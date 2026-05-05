@@ -223,6 +223,68 @@ def test_scc_backend_manifest_still_one_row_per_spec_with_batching(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# SCCArrayBackend — group_by_experiment
+# ---------------------------------------------------------------------------
+
+
+def _make_grouped_specs(sweep_dir: Path) -> list[RunSpec]:
+    """2 problems × 3 seeds = 6 specs; used to test experiment grouping."""
+    return [
+        RunSpec(
+            overrides=(f"problem={p}", f"seed={s}"),
+            output_dir=sweep_dir / f"problem-{p}_seed-{s}",
+        )
+        for p in ("gaussian_2d", "banana")
+        for s in (0, 1, 2)
+    ]
+
+
+def test_group_by_experiment_array_size(tmp_path):
+    # 2 experiments × 3 seeds → 2 array tasks.
+    specs = _make_grouped_specs(tmp_path)
+    SCCArrayBackend(group_by_experiment=True).dispatch(specs)
+    script = (tmp_path / "qsub_array.sh").read_text()
+    assert "#$ -t 1-2" in script
+
+
+def test_group_by_experiment_writes_groups_file(tmp_path):
+    specs = _make_grouped_specs(tmp_path)
+    SCCArrayBackend(group_by_experiment=True).dispatch(specs)
+    groups_path = tmp_path / "groups.tsv"
+    assert groups_path.exists()
+    lines = groups_path.read_text().splitlines()
+    assert lines[0] == "task_id\tstart_row\tend_row"
+    assert len(lines) == 3  # header + 2 groups
+
+
+def test_group_by_experiment_groups_cover_all_rows(tmp_path):
+    specs = _make_grouped_specs(tmp_path)  # 6 specs total
+    SCCArrayBackend(group_by_experiment=True).dispatch(specs)
+    groups_lines = (tmp_path / "groups.tsv").read_text().splitlines()[1:]
+    row_counts = sum(
+        int(line.split("\t")[2]) - int(line.split("\t")[1]) + 1
+        for line in groups_lines
+    )
+    assert row_counts == 6
+
+
+def test_group_by_experiment_script_uses_groups_file(tmp_path):
+    specs = _make_grouped_specs(tmp_path)
+    SCCArrayBackend(group_by_experiment=True).dispatch(specs)
+    script = (tmp_path / "qsub_array.sh").read_text()
+    assert "groups.tsv" in script
+    assert "for ROW in $(seq" in script
+
+
+def test_group_by_experiment_manifest_unchanged(tmp_path):
+    # Manifest always has one row per spec regardless of grouping.
+    specs = _make_grouped_specs(tmp_path)  # 6 specs
+    SCCArrayBackend(group_by_experiment=True).dispatch(specs)
+    lines = (tmp_path / "manifest.tsv").read_text().splitlines()
+    assert len(lines) == 1 + 6
+
+
+# ---------------------------------------------------------------------------
 # LocalParallelBackend — failure handling
 # ---------------------------------------------------------------------------
 
