@@ -1,12 +1,13 @@
 """Sampling-based acquisitions.
 
 `PriorSampling` draws the next batch directly from a `BatchSampler`
-(default `PriorSampler`, which samples from `problem.prior`). It does not
-have a score; it is not a `PointwiseScoredAcquisition`. Useful as a
-baseline and as one component of a future `MixtureSampling` acquisition
-(v1.5+).
+(default `PriorSampler`, which samples from `problem.prior`). It does
+not have a score; it is not a `PointwiseScoredAcquisition`. Useful as
+a baseline and as one component of a future `MixtureSampling`
+acquisition.
 
-v1.5 will add `PosteriorThompsonSampling` and `MixtureSampling` here.
+`PosteriorThompsonSampling` and `MixtureSampling` are tracked as
+follow-ups.
 """
 
 from __future__ import annotations

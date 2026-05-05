@@ -141,9 +141,9 @@ class RoundState:
 def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     """Run the sequential emulator-based inference loop.
 
-    State is explicit and flat. The emulator is re-fit each round on the
-    full `(X, Y_train)` (no incremental updates in v1.2; design doc lists
-    `condition_on`-backed updates as a v2 item).
+    State is explicit and flat. The emulator is re-fit each round on
+    the full `(X, Y_train)` unless a registered cheap-update handler
+    accepts the round's plan (see `sabi.emulators.dispatch`).
 
     Tempering integration: each round, the `tempering_scheme` produces
     an `IntermediateTarget` at the round's state. ``Y_train`` is derived

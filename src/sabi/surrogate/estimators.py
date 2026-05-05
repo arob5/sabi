@@ -8,20 +8,20 @@ For Dirac surrogate posteriors (`WeightedEmpiricalRandomMeasure`), all
 sensible deterministic estimators coincide and reduce to the underlying
 empirical — there's nothing random to estimate.
 
-v1.2 ships:
+Currently shipped:
 
 - `expected_target(sp)` — plug the surrogate's predictive mean into the
-  log-density form. Renamed from "plug-in mean" because it's the
-  expectation of the target map under the surrogate distribution. Biased
-  in the GP-pushforward case (the plug-in is not the same as the
-  unbiased expected posterior `mean(rm)`).
+  log-density form. The expectation of the target map under the
+  surrogate distribution. Biased in the GP-pushforward case (the
+  plug-in is not the same as the unbiased expected posterior
+  `mean(rm)`).
 
 The unbiased expected posterior is exposed via `mean(sp)` (handled by
-ProbPipe's `mean` op via `SupportsMean`). For Dirac SPs this returns the
-inner empirical; for the GP-pushforward case there is no general
-`SupportsMean` implementation in v1.2 and `mean(gp_sp)` raises.
+ProbPipe's `mean` op via `SupportsMean`). For Dirac SPs this returns
+the inner empirical; for the GP-pushforward case there is no general
+`SupportsMean` implementation today and `mean(gp_sp)` raises.
 
-Future estimators (NOT in v1.2) — see `docs/probpipe_issues.md` for the
+Future estimators — see `docs/probpipe_issues.md` for the
 partial-pushforward primitive that would generalize their construction.
 """
 

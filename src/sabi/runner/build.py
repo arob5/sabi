@@ -1,8 +1,8 @@
 """Factories mapping resolved Hydra configs to sabi objects.
 
-v0 uses plain dispatch on a `name` field rather than hydra.utils.instantiate so
-that the entry-point code is easy to read; we can migrate to `_target_` strings
-in v1 once the component tree stabilizes.
+Uses plain dispatch on a `name` field rather than `hydra.utils.instantiate`
+so that the entry-point code is easy to read; migration to `_target_`
+strings is a follow-up once the component tree stabilizes.
 """
 
 from __future__ import annotations
@@ -130,8 +130,8 @@ def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
     if name == "greedy":
         # Greedy wraps an inner optimizer. Inner config under `cfg.inner`.
         inner = _build_optimizer(cfg.get("inner", None))
-        # Imputer wiring is left minimal in v1.4: kriging_believer is the
-        # default; richer config support lands when v1.5 needs it.
+        # Imputer wiring is left minimal: kriging_believer is the
+        # default; richer config support lands when a benchmark needs it.
         return GreedyMultiPointOptimizer(inner=inner)
     raise ValueError(f"Unknown acquisition.optimizer.name={name!r}.")
 

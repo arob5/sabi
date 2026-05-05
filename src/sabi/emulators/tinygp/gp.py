@@ -6,20 +6,19 @@ update dispatch. ``TinyGPEmulator`` itself owns:
 
 - The data-adaptive heuristic for the lengthscale (median nearest-
   neighbor distance × ``ls_factor``, floored). No optimization at
-  fit time; a principled hyperparameter search is deferred to v1.4+.
+  fit time; a principled hyperparameter search is a follow-up.
 - A :class:`_TinyGPCache` populated at fit time. The cache exposes
   the same ``predict_latent`` / ``predict_latent_joint`` /
   ``append_rows`` surface as the gpjax cache, so the
   ``GPEmulator`` base treats them interchangeably.
 
-After the v1.5 migration to ``GPEmulator``, ``TinyGPEmulator``
-supports joint-input covariance via ``predict_covariance(X,
+Supports joint-input covariance via ``predict_covariance(X,
 joint_inputs=True)`` and fixed-hyperparameter conditioning via
 ``condition_on(X_new, Y_new)``.
 
-v1.2 supports ``X.shape == (n,) + input_shape`` only (no extra
-leading batch axes). Add vmap-over-extra-batch support in v1.5+ if
-needed.
+Currently supports ``X.shape == (n,) + input_shape`` only (no extra
+leading batch axes); a vmap-over-extra-batch extension is a follow-up
+if a benchmark needs it.
 """
 
 from __future__ import annotations
@@ -57,7 +56,8 @@ class TinyGPEmulator(GPEmulator):
 
     Constructor args:
         input_shape: input dimensionality.
-        output_shape: must be ``()`` (scalar output) in v1.2.
+        output_shape: must be ``()`` (scalar output) — multi-output
+            is a follow-up.
         name: optional emulator name (used for repr).
         ls_factor: multiplier on the median nearest-neighbor distance
             for the data-adaptive lengthscale.

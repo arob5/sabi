@@ -2,11 +2,8 @@
 
 An `IntermediateTarget`'s ``output_transform`` is the rule for turning
 cached raw evaluations of the *base* target ``f`` into training values
-``Y_train`` for the round's tempered target ``f_state``. Historically
-this was a bare callable ``(state, X, Y_raw) -> Y_train``; this module
-replaces that with a small structured value-type hierarchy.
-
-A structured `OutputTransform` knows two things:
+``Y_train`` for the round's tempered target ``f_state``. The structured
+`OutputTransform` value-type hierarchy knows two things:
 
 1. **How to apply itself.** ``apply(state, X, Y_raw) -> Y_train`` (and
    ``__call__`` delegating, so existing call sites read unchanged).

@@ -44,8 +44,8 @@ Concrete schemes:
 
 - `NoTempering`: identity on both axes. The intermediate is just the
   base target distribution wrapped with ``state=state``. Default.
-- (Step 4 will add) `LikelihoodTemperingViaForm` and
-  `LikelihoodTemperingViaTarget`.
+- `LikelihoodTemperingViaForm` and `LikelihoodTemperingViaTarget` (in
+  ``sabi.tempering.likelihood``).
 """
 
 from __future__ import annotations

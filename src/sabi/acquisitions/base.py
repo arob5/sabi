@@ -11,13 +11,12 @@ families:
    greedy multi-point with fantasy imputation).
 2. **Sampling-style** (e.g. `PriorSampling`) — picks the batch by
    drawing from a distribution (the prior, the current posterior
-   estimate, a mixture, etc.). v1.4 ships only `PriorSampling`;
-   posterior Thompson sampling and mixture sampling land in v1.5+.
+   estimate, a mixture, etc.). Currently ships only `PriorSampling`;
+   posterior Thompson sampling and mixture sampling are follow-ups.
 3. **Batch-scored** (`BatchScoredAcquisition`) — provides a scalar
    `score_batch(X, state)` over a joint `q`-batch. q-EI, max-min
-   entropy, etc. Not implemented in v1.4; the abstraction is
-   structured to slot in a parallel `BatchOptimizer` hierarchy when
-   this lands (v1.5+).
+   entropy, etc. Not implemented yet; the abstraction is structured
+   to slot in a parallel `BatchOptimizer` hierarchy when this lands.
 
 The acquisition sees the current `SurrogateDistribution` (carrying the
 round's emulator and log-density form) plus an `AcquisitionState`
@@ -127,10 +126,9 @@ class AcquisitionState:
       ``problem.target_map``. Always present, regardless of any
       tempering scheme.
     - ``Y_train``: the values the round's emulator was actually trained
-      on. Under no tempering this equals ``Y_raw``. Under the upcoming
-      tempering schemes (Step 3+) this may be a state-dependent
-      transformation (e.g., ``lambda * Y_raw`` for likelihood tempering
-      via target).
+      on. Under no tempering this equals ``Y_raw``. Under tempering
+      schemes (e.g., `LikelihoodTemperingViaTarget`) this may be a
+      state-dependent transformation such as ``beta * Y_raw``.
 
     Most acquisitions only care about ``Y_train`` (it's what's
     consistent with ``state.surrogate_distribution.emulator``'s training

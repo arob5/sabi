@@ -128,9 +128,9 @@ class DSPGPEmulator(GPEmulator):
     and the multi-restart MAP fit.
 
     Constructor args:
-        input_shape: ``(d,)`` — input dimensionality. Multi-output
-            not supported in v1.2.
-        output_shape: must be ``()`` (scalar output) in v1.2.
+        input_shape: ``(d,)`` — input dimensionality.
+        output_shape: must be ``()`` (scalar output) — multi-output is
+            a follow-up.
         name: optional emulator name (used for repr).
         kernel: ``"rbf"`` or ``"matern52"``. Default ``"rbf"`` matches
             Hvarfner et al. 2024.
@@ -179,7 +179,7 @@ class DSPGPEmulator(GPEmulator):
     ):
         if output_shape != ():
             raise ValueError(
-                f"DSPGPEmulator (v1.2) is scalar-output only; "
+                f"DSPGPEmulator is scalar-output only; "
                 f"got output_shape={output_shape}."
             )
         if len(input_shape) != 1:

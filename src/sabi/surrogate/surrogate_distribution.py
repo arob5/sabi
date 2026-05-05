@@ -27,21 +27,21 @@ analog — so `SurrogateDistribution` is the surrogate of the *true*
 posterior, distinct from the emulator that approximates the target
 function.
 
-Protocol opt-ins (v1.2):
+Protocol opt-ins:
 
 - `SupportsRandomUnnormalizedLogProb`: returns a thin `RandomFunction`
   whose `__call__(X)` gets the emulator's predictive at `X` and pushes
   it through the form via `pushforward_marginal` (closed-form for
   Gaussian-affine cases, MC empirical via ProbPipe broadcasting otherwise).
   Requires a non-None `emulator`.
-- `SupportsSampling`: NOT implemented on the base class in v1.2 (sabi's
-  `Emulator` doesn't yet expose function-trajectory sampling — v1.6).
+- `SupportsSampling`: NOT implemented on the base class (sabi's
+  `Emulator` doesn't yet expose function-trajectory sampling).
   Subclasses with degenerate emulator (e.g. `WeightedEmpiricalRandomMeasure`)
   may implement it.
-- `SupportsMean` (the unbiased "expected posterior"): NOT implemented on
-  the base class (no closed-form expected posterior; MC backend is a v2
-  item). Degenerate subclasses may implement it (the inner empirical IS
-  the mean for the Dirac case).
+- `SupportsMean` (the unbiased "expected posterior"): NOT implemented
+  on the base class (no closed-form expected posterior; MC backend is
+  future work). Degenerate subclasses may implement it (the inner
+  empirical IS the mean for the Dirac case).
 - `SupportsRandomLogProb`: NOT implemented on the base class
   (normalization intractable). Degenerate subclasses may implement it.
 """

@@ -123,11 +123,11 @@ def _scale_cov_to_output_space(
       ``(n*prod(out), n*prod(out))``: needs the full Kronecker; a
       plain elementwise multiply is *wrong*.
 
-    GPEmulator subclasses are scalar-output in v1, so this helper
-    currently asserts that invariant and uses the simple scalar
-    broadcast. Multi-output support will need to fan out to the
-    per-mode logic above. Keeping the helper centralized here so the
-    change is a single-file edit when that lands.
+    GPEmulator subclasses are scalar-output today, so this helper
+    asserts that invariant and uses the simple scalar broadcast.
+    Multi-output support will need to fan out to the per-mode logic
+    above. Keeping the helper centralized here so the change is a
+    single-file edit when that lands.
     """
     if output_shape != ():
         # Defensive: the constructors of all GPEmulator subclasses

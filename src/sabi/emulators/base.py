@@ -12,9 +12,9 @@ Concrete Gaussian emulators inherit from both `Emulator` and
 `GaussianRandomFunction` (diamond inheritance over `ArrayRandomFunction`,
 resolved by Python's C3 MRO). See `sabi.emulators.tinygp.gp.TinyGPEmulator`.
 
-Forward-look (post-v1.2): ProbPipe's `condition_on(prior_rf, X=X, y=Y)` is
-the natural way to build a posterior random function from training data.
-The `fit` method here is a v1.x bridge that captures the same idea without
+Forward-look: ProbPipe's `condition_on(prior_rf, X=X, y=Y)` is the
+natural way to build a posterior random function from training data.
+The `fit` method here is a bridge that captures the same idea without
 requiring sabi to wire ProbPipe's full conditioning machinery yet.
 
 Naming convention: in sabi, "emulator" is reserved specifically for the
@@ -35,7 +35,7 @@ Sabi emulators report the **latent** posterior. Concretely:
   covariance of ``f(X)``, with no observation noise added.
 
 Rationale: sabi targets sequential surrogate-based Bayesian inference
-on (in v1) deterministic targets. The GP's noise term is primarily a
+on deterministic targets. The GP's noise term is primarily a
 Cholesky-stability regularizer rather than a model of real measurement
 noise. Acquisition functions (EI, etc.) and pushforward-based posterior
 estimators want the *latent* uncertainty — the uncertainty over the
@@ -50,7 +50,7 @@ Backends that have a fitted observation-noise variance expose it
 there (e.g. ``DSPGPEmulator`` returns the squared MAP-fitted
 ``obs_stddev``); backends without one return ``None``.
 
-When v2's noisy-target work lands and the latent vs. observation
+When noisy-target work lands and the latent vs. observation
 distinction becomes user-facing, this module will grow a separate
 ``predict_obs_*`` family rather than overloading the existing
 ``predict_*`` methods.

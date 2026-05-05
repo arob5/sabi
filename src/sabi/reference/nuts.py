@@ -2,19 +2,13 @@
 
 Given a `TargetDistribution` (defined by a target function + form +
 prior + support), call `condition_on(target_dist, ...)`. ProbPipe's
-inference registry auto-dispatches to `tfp_nuts` (post-PR-#151, MCMC
-methods accept `SupportsUnnormalizedLogProb`).
+inference registry auto-dispatches to `tfp_nuts` since the
+distribution satisfies `SupportsUnnormalizedLogProb`.
 
 Diagnostics (R-hat, ESS, divergence count) are computed via ArviZ on
 the returned `ApproximateDistribution.inference_data` and embedded in
 the saved metadata. The regen script enforces minimum quality
 thresholds before allowing the artifact to land.
-
-Historical note: prior to the `TargetDistribution` introduction, this
-module carried a local `_ProblemTargetDistribution` shim that wrapped
-the problem's components into a Distribution. That shim is now
-redundant — `TargetDistribution` is itself the right Distribution and
-goes directly into `condition_on`.
 """
 
 from __future__ import annotations
