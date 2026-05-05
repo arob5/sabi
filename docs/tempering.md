@@ -291,13 +291,11 @@ default `CURRENT` (no look-ahead), `NEXT` (one-step look-ahead),
 
 ## 7. References
 
-- Source: [`sabi/tempering/`](../src/sabi/tempering/) (`base.py`,
-  `likelihood.py`, `schedule.py`).
-- Per-state intermediate: [`IntermediateTarget`](../src/sabi/target_distribution.py).
-- Loop integration: [`sabi/algorithms/loop.py`](../src/sabi/algorithms/loop.py).
-- Tests: [`tests/test_tempering.py`](../tests/test_tempering.py),
-  [`tests/test_likelihood_tempering.py`](../tests/test_likelihood_tempering.py),
-  [`tests/test_acquisition_target.py`](../tests/test_acquisition_target.py).
+- Source: `sabi.tempering` (`base.py`, `likelihood.py`, `schedule.py`).
+- Per-state intermediate: `sabi.target_distribution.IntermediateTarget`.
+- Loop integration: `sabi.algorithms.loop`.
+- Tests: `tests/test_tempering.py`, `tests/test_likelihood_tempering.py`,
+  `tests/test_acquisition_target.py`.
 - Open issues:
   - [#4](https://github.com/arob5/sabi/issues/4) — `update_emulator`
     cheap-path dispatch (avoid full refits in Case 2).

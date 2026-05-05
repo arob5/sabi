@@ -16,6 +16,10 @@ multirun/
 wandb/
 reference_posteriors/cache/
 
+# Sphinx docs site build output and autodoc2-generated API pages
+docs/_build/
+docs/api/
+
 # Scratch files (commit message buffers etc.)
 .git_msg.tmp
 *.tmp

@@ -45,6 +45,49 @@ If a class's behavior depends on a contract documented elsewhere
 point to it rather than restating. Docstrings should add what's
 specific; the shared contract lives in one place.
 
+### Update tutorials and concepts when behavior changes
+
+PRs that modify or introduce user-facing functionality must update the
+corresponding tutorial(s) and concepts page(s). "User-facing" means
+anything visible on the docs site: a public class or function
+signature, a flag a user might set in a Hydra config, a default that
+affects behavior, or a shape contract. The auto-generated API
+reference picks up docstring changes for free — but tutorial prose,
+example notebooks, and concepts pages do not. If the change makes
+existing prose wrong or stale, fix it in the same PR.
+
+If the change is genuinely tutorial-irrelevant (purely internal
+refactor, perf-only change, test-only edit), say so in the PR
+description so reviewers don't have to guess.
+
+### Notebook outputs are cached
+
+Tutorial notebooks under `docs/` ship with their cell outputs already
+populated. CI builds the docs with `nb_execution_mode = "off"` (see
+`docs/conf.py`), so the rendered site reflects whatever outputs the
+notebook was last committed with — Sphinx does not re-execute. This
+is a temporary trade-off: sabi tracks in-flight ProbPipe APIs that
+are not always present on the public `TARPS-group/prob-pipe` `main`,
+so a fresh CI clone cannot reliably import sabi yet. Once ProbPipe
+stabilizes (post-overhaul), `nb_execution_mode` will flip back to
+`"force"` and CI will catch staleness automatically.
+
+Until then, **authors who edit a notebook's code cells, or who change
+sabi behavior that any notebook exercises, must re-execute the
+affected notebooks locally before committing**:
+
+```bash
+./scripts/python -m jupyter nbconvert \
+  --to notebook \
+  --execute \
+  --inplace \
+  docs/getting_started.ipynb
+```
+
+Then `git add` the notebook with its refreshed outputs as part of the
+same PR. Reviewers should treat absent / stale outputs the same as
+broken docs.
+
 ## Coding conventions
 
 ### Modern Python type hints
@@ -162,12 +205,6 @@ When reviewing a PR that touches `run()` or a similar loop, ask:
 algorithm by reading only the loop body?" If the answer is no, the
 change needs to push complexity into helpers before it lands.
 
-> **Status note:** the current `run()` body does not yet satisfy this
-> invariant — the refactor lives in [issue #20](https://github.com/arob5/sabi/issues/20).
-> The invariant applies going forward: new contributions to the loop
-> should not make the situation worse, and the issue-#20 refactor is
-> the canonical example of how to bring it into compliance.
-
 ## Tests
 
 - One test file per source module where practical (`tests/test_loop.py`
@@ -175,8 +212,7 @@ change needs to push complexity into helpers before it lands.
   `acquisitions/optim.py`, etc.).
 - Prefer `scripts/python -m pytest` over the bare `pytest` command —
   the wrapper threads `PYTHONPATH` for the worktree + ProbPipe pin.
-  See [`.claude/worktree_probpipe.md`](../.claude/worktree_probpipe.md)
-  for why.
+  See `.claude/worktree_probpipe.md` for why.
 - Numerical assertions: pick tolerances that survive seed-dependent
   variance with the configured `n_initial` / `n_rounds` / sample
   budgets. A 5% slack on a top-level metric is usually right; tighter

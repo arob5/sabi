@@ -1,0 +1,83 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # sabi's pyproject.toml resolves `probpipe` from `../prob-pipe`
+      # (sibling clone, editable). Mirror that in CI by cloning prob-pipe
+      # next to the sabi checkout. Honors `.probpipe-pin` if it pins a
+      # specific ref; otherwise tracks main.
+      - name: Check out prob-pipe as sibling clone
+        run: |
+          ref="$(grep -m1 -E '^[^#[:space:]]+' .probpipe-pin || true)"
+          if [ -n "$ref" ]; then
+            echo "Pinning prob-pipe to: $ref"
+            git clone https://github.com/TARPS-group/prob-pipe.git ../prob-pipe
+            git -C ../prob-pipe checkout "$ref"
+          else
+            git clone --depth 1 https://github.com/TARPS-group/prob-pipe.git ../prob-pipe
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync deps (docs + dev + probpipe + gpjax)
+        run: uv sync --extra docs --extra dev --extra probpipe --extra gpjax
+
+      # Notebook execution is intentionally disabled in CI; myst-nb renders
+      # the cached cell outputs committed alongside the notebook. See
+      # docs/conf.py and docs/contributing.md for why and the refresh
+      # workflow authors should follow locally.
+      - name: Build docs site
+        run: uv run sphinx-build -W -b html docs docs/_build/html
+
+      - name: Upload site artifact for Pages deploy (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+      # Plain artifact so PR reviewers can download a zip of the rendered
+      # site from the Actions UI. Unzip → open index.html locally.
+      - name: Upload site artifact for PR preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: docs/_build/html
+          retention-days: 14
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
