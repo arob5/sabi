@@ -4,17 +4,16 @@ The simplest non-trivial random measure: zero variance over inner-distribution
 draws, with the inner distribution being a `NumericEmpiricalDistribution`
 weighted by `softmax(log_weights)`.
 
-Conceptually this is a `SurrogateDistribution` whose underlying emulator is
-degenerate — there's no random function, the design points carry the
-posterior structure directly. Implemented as a `SurrogateDistribution`
-subclass with `emulator=None`, so the algorithm loop and acquisitions
-see one unified type.
+Sibling of `EmulatedDistribution` under `SurrogateDistribution` (per
+``docs/design.md §4.5``): both extend the abstract base
+`SurrogateDistribution`, neither inherits from the other. The design
+points carry the posterior structure directly — there is no underlying
+emulator and no carried log-density form (the form's role ends at
+construction, when `log_weights` is computed from `(X, Y)`).
 
-In sabi this serves as a no-emulator baseline for the loop — the loop's
+In sabi this serves as the no-emulator baseline for the loop. The loop's
 factory applies a `LogDensityForm` to `(X, Y)` to compute `log_weights`,
-then hands the resulting `(X, log_weights)` to this class. The class
-itself does NOT carry the form (the form's role ends once weights are
-computed; `log_density_form` is `None` on the resulting SP).
+then hands the resulting `(X, log_weights)` to this class.
 
 Tracked for promotion to ProbPipe — see `docs/probpipe_issues.md`:
 "`WeightedEmpiricalRandomMeasure` as a ProbPipe primitive".
@@ -43,10 +42,11 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
 
     A draw from this random measure is always the same
     `NumericEmpiricalDistribution` over `(X, log_weights)`. Implements
-    the full `NumericRandomMeasure` protocol surface via the underlying
-    empirical and Dirac shims. As a `SurrogateDistribution` subclass, it
-    reports `emulator=None` and `log_density_form=None` (the form was
-    consumed at construction time to compute the weights).
+    the full `NumericRandomMeasure` protocol surface (`SupportsMean`,
+    `SupportsSampling`, `SupportsRandomLogProb`,
+    `SupportsRandomUnnormalizedLogProb`) via the underlying empirical
+    and Dirac shims. Sibling of `EmulatedDistribution`; carries no
+    emulator and no form.
 
     Args:
         X: design points, shape `(n,) + input_shape`.
@@ -82,18 +82,28 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
                 f"log_weights must have shape ({X.shape[0]},), "
                 f"got {tuple(log_weights.shape)}."
             )
+        if support is None:
+            raise ValueError(
+                "WeightedEmpiricalRandomMeasure requires a non-None `support`."
+            )
         self._X = X
         self._log_weights = log_weights
-        # Initialize the SurrogateDistribution base with a degenerate
-        # emulator (None) and no form (consumed into log_weights).
-        super().__init__(
-            emulator=None,
-            log_density_form=None,
-            support=support,
-            input_shape=input_shape,
-            prior=None,
-            name=name or type(self).__name__,
-        )
+        self._support = support
+        self._input_shape = tuple(input_shape)
+        # Direct super-init: the abstract `SurrogateDistribution` takes
+        # only `name`. No bogus `emulator=None, log_density_form=None`
+        # kwargs (those didn't belong on the base in the first place).
+        super().__init__(name=name or type(self).__name__)
+
+    # NumericRandomMeasure abstract properties
+
+    @property
+    def inner_support(self) -> Constraint:
+        return self._support
+
+    @property
+    def inner_event_shape(self) -> tuple[int, ...]:
+        return self._input_shape
 
     @property
     def X(self) -> Array:
@@ -111,7 +121,7 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
             name=f"{self.name}_empirical",
         )
 
-    # Protocol implementations (overrides of SurrogateDistribution defaults) -----
+    # Protocol implementations -----------------------------------------------
 
     def _mean(self) -> Distribution:
         return self.inner_distribution

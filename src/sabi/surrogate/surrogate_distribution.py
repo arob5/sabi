@@ -1,33 +1,48 @@
-"""`SurrogateDistribution` — random measure induced by an emulator of the
-target map composed with a `LogDensityForm`.
+"""`SurrogateDistribution` and concrete subtypes.
 
-A `SurrogateDistribution` is a ProbPipe `NumericRandomMeasure[Array]`:
-every emulator function realization defines a deterministic posterior,
-and the random measure is the distribution over these. Decoupled from
-`Problem`: takes math primitives directly (`support`, `prior`,
-`log_density_form`, `input_shape`); the loop pulls those from the
-`Problem` per round.
+`SurrogateDistribution` is sabi's abstract base for surrogate posteriors —
+random measures over `Distribution[Array]`s on the parameter space. Two
+concrete realizations live in this package, both inheriting from this base:
 
-`emulator=None` denotes a Dirac surrogate posterior, concretely realized
-by `WeightedEmpiricalRandomMeasure`. The base class raises
-`NotImplementedError` from emulator-touching protocol methods on a
-None emulator; degenerate subclasses opt in by overriding.
+- `EmulatedDistribution` (this module) — emulator-backed; pushes the
+  emulator's predictive through a `LogDensityForm`. Every emulator
+  function realization defines a deterministic posterior; the random
+  measure is the distribution over these.
+- `WeightedEmpiricalRandomMeasure` (in `weighted_empirical.py`) —
+  degenerate / Dirac at a weighted empirical of design points. No
+  emulator, no form.
 
-Protocol opt-ins:
+The two subtypes are **siblings**, not parent/child. Code that needs to
+operate on either uses `SurrogateDistribution` as the type. Code that
+needs an emulator narrows to `EmulatedDistribution` via `isinstance` and
+raises if the runtime type is the no-emulator baseline.
+
+See ``docs/design.md §4.5`` for the architectural framing and
+``docs/notation.md`` for the "emulator" vs. "surrogate" naming
+convention.
+
+Protocol opt-ins
+----------------
+
+`EmulatedDistribution` opts into:
 
 - `SupportsRandomUnnormalizedLogProb`: returns a thin `RandomFunction`
   that pushes the emulator's predictive at `X` through the form via
-  `pushforward_marginal`. Requires a non-None `emulator`.
-- `SupportsSampling`, `SupportsMean`, `SupportsRandomLogProb`: not
-  implemented on the base; degenerate subclasses may implement them.
+  `pushforward_marginal`.
 
-See ``docs/design.md`` §4.5 and ``docs/notation.md`` for the full
-"emulator" vs. "surrogate" naming convention and the architectural
-context.
+It does NOT opt into `SupportsSampling`, `SupportsMean`, or
+`SupportsRandomLogProb` on the base class — function-trajectory
+sampling, unbiased expected-posterior, and normalized random log-prob
+require machinery (MC backends, normalization estimates) deferred to
+later milestones.
+
+`WeightedEmpiricalRandomMeasure` opts into all four protocols via the
+underlying `NumericEmpiricalDistribution` and Dirac shims.
 """
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from typing import ClassVar
 
 from jax import Array
@@ -42,23 +57,49 @@ from sabi.problems.forms import LogDensityForm
 
 
 class SurrogateDistribution(NumericRandomMeasure):
-    """Random measure induced by an emulator of the target map composed
-    with a `LogDensityForm`.
+    """Abstract base for sabi's surrogate posteriors.
+
+    Two concrete subtypes:
+
+    - :class:`EmulatedDistribution` — emulator-backed; pushes the
+      emulator's predictive through a :class:`LogDensityForm`.
+    - :class:`WeightedEmpiricalRandomMeasure` — degenerate (Dirac) at
+      a weighted empirical of design points; no emulator, no form.
+
+    Code that needs to operate on either subtype types against this
+    base. Code that needs an emulator narrows to
+    `EmulatedDistribution` via ``isinstance`` and raises if the
+    runtime type is wrong.
+    """
+
+    @property
+    @abstractmethod
+    def inner_support(self) -> Constraint:
+        """Support shared by every inner `Distribution[Array]`'s samples."""
+
+    @property
+    @abstractmethod
+    def inner_event_shape(self) -> tuple[int, ...]:
+        """`event_shape` shared by the inner distributions."""
+
+
+class EmulatedDistribution(SurrogateDistribution):
+    """Surrogate posterior obtained by composing an emulator's predictive
+    distribution with a `LogDensityForm` via pushforward.
+
+    For each emulator function realization, the form defines a
+    deterministic posterior; the random measure is the distribution
+    over these posteriors as the emulator's random function varies.
 
     Args:
         emulator: a fittable `Emulator` (an `ArrayRandomFunction` over
-            the parameter space). Provides the predictive distribution at
-            query points via `__call__(X, joint_inputs, joint_outputs)`.
-            ``None`` denotes a degenerate surrogate posterior — see the
-            module docstring; subclasses must override the relevant
-            protocol methods for this to work.
+            the parameter space). Provides the predictive distribution
+            at query points via `__call__(X, joint_inputs, joint_outputs)`.
         log_density_form: composes the emulator's outputs with the prior
-            into an unnormalized log-posterior. ``None`` is allowed for
-            degenerate subclasses where the form is consumed at
-            construction time (e.g. `WeightedEmpiricalRandomMeasure`).
+            into an unnormalized log-posterior.
         support: `Constraint` over the parameter space.
         input_shape: shape of one parameter-space point. Must equal
-            `emulator.input_shape` when ``emulator is not None``.
+            `emulator.input_shape`.
         prior: optional `Distribution`; required by forms that access it
             (`LogLikPlusPrior`, `ForwardModel`).
         name: optional ProbPipe distribution name.
@@ -66,17 +107,27 @@ class SurrogateDistribution(NumericRandomMeasure):
 
     def __init__(
         self,
-        emulator: Emulator | None,
-        log_density_form: LogDensityForm | None,
+        emulator: Emulator,
+        log_density_form: LogDensityForm,
         *,
         support: Constraint,
         input_shape: tuple[int, ...],
         prior: Distribution | None = None,
         name: str | None = None,
     ):
+        if emulator is None:
+            raise ValueError(
+                "EmulatedDistribution requires a non-None `emulator`. "
+                "Use `WeightedEmpiricalRandomMeasure` for the no-emulator "
+                "baseline."
+            )
+        if log_density_form is None:
+            raise ValueError(
+                "EmulatedDistribution requires a non-None `log_density_form`."
+            )
         if support is None:
-            raise ValueError("SurrogateDistribution requires a non-None `support`.")
-        if emulator is not None and tuple(input_shape) != tuple(emulator.input_shape):
+            raise ValueError("EmulatedDistribution requires a non-None `support`.")
+        if tuple(input_shape) != tuple(emulator.input_shape):
             raise ValueError(
                 f"input_shape={tuple(input_shape)} must match "
                 f"emulator.input_shape={tuple(emulator.input_shape)}."
@@ -99,74 +150,45 @@ class SurrogateDistribution(NumericRandomMeasure):
         return self._input_shape
 
     @property
-    def emulator(self) -> Emulator | None:
+    def emulator(self) -> Emulator:
         return self._emulator
 
     @property
-    def log_density_form(self) -> LogDensityForm | None:
+    def log_density_form(self) -> LogDensityForm:
         return self._log_density_form
 
     @property
     def prior(self) -> Distribution | None:
         return self._prior
 
-    # Helpers -----------------------------------------------------------------
-
-    def require_emulator(self, caller: str) -> Emulator:
-        """Return `self.emulator`, raising `ValueError` if it is `None`.
-
-        Used by code paths (e.g. emulator-touching acquisitions, fantasy
-        imputers) that cannot operate on the degenerate / no-emulator
-        baseline. Centralizes the "...requires a non-degenerate emulator"
-        message so consumers don't each hand-roll their own.
-
-        Args:
-            caller: short name of the caller (typically a class name like
-                ``"ExpectedImprovement"``); included in the error message
-                so users can see who rejected the degenerate surrogate.
-        """
-        if self._emulator is None:
-            raise ValueError(
-                f"{caller} requires a non-degenerate emulator; got "
-                f"`surrogate_distribution.emulator=None` (the no-emulator "
-                f"baseline, e.g. WeightedEmpiricalRandomMeasure). Switch "
-                f"to a real emulator or use a sampling-style acquisition "
-                f"like PriorSampling."
-            )
-        return self._emulator
-
     # Protocol implementation -------------------------------------------------
 
     def _random_unnormalized_log_prob(self) -> RandomFunction:
-        if self._emulator is None:
-            raise NotImplementedError(
-                f"{type(self).__name__}._random_unnormalized_log_prob: "
-                "emulator is None (degenerate SurrogateDistribution); "
-                "subclass must override this method."
-            )
-        return _SurrogateDistributionPushforward(self)
+        return _EmulatedDistributionPushforward(self)
 
 
-class _SurrogateDistributionPushforward(RandomFunction):
-    """The random unnormalized log-density of a `SurrogateDistribution`.
+class _EmulatedDistributionPushforward(RandomFunction):
+    """The random unnormalized log-density of an `EmulatedDistribution`.
 
     `__call__(X)` evaluates the emulator's predictive at `X` (a
-    `Distribution`) and pushes it through the SP's `log_density_form` via
-    `pushforward_marginal`. Joint flags pass through to the emulator
-    (so callers can request joint over inputs / outputs when the
-    emulator supports it).
+    `Distribution`) and pushes it through the surrogate's
+    `log_density_form` via `pushforward_marginal`. Joint flags pass
+    through to the emulator (so callers can request joint over inputs /
+    outputs when the emulator supports it).
     """
 
     _sampling_cost: ClassVar[str] = "low"
     _preferred_orchestration: ClassVar[str | None] = None
 
-    def __init__(self, sp: SurrogateDistribution):
-        self._sp = sp
-        super().__init__(name=f"{sp.name}_random_unnormalized_log_prob")
+    def __init__(self, surrogate_distribution: EmulatedDistribution):
+        self._surrogate_distribution = surrogate_distribution
+        super().__init__(
+            name=f"{surrogate_distribution.name}_random_unnormalized_log_prob"
+        )
 
     @property
     def input_shape(self) -> tuple[int, ...]:
-        return self._sp.inner_event_shape
+        return self._surrogate_distribution.inner_event_shape
 
     @property
     def output_shape(self) -> tuple[int, ...]:
@@ -179,14 +201,14 @@ class _SurrogateDistributionPushforward(RandomFunction):
         joint_inputs: bool = False,
         joint_outputs: bool = False,
     ) -> Distribution:
-        sp = self._sp
+        surrogate_distribution = self._surrogate_distribution
         # The emulator validates X against its own input_shape contract.
-        input_dist = sp.emulator(
+        input_dist = surrogate_distribution.emulator(
             X, joint_inputs=joint_inputs, joint_outputs=joint_outputs
         )
         return pushforward_marginal(
             input_dist,
-            sp.log_density_form,
+            surrogate_distribution.log_density_form,
             X=X,
-            prior=sp.prior,
+            prior=surrogate_distribution.prior,
         )

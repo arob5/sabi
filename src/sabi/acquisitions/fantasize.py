@@ -29,6 +29,7 @@ from jax import Array
 from probpipe import mean
 
 from sabi.acquisitions.base import AcquisitionState
+from sabi.surrogate.surrogate_distribution import EmulatedDistribution
 
 
 class FantasyImputer(ABC):
@@ -67,8 +68,14 @@ class KrigingBeliever(FantasyImputer):
     """
 
     def impute(self, x_pending: Array, state: AcquisitionState) -> Array:
-        emulator = state.surrogate_distribution.require_emulator("KrigingBeliever")
-        pred = emulator(x_pending)
+        surrogate_distribution = state.surrogate_distribution
+        if not isinstance(surrogate_distribution, EmulatedDistribution):
+            raise ValueError(
+                f"KrigingBeliever requires an emulator-backed "
+                f"`EmulatedDistribution`; got "
+                f"{type(surrogate_distribution).__name__}."
+            )
+        pred = surrogate_distribution.emulator(x_pending)
         return jnp.asarray(mean(pred))
 
 

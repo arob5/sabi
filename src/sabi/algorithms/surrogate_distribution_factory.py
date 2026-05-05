@@ -5,13 +5,18 @@ A `SurrogateDistributionFactory` packages the per-round
 `SurrogateDistribution`. Two factories ship today:
 
 - `emulator_pushforward_factory` (default): wraps a fitted emulator and
-  the round's log-density form into a `SurrogateDistribution` that
+  the round's log-density form into an `EmulatedDistribution` that
   pushes the emulator's predictive through the form via
   `pushforward_marginal`.
 - `weighted_empirical_factory`: the no-emulator baseline. Applies the
   form to `(X, Y)` directly to compute log-weights, returning a
-  `WeightedEmpiricalRandomMeasure` (a `SurrogateDistribution` subclass
-  with `emulator=None`).
+  `WeightedEmpiricalRandomMeasure` (a sibling of `EmulatedDistribution`
+  under the abstract `SurrogateDistribution` base).
+
+Both factories share a single signature including `emulator`. The
+weighted-empirical factory ignores its `emulator` argument; the loop
+always has one to hand, so requiring the kwarg keeps the protocol
+uniform across factories.
 
 The `Algorithm` carries its choice of factory via
 `Algorithm.surrogate_distribution_factory`.
@@ -26,7 +31,10 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint
 
 from sabi.emulators.base import Emulator
-from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import (
+    EmulatedDistribution,
+    SurrogateDistribution,
+)
 from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.forms import LogDensityForm
 
@@ -35,12 +43,12 @@ class SurrogateDistributionFactory(Protocol):
     """Builds the round's `SurrogateDistribution` from the emulator state and
     the math primitives (support, input_shape, prior, log_density_form).
 
-    Returns a `SurrogateDistribution`. The default factory
-    (`emulator_pushforward_factory`) builds an SP that pushes the
-    fitted emulator's predictive through the form. The
-    `weighted_empirical_factory` builds the no-emulator baseline
-    (`WeightedEmpiricalRandomMeasure`, a `SurrogateDistribution` subclass
-    with ``emulator=None``).
+    Returns a `SurrogateDistribution` (the abstract base shared by
+    `EmulatedDistribution` and `WeightedEmpiricalRandomMeasure`). The
+    default factory (`emulator_pushforward_factory`) builds an
+    `EmulatedDistribution` that pushes the fitted emulator's predictive
+    through the form. `weighted_empirical_factory` builds the
+    no-emulator baseline (`WeightedEmpiricalRandomMeasure`).
 
     `X` and `Y` are the design set; `log_density_form` is the form for
     the round (possibly tempered). `emulator` may be ignored by
@@ -72,24 +80,24 @@ def emulator_pushforward_factory(
     input_shape: tuple[int, ...],
     prior: Distribution | None,
     problem_name: str | None = None,
-) -> SurrogateDistribution:
-    """Default factory: build the `SurrogateDistribution` that pushes the
+) -> EmulatedDistribution:
+    """Default factory: build the `EmulatedDistribution` that pushes the
     fitted emulator's predictive distribution through ``log_density_form``.
 
-    The pushforward itself lives inside `SurrogateDistribution`
+    The pushforward itself lives inside `EmulatedDistribution`
     (`_random_unnormalized_log_prob` / `pushforward_marginal`); this
     factory just wires the round's emulator, form, and problem-side
-    primitives into a fresh `SurrogateDistribution` instance.
+    primitives into a fresh `EmulatedDistribution` instance.
 
     Emulator-agnostic — works for any `Emulator` subclass, not just GPs.
     """
-    return SurrogateDistribution(
+    return EmulatedDistribution(
         emulator=emulator,
         log_density_form=log_density_form,
         support=support,
         input_shape=input_shape,
         prior=prior,
-        name=f"surrogate_distribution_{problem_name}" if problem_name else None,
+        name=f"emulated_distribution_{problem_name}" if problem_name else None,
     )
 
 

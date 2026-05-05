@@ -113,13 +113,14 @@ def resolve_state(
 class AcquisitionState:
     """Per-round bundle passed to acquisitions. All fields are read-only.
 
-    The round's `SurrogateDistribution` carries the emulator fit on the
-    current design data plus the log-density form for the round.
-    Acquisitions that need a real (non-degenerate) emulator should check
-    ``state.surrogate_distribution.emulator is None`` — this is the case
-    when the loop is running the weighted-empirical baseline (a
-    `WeightedEmpiricalRandomMeasure`, which is a `SurrogateDistribution`
-    subclass with ``emulator=None``).
+    The round's `SurrogateDistribution` is one of two concrete subtypes:
+    `EmulatedDistribution` (emulator-backed; carries the round's fitted
+    emulator and log-density form) or `WeightedEmpiricalRandomMeasure`
+    (the no-emulator baseline; sibling under the abstract base).
+    Acquisitions that need a real emulator narrow
+    ``state.surrogate_distribution`` to `EmulatedDistribution` via
+    ``isinstance`` and raise if the runtime type is the no-emulator
+    baseline.
 
     Two `Y` arrays are exposed:
 

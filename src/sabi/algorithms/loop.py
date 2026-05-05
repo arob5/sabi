@@ -508,12 +508,15 @@ def _run_acquisition(
     round_state: RoundState,
     key: Array,
 ) -> tuple[Array, Array]:
-    """Build the acquisition-state SP, pick the next batch, evaluate the target.
+    """Build the acquisition-state surrogate distribution, pick the
+    next batch, evaluate the target.
 
-    The pre-round `SurrogateDistribution` wraps the acquisition-state
-    emulator + form. The weighted-empirical factory produces an SP with
-    ``emulator=None``; acquisitions that need a real emulator check
-    ``state.surrogate_distribution.emulator is None`` and raise.
+    The pre-round `SurrogateDistribution` is either an
+    `EmulatedDistribution` (carrying the round's emulator + form) or a
+    `WeightedEmpiricalRandomMeasure` (the no-emulator baseline).
+    Acquisitions that need a real emulator narrow to
+    `EmulatedDistribution` via ``isinstance`` and raise if the runtime
+    type is wrong.
 
     Returns ``(x_new, y_new_raw)``: the new batch and its raw target
     evaluations. ``y_new_raw`` is at the *un-transformed* base target —
@@ -692,7 +695,7 @@ def _eval_round(
 
     # Lazy current-state SP+estimate.
     def _current() -> tuple[SurrogateDistribution, Distribution]:
-        sp = _build_surrogate_distribution(
+        surrogate_distribution = _build_surrogate_distribution(
             algorithm.surrogate_distribution_factory,
             emulator=emulator,
             X=X,
@@ -700,14 +703,14 @@ def _eval_round(
             log_density_form=current_intermediate.log_density_form,
             problem=problem,
         )
-        return sp, algorithm.estimator(sp)
+        return surrogate_distribution, algorithm.estimator(surrogate_distribution)
 
     # Lazy terminal-state SP+estimate. Uses `target.log_density_form`
     # (un-tempered base) with the round's emulator + Y_train at the
     # current state — matches the previous "final eval" semantics
     # (preserved for `MetricTarget.TERMINAL` mid-loop).
     def _terminal() -> tuple[SurrogateDistribution, Distribution]:
-        sp = _build_surrogate_distribution(
+        surrogate_distribution = _build_surrogate_distribution(
             algorithm.surrogate_distribution_factory,
             emulator=emulator,
             X=X,
@@ -715,7 +718,7 @@ def _eval_round(
             log_density_form=target.log_density_form,
             problem=problem,
         )
-        return sp, algorithm.estimator(sp)
+        return surrogate_distribution, algorithm.estimator(surrogate_distribution)
 
     return _evaluate_scheduled_metrics(
         scheduled=scheduled_firing,
@@ -745,7 +748,7 @@ def _run_metrics_against_pair(
     tempering_state: Any,
     round_idx: int,
 ) -> dict[str, float]:
-    """Run each metric in `metrics` against a fixed `(sp, estimate, metric_target)`.
+    """Run each metric in `metrics` against a fixed `(surrogate_distribution, estimate, metric_target)`.
 
     Builds a `MetricContext` per metric, invokes the metric under its
     pre-split PRNG key, applies the scheduled metric's suffix, and
@@ -826,11 +829,11 @@ def _evaluate_scheduled_metrics(
             factory = factories[target]
         except KeyError as e:
             raise ValueError(f"Unknown MetricTarget: {target!r}") from e
-        sp, estimate = factory()
+        surrogate_distribution, estimate = factory()
         out = _run_metrics_against_pair(
             metrics=[s for s, _ in pairs],
             keys=[mkey for _, mkey in pairs],
-            surrogate_distribution=sp,
+            surrogate_distribution=surrogate_distribution,
             estimate=estimate,
             metric_target=target,
             problem=problem,

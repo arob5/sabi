@@ -1,8 +1,8 @@
 """Free-function deterministic posterior estimators.
 
-Each estimator is a function `(sp) -> Distribution[Array]` that returns a
-concrete deterministic posterior approximation. Type dispatch on `sp`
-matches ProbPipe's op-dispatch style.
+Each estimator is a function `(surrogate_distribution) -> Distribution[Array]`
+that returns a concrete deterministic posterior approximation. Type
+dispatch on the runtime type matches ProbPipe's op-dispatch style.
 
 For Dirac surrogate posteriors (`WeightedEmpiricalRandomMeasure`), all
 sensible deterministic estimators coincide and reduce to the underlying
@@ -10,16 +10,17 @@ empirical — there's nothing random to estimate.
 
 Currently shipped:
 
-- `expected_target(sp)` — plug the surrogate's predictive mean into the
-  log-density form. The expectation of the target map under the
-  surrogate distribution. Biased in the GP-pushforward case (the
-  plug-in is not the same as the unbiased expected posterior
-  `mean(rm)`).
+- `expected_target(surrogate_distribution)` — plug the surrogate's
+  predictive mean into the log-density form. The expectation of the
+  target map under the surrogate distribution. Biased in the
+  emulator-pushforward case (the plug-in is not the same as the
+  unbiased expected posterior `mean(rm)`).
 
-The unbiased expected posterior is exposed via `mean(sp)` (handled by
-ProbPipe's `mean` op via `SupportsMean`). For Dirac SPs this returns
-the inner empirical; for the GP-pushforward case there is no general
-`SupportsMean` implementation today and `mean(gp_sp)` raises.
+The unbiased expected posterior is exposed via
+`mean(surrogate_distribution)` (handled by ProbPipe's `mean` op via
+`SupportsMean`). For the Dirac case this returns the inner empirical;
+for the emulator-pushforward case there is no general `SupportsMean`
+implementation today and `mean(emulated_distribution)` raises.
 
 Future estimators — see `docs/probpipe_issues.md` for the
 partial-pushforward primitive that would generalize their construction.
@@ -37,14 +38,17 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
-from sabi.surrogate.surrogate_distribution import SurrogateDistribution
+from sabi.surrogate.surrogate_distribution import (
+    EmulatedDistribution,
+    SurrogateDistribution,
+)
 from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
 from sabi.problems.forms import LogDensityForm
 from sabi.emulators.base import Emulator
 
 
 def expected_target(
-    sp,
+    surrogate_distribution: SurrogateDistribution,
     *,
     sampler: str | None = None,
     sampler_kwargs: dict[str, Any] | None = None,
@@ -53,33 +57,35 @@ def expected_target(
     """Return the deterministic posterior obtained by plugging the
     surrogate's predictive mean into the log-density form.
 
-    Type dispatch on `sp`:
+    Type dispatch on the runtime type of ``surrogate_distribution``:
 
-    - `WeightedEmpiricalRandomMeasure` (Dirac): returns the inner
-      empirical (which IS the deterministic target). `sampler` /
-      `sampler_kwargs` are ignored.
-    - `SurrogateDistribution`: returns an `_ExpectedTargetDistribution`
-      whose `_unnormalized_log_prob` is the form composed with the
-      surrogate's predictive mean. Sampling delegates to ProbPipe
-      `condition_on` (auto-dispatched MCMC). `sampler` selects a
-      specific method (e.g. `"tfp_nuts"`); `sampler_kwargs` forwards
-      arguments like `num_results`, `num_warmup`.
+    - :class:`WeightedEmpiricalRandomMeasure` (Dirac): returns the
+      inner empirical (which IS the deterministic target). ``sampler``
+      / ``sampler_kwargs`` are ignored.
+    - :class:`EmulatedDistribution`: returns an
+      ``_ExpectedTargetDistribution`` whose ``_unnormalized_log_prob``
+      is the form composed with the emulator's predictive mean.
+      Sampling delegates to ProbPipe ``condition_on`` (auto-dispatched
+      MCMC). ``sampler`` selects a specific method (e.g.
+      ``"tfp_nuts"``); ``sampler_kwargs`` forwards arguments like
+      ``num_results``, ``num_warmup``.
     """
-    if isinstance(sp, WeightedEmpiricalRandomMeasure):
-        return sp.inner_distribution
-    if isinstance(sp, SurrogateDistribution):
+    if isinstance(surrogate_distribution, WeightedEmpiricalRandomMeasure):
+        return surrogate_distribution.inner_distribution
+    if isinstance(surrogate_distribution, EmulatedDistribution):
         return _ExpectedTargetDistribution(
-            emulator=sp.emulator,
-            log_density_form=sp.log_density_form,
-            prior=sp.prior,
-            input_shape=sp.inner_event_shape,
-            support=sp.inner_support,
+            emulator=surrogate_distribution.emulator,
+            log_density_form=surrogate_distribution.log_density_form,
+            prior=surrogate_distribution.prior,
+            input_shape=surrogate_distribution.inner_event_shape,
+            support=surrogate_distribution.inner_support,
             sampler=sampler,
             sampler_kwargs=sampler_kwargs,
-            name=name or f"expected_target_{sp.name}",
+            name=name or f"expected_target_{surrogate_distribution.name}",
         )
     raise TypeError(
-        f"expected_target: unsupported posterior type {type(sp).__name__}."
+        f"expected_target: unsupported posterior type "
+        f"{type(surrogate_distribution).__name__}."
     )
 
 
