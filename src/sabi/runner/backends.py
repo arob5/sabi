@@ -145,6 +145,9 @@ class SCCArrayBackend(RunBackend):
         Python executable path to use inside the qsub script.  Defaults to
         the interpreter running ``sabi-submit``, which is correct when the
         cluster nodes share the same file system mount.
+    submit:
+        When ``True``, call ``qsub qsub_array.sh`` automatically after
+        writing the script.  Requires ``qsub`` to be on ``PATH``.
     """
 
     cores: int = 4
@@ -154,6 +157,7 @@ class SCCArrayBackend(RunBackend):
     batch_size: int = 1
     modules: tuple[str, ...] = field(default_factory=tuple)
     python_exe: str = sys.executable
+    submit: bool = False
 
     def dispatch(self, specs: list[RunSpec]) -> None:
         if not specs:
@@ -163,6 +167,9 @@ class SCCArrayBackend(RunBackend):
         (sweep_dir / "logs").mkdir(exist_ok=True)
         self._write_manifest(specs, sweep_dir)
         self._write_qsub_script(specs, sweep_dir)
+        if self.submit:
+            script_path = sweep_dir / "qsub_array.sh"
+            subprocess.run(["qsub", str(script_path)], check=True, cwd=sweep_dir)
 
     def _write_manifest(self, specs: list[RunSpec], sweep_dir: Path) -> None:
         manifest_path = sweep_dir / "manifest.tsv"

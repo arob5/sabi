@@ -128,6 +128,12 @@ def sabi_submit() -> None:
         ),
     )
     parser.add_argument(
+        "--submit",
+        action="store_true",
+        default=False,
+        help="SCC only: call qsub automatically after writing the script.",
+    )
+    parser.add_argument(
         "overrides",
         nargs="*",
         metavar="KEY=VALUE[,VALUE...]",
@@ -166,6 +172,7 @@ def _build_backend(args: argparse.Namespace) -> RunBackend:
             batch_size=args.scc_batch_size,
             modules=tuple(args.scc_modules),
             python_exe=args.scc_python,
+            submit=args.submit,
         )
     raise ValueError(f"Unknown backend: {args.backend!r}")  # unreachable
 
