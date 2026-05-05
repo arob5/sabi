@@ -56,10 +56,17 @@ autodoc2_docstring_parser_regexes = [
     (r".*", "rst"),
 ]
 
-nb_execution_mode = "force"
-nb_execution_timeout = 300
-nb_execution_raise_on_error = True
-nb_execution_show_tb = True
+# Notebooks ship with their cell outputs already populated; CI renders the
+# cached outputs without re-executing. Reason: sabi tracks in-flight ProbPipe
+# APIs that are not always present on TARPS-group/prob-pipe@main, so a fresh
+# CI clone of prob-pipe cannot import sabi reliably yet. Switch back to
+# "force" once the ProbPipe overhaul lands and sabi pins to a stable
+# release. Tracked in https://github.com/arob5/sabi/issues/49.
+#
+# Authors who edit notebook code or who change sabi behavior visible in a
+# notebook MUST re-execute the notebook locally before committing — see
+# docs/contributing.md ("Notebook outputs are cached").
+nb_execution_mode = "off"
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),

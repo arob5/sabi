@@ -45,17 +45,10 @@ jobs:
       - name: Sync deps (docs + dev + probpipe + gpjax)
         run: uv sync --extra docs --extra dev --extra probpipe --extra gpjax
 
-      # Surface the actual Python traceback if the Getting Started notebook
-      # fails — sphinx-build / myst-nb tend to swallow it. Runs the notebook
-      # the same way myst-nb will, but with stderr in the build log.
-      - name: Smoke-test the Getting Started notebook
-        run: |
-          uv run --with nbconvert jupyter nbconvert \
-            --to notebook \
-            --execute docs/getting_started.ipynb \
-            --output /tmp/getting_started_executed.ipynb \
-            --ExecutePreprocessor.timeout=300
-
+      # Notebook execution is intentionally disabled in CI; myst-nb renders
+      # the cached cell outputs committed alongside the notebook. See
+      # docs/conf.py and docs/contributing.md for why and the refresh
+      # workflow authors should follow locally.
       - name: Build docs site
         run: uv run sphinx-build -W -b html docs docs/_build/html
 

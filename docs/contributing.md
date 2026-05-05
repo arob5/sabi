@@ -60,6 +60,34 @@ If the change is genuinely tutorial-irrelevant (purely internal
 refactor, perf-only change, test-only edit), say so in the PR
 description so reviewers don't have to guess.
 
+### Notebook outputs are cached
+
+Tutorial notebooks under `docs/` ship with their cell outputs already
+populated. CI builds the docs with `nb_execution_mode = "off"` (see
+`docs/conf.py`), so the rendered site reflects whatever outputs the
+notebook was last committed with — Sphinx does not re-execute. This
+is a temporary trade-off: sabi tracks in-flight ProbPipe APIs that
+are not always present on the public `TARPS-group/prob-pipe` `main`,
+so a fresh CI clone cannot reliably import sabi yet. Once ProbPipe
+stabilizes (post-overhaul), `nb_execution_mode` will flip back to
+`"force"` and CI will catch staleness automatically.
+
+Until then, **authors who edit a notebook's code cells, or who change
+sabi behavior that any notebook exercises, must re-execute the
+affected notebooks locally before committing**:
+
+```bash
+./scripts/python -m jupyter nbconvert \
+  --to notebook \
+  --execute \
+  --inplace \
+  docs/getting_started.ipynb
+```
+
+Then `git add` the notebook with its refreshed outputs as part of the
+same PR. Reviewers should treat absent / stale outputs the same as
+broken docs.
+
 ## Coding conventions
 
 ### Modern Python type hints
