@@ -14,7 +14,7 @@ from sabi.problems.base import Problem
 from sabi.problems.forms import Identity
 from sabi.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import NoTempering, TemperingScheme
-from sabi.tempering.schedule import FixedSchedule, UntemperedSchedule
+from sabi.tempering.schedule import FixedSchedule, TemperingSchedule, UntemperedSchedule
 
 
 def _box_prior():
@@ -151,6 +151,44 @@ def test_fixed_schedule_accepts_non_scalar_states():
 def test_fixed_schedule_rejects_empty():
     with pytest.raises(ValueError):
         FixedSchedule(states=())
+
+
+# -------------------------------------------------------------------------
+# TemperingSchedule.terminal_state default fallback
+# -------------------------------------------------------------------------
+
+
+def test_terminal_state_default_success_path_for_converging_subclass():
+    """A subclass that overrides only `at` (and clamps past-the-end to a
+    terminal state) gets a working `terminal_state()` for free via the
+    base default, which probes `at(10**9)`."""
+
+    class _ConvergingSchedule(TemperingSchedule):
+        """Returns a non-terminal state for round 0, terminal thereafter."""
+
+        def at(self, round_idx: int):
+            if round_idx == 0:
+                return 0.5, False
+            return 1.0, True
+
+    sched = _ConvergingSchedule()
+    # The override is omitted — the base default kicks in.
+    assert sched.terminal_state() == 1.0
+
+
+def test_terminal_state_default_raise_path_for_nonconverging_subclass():
+    """A subclass whose `at` never returns `is_terminal_state=True` causes
+    the base default to raise `NotImplementedError`."""
+
+    class _NeverTerminalSchedule(TemperingSchedule):
+        """Always returns `(state, False)` — never converges to terminal."""
+
+        def at(self, round_idx: int):
+            return float(round_idx), False
+
+    sched = _NeverTerminalSchedule()
+    with pytest.raises(NotImplementedError, match="did not"):
+        sched.terminal_state()
 
 
 # -------------------------------------------------------------------------

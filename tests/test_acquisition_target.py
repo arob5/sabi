@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import pytest
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
-from sabi.acquisitions.base import AcquisitionTarget
+from sabi.acquisitions.base import AcquisitionTarget, resolve_state
 from sabi.algorithms import Algorithm, run
 from sabi.emulators import TinyGPEmulator
 from sabi.problems.benchmarks import gaussian_2d
@@ -54,6 +54,69 @@ def test_default_terminal_state_probes_via_large_round_idx():
     # Bypass the override and call the base implementation.
     base_terminal = TemperingSchedule.terminal_state(sched)
     assert base_terminal == 1.0
+
+
+# -------------------------------------------------------------------------
+# resolve_state unit tests — direct, no loop.
+# -------------------------------------------------------------------------
+
+
+def test_resolve_state_current_returns_current_state():
+    """`CURRENT` ignores the schedule and returns `current_state` verbatim."""
+    schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
+    out = resolve_state(
+        AcquisitionTarget.CURRENT, schedule, round_idx=0, current_state=0.1
+    )
+    assert out == 0.1
+
+
+def test_resolve_state_next_advances_one_round():
+    """`NEXT` queries `schedule.at(round_idx + 1)`."""
+    schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
+    out = resolve_state(
+        AcquisitionTarget.NEXT, schedule, round_idx=0, current_state=0.1
+    )
+    assert out == 0.5
+
+
+def test_resolve_state_next_clamps_at_last_round():
+    """At the last round, `NEXT` queries past-the-end of the schedule;
+    built-in schedules clamp to the terminal entry, so the resolved
+    state must equal `schedule.terminal_state()`."""
+    schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
+    last_round = len(schedule.states) - 1  # 2: the terminal round.
+    out = resolve_state(
+        AcquisitionTarget.NEXT,
+        schedule,
+        round_idx=last_round,
+        current_state=schedule.at(last_round)[0],
+    )
+    assert out == schedule.terminal_state()
+    assert out == 1.0
+
+
+def test_resolve_state_next_clamps_for_untempered_schedule():
+    """`UntemperedSchedule` always returns `(None, True)` — `NEXT` past the
+    end still resolves to the schedule's terminal state (None)."""
+    schedule = UntemperedSchedule()
+    out = resolve_state(
+        AcquisitionTarget.NEXT, schedule, round_idx=99, current_state=None
+    )
+    assert out is None
+    assert out == schedule.terminal_state()
+
+
+def test_resolve_state_terminal_returns_terminal_state():
+    """`TERMINAL` returns `schedule.terminal_state()` regardless of round."""
+    schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
+    for round_idx in (0, 1, 2, 5):
+        out = resolve_state(
+            AcquisitionTarget.TERMINAL,
+            schedule,
+            round_idx=round_idx,
+            current_state=0.1,
+        )
+        assert out == schedule.terminal_state()
 
 
 # -------------------------------------------------------------------------
