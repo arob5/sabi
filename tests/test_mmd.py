@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from sabi.metrics.mmd import median_heuristic_bandwidth, mmd2_unbiased, mmd_rbf
+from sabi.metrics.mmd import MMD, median_heuristic_bandwidth, mmd2_unbiased, mmd_rbf
 
 
 def test_mmd2_small_for_same_distribution():
@@ -65,6 +65,32 @@ def test_mmd2_unbiased_on_independent_halves_is_near_zero():
     X1, X2 = X_full[:500], X_full[500:]
     mmd2 = float(mmd2_unbiased(X1, X2))
     assert abs(mmd2) < 5e-3
+
+
+def test_mmd2_unbiased_rejects_zero_bandwidth():
+    """h = 0 produces inf in `1 / (2 h²)`; require an explicit error."""
+    X = jax.random.normal(jax.random.key(0), shape=(20, 2))
+    Y = jax.random.normal(jax.random.key(1), shape=(20, 2))
+    with pytest.raises(ValueError, match="bandwidth"):
+        mmd2_unbiased(X, Y, bandwidth=0.0)
+
+
+def test_mmd2_unbiased_rejects_negative_bandwidth():
+    """Negative h produces a negative `1 / (2 h²)` only via sign of h
+    (h² is positive), but a negative bandwidth has no kernel-theoretic
+    meaning; require an explicit error."""
+    X = jax.random.normal(jax.random.key(0), shape=(20, 2))
+    Y = jax.random.normal(jax.random.key(1), shape=(20, 2))
+    with pytest.raises(ValueError, match="bandwidth"):
+        mmd2_unbiased(X, Y, bandwidth=-1.0)
+
+
+def test_mmd_dataclass_rejects_non_positive_bandwidth():
+    """`MMD(bandwidth=...)` should validate eagerly in `__post_init__`."""
+    with pytest.raises(ValueError, match="bandwidth"):
+        MMD(bandwidth=-1.0)
+    with pytest.raises(ValueError, match="bandwidth"):
+        MMD(bandwidth=0.0)
 
 
 def test_mmd_rbf_clamps_negative_unbiased_to_zero():

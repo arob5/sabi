@@ -92,6 +92,12 @@ class CandidateSetOptimizer(PointwiseOptimizer):
     candidate_sampler: BatchSampler = field(default_factory=PriorSampler)
 
     def optimize(self, acq, state, q, key):
+        if q > self.n_candidates:
+            raise ValueError(
+                f"q ({q}) exceeds n_candidates ({self.n_candidates}); "
+                f"cannot return more picks than candidates scored. Increase "
+                f"`n_candidates` (or decrease `q`)."
+            )
         key_cand, _ = jax.random.split(key)
         candidates = self.candidate_sampler.sample(
             state.problem, key_cand, self.n_candidates
@@ -140,6 +146,12 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
     seed_sampler: BatchSampler = field(default_factory=PriorSampler)
 
     def optimize(self, acq, state, q, key):
+        if q > self.n_starts:
+            raise ValueError(
+                f"q ({q}) exceeds n_starts ({self.n_starts}); cannot return "
+                f"more picks than BFGS seeds. Increase `n_starts` (or "
+                f"decrease `q`)."
+            )
         if self.n_seeding_candidates < self.n_starts:
             raise ValueError(
                 f"n_seeding_candidates ({self.n_seeding_candidates}) must be "
