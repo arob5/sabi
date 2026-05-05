@@ -191,19 +191,44 @@ class TargetDistribution(NumericRecordDistribution):
 
         `value` may be a single point of shape ``input_shape`` (the
         primary contract; ProbPipe MCMC dispatches via this path) or a
-        batch of shape ``(n,) + input_shape``. Detected by shape;
-        single-point uses ``target_single`` + form's per-point hook,
+        batch of shape ``(n,) + input_shape``. Detected by ``ndim`` —
+        previously by shape equality, which misidentified ``(n, k)``
+        arrays as single points when ``input_shape == (k,)`` and
+        ``n == k``.
+
+        Single-point uses ``target_single`` + form's per-point hook;
         batched uses ``target_map`` + the form's batched call.
+
+        Raises:
+            ValueError: when ``value.ndim`` matches neither the
+                single-point rank ``len(input_shape)`` nor the batched
+                rank ``1 + len(input_shape)``.
         """
         x = jnp.asarray(value)
-        if x.shape == self._input_shape:
+        ndim_single = len(self._input_shape)
+        if x.ndim == ndim_single:
+            if x.shape != self._input_shape:
+                raise ValueError(
+                    f"_unnormalized_log_prob: single-point input expects "
+                    f"shape {self._input_shape}, got {tuple(x.shape)}."
+                )
             y = self._target_single(x)
             # Use the form's per-point hook to avoid vmap overhead on a
             # single-point call.
             return self._log_density_form._call_single(x, y, prior=self._prior)
-        # Batched (n,) + input_shape: use the form's public batched call.
-        y = self._target_map(x)
-        return self._log_density_form(x, y, prior=self._prior)
+        if x.ndim == ndim_single + 1:
+            if x.shape[1:] != self._input_shape:
+                raise ValueError(
+                    f"_unnormalized_log_prob: batched input expects shape "
+                    f"(n,) + {self._input_shape}, got {tuple(x.shape)}."
+                )
+            y = self._target_map(x)
+            return self._log_density_form(x, y, prior=self._prior)
+        raise ValueError(
+            f"_unnormalized_log_prob: expected ndim {ndim_single} (single "
+            f"point) or {ndim_single + 1} (batched), got ndim={x.ndim} "
+            f"(shape={tuple(x.shape)})."
+        )
 
 
 class IntermediateTarget(TargetDistribution):

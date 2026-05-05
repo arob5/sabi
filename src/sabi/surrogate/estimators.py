@@ -127,18 +127,39 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         return self._support_value
 
     def _unnormalized_log_prob(self, value: Array) -> Array:
+        """Plug-in posterior log-density at ``value``.
+
+        Detected by ``ndim``: single-point at rank ``len(input_shape)``,
+        batched at rank ``1 + len(input_shape)``. Avoids the shape-
+        equality misidentification trap (``(n, k)`` with ``n == k``
+        looks like a single point under shape-equality).
+        """
         x = jnp.asarray(value)
-        single = x.shape == self._input_shape
-        x_batch = x[None] if single else x
-        # Emulator is an ArrayRandomFunction; __call__(X) returns a
-        # Distribution whose `mean` is the predictive mean across the n axis.
-        pred = self._emulator(x_batch)
-        pred_mean = jnp.asarray(mean(pred))
-        if single:
+        ndim_single = len(self._input_shape)
+        if x.ndim == ndim_single:
+            if x.shape != self._input_shape:
+                raise ValueError(
+                    f"_unnormalized_log_prob: single-point input expects "
+                    f"shape {self._input_shape}, got {tuple(x.shape)}."
+                )
+            pred = self._emulator(x[None])
+            pred_mean = jnp.asarray(mean(pred))
             # Form's per-point hook; avoids vmap overhead on a single x.
             return self._form._call_single(x, pred_mean[0], prior=self._prior)
-        # Batched: form's public batched call.
-        return self._form(x, pred_mean, prior=self._prior)
+        if x.ndim == ndim_single + 1:
+            if x.shape[1:] != self._input_shape:
+                raise ValueError(
+                    f"_unnormalized_log_prob: batched input expects shape "
+                    f"(n,) + {self._input_shape}, got {tuple(x.shape)}."
+                )
+            pred = self._emulator(x)
+            pred_mean = jnp.asarray(mean(pred))
+            return self._form(x, pred_mean, prior=self._prior)
+        raise ValueError(
+            f"_unnormalized_log_prob: expected ndim {ndim_single} (single "
+            f"point) or {ndim_single + 1} (batched), got ndim={x.ndim} "
+            f"(shape={tuple(x.shape)})."
+        )
 
     def _sample(self, key, sample_shape: tuple[int, ...] = ()) -> Array:
         kwargs = dict(self._sampler_kwargs)
