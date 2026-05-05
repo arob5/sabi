@@ -122,3 +122,61 @@ def test_diff_returns_emulator_update_subtype_or_none():
     diff_rescale = Rescale().diff(0.1, 0.9)
     assert diff_identity is None or isinstance(diff_identity, EmulatorUpdate)
     assert diff_rescale is None or isinstance(diff_rescale, EmulatorUpdate)
+
+
+# -------------------------------------------------------------------------
+# diff apply-equivalence: applying the structured diff to Y_train_a yields
+# Y_train_b. Catches sign / inverse-direction bugs in `diff`.
+# -------------------------------------------------------------------------
+
+
+def test_identity_diff_apply_equivalence():
+    """Identity transform: Y_train is invariant in state, so applying the
+    diff (a unit rescale) to Y_train_a yields Y_train_b == Y_train_a."""
+    transform = Identity()
+    X = jnp.zeros((4, 2))
+    Y_raw = jnp.asarray([1.0, -2.0, 3.5, 0.0])
+    state_a, state_b = 0.3, 0.8
+    Y_train_a = transform.apply(state_a, X, Y_raw)
+    Y_train_b = transform.apply(state_b, X, Y_raw)
+
+    diff = transform.diff(state_a, state_b)
+    assert isinstance(diff, RescaleOutputs)
+    # Apply the structured update: multiply existing Y_train by factor.
+    Y_train_a_updated = diff.factor * Y_train_a
+    assert jnp.allclose(Y_train_a_updated, Y_train_b)
+
+
+def test_rescale_diff_apply_equivalence():
+    """Rescale transform: Y_train_a = state_a * Y_raw, Y_train_b = state_b *
+    Y_raw, and diff returns RescaleOutputs(factor=state_b/state_a). Applying
+    the factor to Y_train_a recovers Y_train_b exactly."""
+    transform = Rescale()
+    X = jnp.zeros((4, 2))
+    Y_raw = jnp.asarray([1.0, -2.0, 3.5, 0.5])
+    state_a, state_b = 0.4, 0.8
+    Y_train_a = transform.apply(state_a, X, Y_raw)
+    Y_train_b = transform.apply(state_b, X, Y_raw)
+
+    diff = transform.diff(state_a, state_b)
+    assert isinstance(diff, RescaleOutputs)
+    # Apply the structured update to Y_train_a; should equal a fresh apply
+    # at state_b.
+    Y_train_a_updated = diff.factor * Y_train_a
+    assert jnp.allclose(Y_train_a_updated, Y_train_b)
+
+
+def test_rescale_diff_apply_equivalence_reversed_direction():
+    """Same equivalence but going from a larger state to a smaller one —
+    catches sign / inverse-direction bugs (e.g., a/b vs b/a)."""
+    transform = Rescale()
+    X = jnp.zeros((3, 2))
+    Y_raw = jnp.asarray([2.0, -1.5, 0.25])
+    state_a, state_b = 0.9, 0.3
+    Y_train_a = transform.apply(state_a, X, Y_raw)
+    Y_train_b = transform.apply(state_b, X, Y_raw)
+
+    diff = transform.diff(state_a, state_b)
+    assert isinstance(diff, RescaleOutputs)
+    Y_train_a_updated = diff.factor * Y_train_a
+    assert jnp.allclose(Y_train_a_updated, Y_train_b)
