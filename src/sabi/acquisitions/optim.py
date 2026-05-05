@@ -185,6 +185,15 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
         # works with our solver settings.
         u_opt_list: list[Array] = []
         for u_init in u_starts:
+            # ``throw=False`` makes optimistix report convergence
+            # failures via ``sol.result`` rather than raising — so
+            # this ``except`` only triggers on genuine numeric blow-
+            # ups inside the solver / score function. Narrow to the
+            # known failure modes (Cholesky / linear-solve breakdown
+            # under ill-conditioned Hessians; NaN propagation under
+            # x64) so an unrelated bug — e.g. a future shape
+            # mismatch in the score function — surfaces as a real
+            # error rather than being silently swallowed.
             try:
                 sol = optx.minimise(
                     neg_score_unconstrained,
@@ -195,7 +204,7 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
                     throw=False,
                 )
                 u_opt = sol.value
-            except Exception:
+            except (jnp.linalg.LinAlgError, FloatingPointError):
                 u_opt = u_init
             u_opt = jnp.where(jnp.isfinite(u_opt), u_opt, u_init)
             u_opt_list.append(u_opt)
