@@ -191,6 +191,30 @@ def test_scc_backend_empty_specs_is_noop(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# LocalParallelBackend — failure handling
+# ---------------------------------------------------------------------------
+
+
+@_INTEGRATION
+def test_local_parallel_all_failures_surfaced(tmp_path):
+    """All subprocess failures must be reported, not just the first."""
+    # Specs with an unknown problem name exit non-zero immediately after
+    # Hydra resolves config (before any JAX compute).
+    bad_specs = [
+        RunSpec(
+            overrides=("problem=__nonexistent__",),
+            output_dir=tmp_path / f"bad_{i}",
+        )
+        for i in range(3)
+    ]
+    with pytest.raises(RuntimeError) as exc_info:
+        LocalParallelBackend(n_workers=3).dispatch(bad_specs)
+
+    msg = str(exc_info.value)
+    assert "3 of 3 runs failed" in msg
+
+
+# ---------------------------------------------------------------------------
 # aggregate_sweep — reads hand-crafted JSON fixtures
 # ---------------------------------------------------------------------------
 

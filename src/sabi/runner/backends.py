@@ -91,10 +91,21 @@ class LocalParallelBackend(RunBackend):
     n_workers: int = 4
 
     def dispatch(self, specs: list[RunSpec]) -> None:
+        failures: list[tuple[RunSpec, BaseException]] = []
         with ProcessPoolExecutor(max_workers=self.n_workers) as pool:
             futures = {pool.submit(_run_subprocess, s): s for s in specs}
             for fut in as_completed(futures):
-                fut.result()  # re-raise CalledProcessError on failure
+                exc = fut.exception()
+                if exc is not None:
+                    failures.append((futures[fut], exc))
+        if failures:
+            lines = [
+                f"  {spec.output_dir}: {type(exc).__name__}: {exc}"
+                for spec, exc in failures
+            ]
+            raise RuntimeError(
+                f"{len(failures)} of {len(specs)} runs failed:\n" + "\n".join(lines)
+            )
 
 
 @dataclass(frozen=True)
