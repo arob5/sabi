@@ -32,6 +32,10 @@ pyvbmc = ["pyvbmc"]
 # off 0.14 should be a deliberate compatibility audit.
 gpjax = ["gpjax>=0.14,<0.15"]
 
+[project.scripts]
+sabi-submit = "sabi.runner.cli:sabi_submit"
+sabi-aggregate = "sabi.runner.cli:sabi_aggregate"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/sabi"]
 

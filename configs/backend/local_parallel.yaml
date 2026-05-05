@@ -1,0 +1,4 @@
+# LocalParallelBackend — run experiments in parallel on local CPU cores.
+# Increase n_workers to match available cores.
+name: local_parallel
+n_workers: 4

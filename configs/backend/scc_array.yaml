@@ -1,0 +1,19 @@
+# SCCArrayBackend — generate a qsub job-array script for BU SCC (SGE scheduler).
+#
+# dispatch() writes manifest.tsv + qsub_array.sh; submit manually with:
+#   qsub qsub_array.sh
+#
+# Resource knobs — tune per experiment:
+#   cores       : CPU slots per array task
+#   mem_gb      : total memory (GB) per array task
+#   walltime    : wall-clock limit  HH:MM:SS
+#   queue       : SGE queue / parallel-environment name
+#   batch_size  : number of runs bundled into a single array task (default 1)
+#   modules     : list of "module load" arguments for the compute nodes
+name: scc_array
+cores: 4
+mem_gb: 8
+walltime: "12:00:00"
+queue: shared
+batch_size: 1
+modules: []
