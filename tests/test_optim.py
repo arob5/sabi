@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import pytest
 from probpipe.core.constraints import interval, positive
 
-from sabi.acquisitions.base import AcquisitionState, PointwiseScoredAcquisition
+from sabi.acquisitions.base import PointwiseScoredAcquisition
 from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.fantasize import ConstantLiar, KrigingBeliever
 from sabi.acquisitions.optim import (
@@ -27,41 +27,18 @@ from sabi.acquisitions.optim import (
     GreedyMultiPointOptimizer,
     _make_bijector,
 )
-from sabi.surrogate.surrogate_distribution import SurrogateDistribution
-from sabi.problems.gaussian import gaussian2d
-from sabi.emulators import TinyGPEmulator
 
-
-# -------------------------------------------------------------------------
-# Fixtures
-# -------------------------------------------------------------------------
+from tests.conftest import make_acquisition_state
 
 
 def _state(n: int = 30, seed: int = 0):
-    problem = gaussian2d()
-    key = jax.random.key(seed)
-    lower, upper = problem.support.low, problem.support.high
-    X = lower + (upper - lower) * jax.random.uniform(
-        key, shape=(n,) + problem.input_shape
-    )
-    Y = problem.target_map(X)
-    emulator = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
-    sp = SurrogateDistribution(
-        emulator=emulator,
-        log_density_form=problem.log_density_form,
-        support=problem.support,
-        input_shape=problem.input_shape,
-        prior=problem.prior,
-    )
-    return AcquisitionState(
-        problem=problem,
-        surrogate_distribution=sp,
-        X=X,
-        Y_raw=Y,
-        Y_train=Y,
-        tempering_state=None,
-        target_tempering_state=None,
-    )
+    """Thin alias for the shared `make_acquisition_state` fixture builder.
+
+    Most call sites in this file pass only `n` and `seed`; the shared
+    helper accepts both as keyword args. Kept as a local alias to keep
+    call sites short.
+    """
+    return make_acquisition_state(n=n, seed=seed)
 
 
 class _ConcaveScore(PointwiseScoredAcquisition):

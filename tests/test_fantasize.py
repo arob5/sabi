@@ -2,46 +2,21 @@
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import pytest
 from probpipe import mean
 
-from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.fantasize import (
     ConstantLiar,
     KrigingBeliever,
 )
-from sabi.surrogate.surrogate_distribution import SurrogateDistribution
-from sabi.problems.gaussian import gaussian2d
-from sabi.emulators import TinyGPEmulator
+
+from tests.conftest import make_acquisition_state
 
 
 def _state(n: int = 20, seed: int = 0):
-    problem = gaussian2d()
-    key = jax.random.key(seed)
-    lower, upper = problem.support.low, problem.support.high
-    X = lower + (upper - lower) * jax.random.uniform(
-        key, shape=(n,) + problem.input_shape
-    )
-    Y = problem.target_map(X)
-    emulator = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
-    sp = SurrogateDistribution(
-        emulator=emulator,
-        log_density_form=problem.log_density_form,
-        support=problem.support,
-        input_shape=problem.input_shape,
-        prior=problem.prior,
-    )
-    return AcquisitionState(
-        problem=problem,
-        surrogate_distribution=sp,
-        X=X,
-        Y_raw=Y,
-        Y_train=Y,
-        tempering_state=None,
-        target_tempering_state=None,
-    )
+    """Local alias for the shared `make_acquisition_state` fixture builder."""
+    return make_acquisition_state(n=n, seed=seed)
 
 
 def test_kriging_believer_returns_predictive_mean():
