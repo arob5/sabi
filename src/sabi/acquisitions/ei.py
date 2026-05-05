@@ -69,14 +69,9 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
     def _score_single(self, x: Array, state: AcquisitionState) -> Array:
         """Single-point EI at `x` (shape `state.problem.input_shape`).
         Returns scalar."""
-        emulator = state.surrogate_distribution.emulator
-        if emulator is None:
-            raise ValueError(
-                "ExpectedImprovement requires a non-degenerate emulator; "
-                "got `state.surrogate_distribution.emulator=None` (this happens "
-                "with the weighted-empirical baseline). Switch to a real "
-                "emulator or use a sampling acquisition like PriorSampling."
-            )
+        emulator = state.surrogate_distribution.require_emulator(
+            "ExpectedImprovement"
+        )
         # emulator.__call__ expects a leading batch axis.
         pred = emulator(x[None])
         mu = jnp.asarray(mean(pred))[0]
@@ -93,12 +88,9 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
         if self.best_from == "data":
             return jnp.max(state.Y_train)
         if self.best_from == "mean":
-            emulator = state.surrogate_distribution.emulator
-            if emulator is None:
-                raise ValueError(
-                    "ExpectedImprovement(best_from='mean') requires a "
-                    "non-degenerate emulator."
-                )
+            emulator = state.surrogate_distribution.require_emulator(
+                "ExpectedImprovement(best_from='mean')"
+            )
             train_pred = emulator(state.X)
             return jnp.max(jnp.asarray(mean(train_pred)))
         raise ValueError(f"Unknown best_from={self.best_from!r}.")

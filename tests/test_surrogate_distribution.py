@@ -143,6 +143,23 @@ def test_sp_requires_support():
         )
 
 
+def test_require_emulator_returns_emulator_when_present():
+    """Success path: ``require_emulator`` returns ``self.emulator`` unchanged."""
+    sp = _sp()
+    emulator = sp.require_emulator("TestCaller")
+    assert emulator is sp.emulator
+    assert emulator is not None
+
+
+def test_require_emulator_raises_when_none():
+    """Raise path: ``require_emulator`` raises ``ValueError`` naming the
+    caller and the canonical "non-degenerate emulator" message."""
+    werm = _werm()
+    assert werm.emulator is None
+    with pytest.raises(ValueError, match="MyCaller.*non-degenerate emulator"):
+        werm.require_emulator("MyCaller")
+
+
 def test_sp_input_shape_must_match_emulator_input_shape():
     emulator = TinyGPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)

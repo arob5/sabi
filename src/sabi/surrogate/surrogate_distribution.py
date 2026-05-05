@@ -110,6 +110,31 @@ class SurrogateDistribution(NumericRandomMeasure):
     def prior(self) -> Distribution | None:
         return self._prior
 
+    # Helpers -----------------------------------------------------------------
+
+    def require_emulator(self, caller: str) -> Emulator:
+        """Return `self.emulator`, raising `ValueError` if it is `None`.
+
+        Used by code paths (e.g. emulator-touching acquisitions, fantasy
+        imputers) that cannot operate on the degenerate / no-emulator
+        baseline. Centralizes the "...requires a non-degenerate emulator"
+        message so consumers don't each hand-roll their own.
+
+        Args:
+            caller: short name of the caller (typically a class name like
+                ``"ExpectedImprovement"``); included in the error message
+                so users can see who rejected the degenerate surrogate.
+        """
+        if self._emulator is None:
+            raise ValueError(
+                f"{caller} requires a non-degenerate emulator; got "
+                f"`surrogate_distribution.emulator=None` (the no-emulator "
+                f"baseline, e.g. WeightedEmpiricalRandomMeasure). Switch "
+                f"to a real emulator or use a sampling-style acquisition "
+                f"like PriorSampling."
+            )
+        return self._emulator
+
     # Protocol implementation -------------------------------------------------
 
     def _random_unnormalized_log_prob(self) -> RandomFunction:
