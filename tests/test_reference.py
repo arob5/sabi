@@ -5,7 +5,8 @@ Covers:
 - Metadata JSON round-trip.
 - `load_or_generate_reference_samples` cache hit (existing artifact loads
   without invoking NUTS).
-- `regenerate=True` forces fresh generation.
+- `regenerate=True` forces fresh generation even when a cached artifact
+  exists.
 - Quality threshold gating raises a clear error on bad NUTS runs.
 """
 
@@ -20,6 +21,7 @@ from probpipe.core._empirical import NumericEmpiricalDistribution
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.problems.forms import Identity
+from sabi.reference import cache as cache_module
 from sabi.reference.cache import load_or_generate_reference_samples
 from sabi.reference.io import (
     read_metadata_json,
@@ -34,12 +36,24 @@ def _scalar_normal_target(theta):
     return -0.5 * jnp.sum(theta ** 2)
 
 
+def _tiny_normal_target(theta):
+    """Standard 1-D normal log-density (used for the cheapest possible NUTS run)."""
+    return -0.5 * jnp.sum(theta ** 2)
+
+
 def _box_prior():
     """A 2-D multivariate-event uniform on [-5, 5]^2 — used wherever
     the cache layer wants a prior (sometimes a no-op cache hit; pass
     a valid prior anyway since `prior` is now required)."""
     return independent_uniform(
         low=jnp.full(2, -5.0), high=jnp.full(2, 5.0), name="box_prior"
+    )
+
+
+def _tiny_box_prior():
+    """A 1-D multivariate-event uniform on [-5, 5] for the cheapest NUTS test."""
+    return independent_uniform(
+        low=jnp.full(1, -5.0), high=jnp.full(1, 5.0), name="tiny_box_prior"
     )
 
 
@@ -174,3 +188,78 @@ def test_quality_threshold_failure_raises(tmp_path):
     assert not (cache_dir / "bad_quality").exists() or not any(
         p.is_file() for p in (cache_dir / "bad_quality").iterdir()
     )
+
+
+def test_regenerate_forces_fresh_nuts_run(tmp_path, monkeypatch):
+    """`regenerate=True` must invoke NUTS even when a cached artifact exists.
+
+    Strategy: do a real NUTS run on a tiny 1-D Gaussian to populate the
+    cache, then call again with `regenerate=True` while wrapping
+    `generate_via_nuts` in a counting proxy. The second call must hit the
+    proxy exactly once, and must return a well-formed
+    `NumericEmpiricalDistribution` over post-warmup draws.
+
+    The NUTS budget is intentionally tiny (50 results, 50 warmup, 1 chain)
+    so the test runs in a few seconds. R-hat / ESS thresholds are loosened
+    to match — this isn't a quality test.
+    """
+    cache_dir = tmp_path / "refs"
+    common_kwargs = dict(
+        problem_name="tiny_gaussian",
+        cache_key="k",
+        target_map=_tiny_normal_target,
+        log_density_form=Identity(),
+        prior=_tiny_box_prior(),
+        input_shape=(1,),
+        num_results=50,
+        num_warmup=50,
+        num_chains=1,
+        random_seed=0,
+        cache_dir=cache_dir,
+        quality_thresholds={
+            "max_rhat": 1e3,
+            "min_ess": 1.0,
+            "max_divergence_rate": 1.0,
+        },
+    )
+
+    # 1. Populate the cache with a real NUTS run.
+    ref_first = load_or_generate_reference_samples(**common_kwargs)
+    assert isinstance(ref_first, NumericEmpiricalDistribution)
+    # Cache-on-disk sanity check: artifact files must exist now.
+    artifact_dir = cache_dir / "tiny_gaussian"
+    assert artifact_dir.exists()
+    assert any(p.suffix == ".parquet" for p in artifact_dir.iterdir())
+
+    # 2. Wrap generate_via_nuts in a counting proxy and call again with
+    #    `regenerate=True`. The proxy must fire exactly once.
+    call_count = {"n": 0}
+    real_generate = cache_module.generate_via_nuts
+
+    def counting_generate(*args, **kwargs):
+        call_count["n"] += 1
+        return real_generate(*args, **kwargs)
+
+    monkeypatch.setattr(cache_module, "generate_via_nuts", counting_generate)
+
+    ref_second = load_or_generate_reference_samples(
+        regenerate=True, **common_kwargs
+    )
+
+    assert call_count["n"] == 1, (
+        "regenerate=True must invoke generate_via_nuts exactly once even "
+        "when an artifact is already cached on disk."
+    )
+
+    # 3. Verify the regenerated distribution is well-formed.
+    assert isinstance(ref_second, NumericEmpiricalDistribution)
+    samples = jnp.asarray(ref_second.samples)
+    # 1 chain * 50 post-warmup draws -> (50, 1).
+    assert samples.shape == (50, 1)
+    # Every sample is finite and lives in the prior's support box.
+    assert jnp.all(jnp.isfinite(samples))
+    assert jnp.all(samples >= -5.0)
+    assert jnp.all(samples <= 5.0)
+    # The first sample of `ref_second.samples` should be in `ref_second`'s
+    # own sample set (membership sanity).
+    assert jnp.any(jnp.all(samples == samples[0], axis=-1))
