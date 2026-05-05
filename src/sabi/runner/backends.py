@@ -14,6 +14,7 @@ local ↔ cluster parity is exact.
 
 from __future__ import annotations
 
+import math
 import subprocess
 import sys
 from abc import ABC, abstractmethod
@@ -172,16 +173,21 @@ class SCCArrayBackend(RunBackend):
                 f.write(f"{i}\t{spec.output_dir}\t{overrides_str}\n")
 
     def _write_qsub_script(self, specs: list[RunSpec], sweep_dir: Path) -> None:
-        n_tasks = len(specs)
+        n_specs = len(specs)
+        n_array_tasks = math.ceil(n_specs / self.batch_size)
         module_lines = (
             "\n".join(f"module load {m}" for m in self.modules) if self.modules else ""
         )
         mem_per_core = max(1, self.mem_gb // self.cores)
 
+        # Each array task runs batch_size consecutive manifest rows.
+        # Manifest rows are 1-indexed; file line = row + 1 (header offset).
+        # The last task may run fewer than batch_size rows when n_specs is not
+        # a multiple of batch_size.
         script = f"""\
 #!/bin/bash
 #$ -N sabi_sweep
-#$ -t 1-{n_tasks}
+#$ -t 1-{n_array_tasks}
 #$ -pe omp {self.cores}
 #$ -l h_rt={self.walltime}
 #$ -l mem_per_core={mem_per_core}G
@@ -193,13 +199,19 @@ class SCCArrayBackend(RunBackend):
 {module_lines}
 
 MANIFEST={sweep_dir}/manifest.tsv
+BATCH_SIZE={self.batch_size}
+N_SPECS={n_specs}
 
-# Manifest line for this task: header is line 1, so task N is line N+1.
-LINE=$(awk -v t=$SGE_TASK_ID 'NR == t + 1' "$MANIFEST")
-OUTPUT_DIR=$(printf '%s' "$LINE" | cut -f2)
-OVERRIDES=$(printf '%s' "$LINE" | cut -f3)
+START=$(( (SGE_TASK_ID - 1) * BATCH_SIZE + 1 ))
+END=$(( SGE_TASK_ID * BATCH_SIZE ))
+if [ $END -gt $N_SPECS ]; then END=$N_SPECS; fi
 
-mkdir -p "$OUTPUT_DIR"
-{self.python_exe} -m sabi.runner hydra.run.dir="$OUTPUT_DIR" $OVERRIDES
+for ROW in $(seq $START $END); do
+    LINE=$(awk -v r="$ROW" 'NR == r + 1' "$MANIFEST")
+    OUTPUT_DIR=$(printf '%s' "$LINE" | cut -f2)
+    OVERRIDES=$(printf '%s' "$LINE" | cut -f3)
+    mkdir -p "$OUTPUT_DIR"
+    {self.python_exe} -m sabi.runner hydra.run.dir="$OUTPUT_DIR" $OVERRIDES
+done
 """
         (sweep_dir / "qsub_array.sh").write_text(script)

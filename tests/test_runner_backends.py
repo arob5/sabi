@@ -190,6 +190,38 @@ def test_scc_backend_empty_specs_is_noop(tmp_path):
     assert not (tmp_path / "manifest.tsv").exists()
 
 
+def test_scc_backend_batch_size_reduces_array_tasks(tmp_path):
+    # 6 specs with batch_size=2 → 3 array tasks.
+    specs = _make_specs(tmp_path, n=6)
+    SCCArrayBackend(batch_size=2).dispatch(specs)
+    script = (tmp_path / "qsub_array.sh").read_text()
+    assert "#$ -t 1-3" in script
+
+
+def test_scc_backend_batch_size_ceil_for_uneven_split(tmp_path):
+    # 7 specs with batch_size=3 → ceil(7/3) = 3 array tasks.
+    specs = _make_specs(tmp_path, n=7)
+    SCCArrayBackend(batch_size=3).dispatch(specs)
+    script = (tmp_path / "qsub_array.sh").read_text()
+    assert "#$ -t 1-3" in script
+
+
+def test_scc_backend_batch_size_in_script_body(tmp_path):
+    specs = _make_specs(tmp_path, n=4)
+    SCCArrayBackend(batch_size=2).dispatch(specs)
+    script = (tmp_path / "qsub_array.sh").read_text()
+    assert "BATCH_SIZE=2" in script
+    assert "for ROW in $(seq" in script
+
+
+def test_scc_backend_manifest_still_one_row_per_spec_with_batching(tmp_path):
+    # Batching affects the script only; the manifest always has one row per spec.
+    specs = _make_specs(tmp_path, n=6)
+    SCCArrayBackend(batch_size=2).dispatch(specs)
+    lines = (tmp_path / "manifest.tsv").read_text().splitlines()
+    assert len(lines) == 1 + 6  # header + 6 data rows
+
+
 # ---------------------------------------------------------------------------
 # LocalParallelBackend — failure handling
 # ---------------------------------------------------------------------------
