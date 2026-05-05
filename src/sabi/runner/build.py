@@ -151,7 +151,7 @@ def _build_acquisition(cfg: DictConfig) -> Acquisition:
     if name == "ei":
         return ExpectedImprovement(
             optimizer=_build_optimizer(cfg.get("optimizer", None)),
-            offset=float(cfg.get("offset", cfg.get("xi", 0.0))),
+            offset=float(cfg.get("offset", 0.0)),
             best_from=str(cfg.get("best_from", "data")),
         )
     raise ValueError(f"Unknown acquisition.name={name!r}.")
