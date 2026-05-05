@@ -45,8 +45,8 @@ class _TinyGPCache:
     """
 
     kernel: Any  # tinygp.kernels.Kernel — evaluated via kernel(X1, X2) / kernel(X)
-    noise: float  # observation-noise variance (scalar)
-    jitter: float  # Cholesky-stability jitter (scalar)
+    noise: Array  # observation-noise variance (scalar JAX array)
+    jitter: Array  # Cholesky-stability jitter (scalar JAX array)
     L_sigma: Array
     alpha: Array
     Xs_train: Array
@@ -59,7 +59,7 @@ class _TinyGPCache:
         """Observation-noise variance, exposed for symmetry with the
         gpjax cache. ``TinyGPEmulator.obs_noise_variance`` returns
         the same value via this alias."""
-        return jnp.asarray(self.noise)
+        return self.noise
 
     # ----- construction ---------------------------------------------------
 
@@ -80,6 +80,13 @@ class _TinyGPCache:
         ``alpha = L⁻¹(y - m(X))`` reduces to ``alpha = L⁻¹ y``.
         """
         n = Xs_train.shape[0]
+        # ``jnp.asarray`` (not ``float(...)``) so callers can wrap this
+        # in ``jax.jit`` / ``vmap`` / ``grad`` without hitting
+        # ``ConcretizationTypeError`` on traced inputs. Mirrors the
+        # gpjax ``_PredictCache`` which stores ``noise_var`` as a JAX
+        # array for the same reason.
+        noise = jnp.asarray(noise)
+        jitter = jnp.asarray(jitter)
         Kxx = kernel(Xs_train, Xs_train)  # (n, n)
         Sigma = Kxx + (noise + jitter) * jnp.eye(n, dtype=Kxx.dtype)
         L_sigma = jnp.linalg.cholesky(Sigma)
@@ -87,8 +94,8 @@ class _TinyGPCache:
         alpha = jsp.linalg.solve_triangular(L_sigma, Ys_train, lower=True)
         return cls(
             kernel=kernel,
-            noise=float(noise),
-            jitter=float(jitter),
+            noise=noise,
+            jitter=jitter,
             L_sigma=L_sigma,
             alpha=alpha,
             Xs_train=Xs_train,

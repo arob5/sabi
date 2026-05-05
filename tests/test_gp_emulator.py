@@ -406,3 +406,33 @@ def test_tinygp_dispatch_handler_fires_for_rescale_outputs():
     assert jnp.allclose(pred_after, beta * pred_before, rtol=1e-12, atol=1e-14)
     # Cache untouched: L_sigma reused.
     assert em_b._predict_cache.L_sigma is em._predict_cache.L_sigma
+
+
+def test_tinygp_cache_build_under_jit():
+    """``_TinyGPCache.build`` must trace cleanly under ``jax.jit`` —
+    so callers passing traced ``noise`` / ``jitter`` (e.g., from a
+    ``vmap``ped hyperparameter sweep, or a ``grad`` w.r.t. noise) do
+    not hit ``ConcretizationTypeError``.
+
+    Regression for issue #35 (item 1): the prior implementation cast
+    ``noise`` / ``jitter`` to Python ``float`` inside ``build``,
+    which raises on traced scalars.
+    """
+    from sabi.emulators.tinygp._cache import _TinyGPCache
+
+    X, Y = _sample_2d_gp_data(n=12)
+    em = TinyGPEmulator(input_shape=(2,)).fit(X, Y)
+    Xs = em._x_scaler.transform(X)
+    Ys = em._y_scaler.transform(Y)
+    kernel = em._predict_cache.kernel
+
+    @jax.jit
+    def build_cache(noise, jitter):
+        cache = _TinyGPCache.build(
+            kernel, Xs, Ys, noise=noise, jitter=jitter
+        )
+        # Touch a downstream array so tracing exercises the full path.
+        return cache.L_sigma.sum() + cache.noise + cache.jitter
+
+    out = build_cache(jnp.asarray(1e-3), jnp.asarray(1e-6))
+    assert jnp.isfinite(out)
