@@ -82,6 +82,12 @@ def mmd2_unbiased(X: Array, Y: Array, bandwidth: float | Array | None = None) ->
     m, n = X.shape[0], Y.shape[0]
     if m < 2 or n < 2:
         raise ValueError(f"Unbiased MMD² needs m,n ≥ 2, got m={m}, n={n}.")
+    if bandwidth is not None and float(bandwidth) <= 0.0:
+        raise ValueError(
+            f"bandwidth must be positive; got {bandwidth}. The RBF kernel "
+            f"k(x, y) = exp(-||x - y||² / (2 h²)) is only well-defined for "
+            f"h > 0."
+        )
 
     h = median_heuristic_bandwidth(X, Y) if bandwidth is None else jnp.asarray(bandwidth)
     inv_2h2 = 1.0 / (2.0 * h * h)
@@ -119,6 +125,14 @@ class MMD(Metric):
 
     requires: ClassVar[tuple[type, ...]] = (SupportsSampling,)
     keys: ClassVar[tuple[str, ...]] = ("mmd", "mmd2")
+
+    def __post_init__(self) -> None:
+        if self.bandwidth is not None and self.bandwidth <= 0.0:
+            raise ValueError(
+                f"bandwidth must be positive; got {self.bandwidth}. The RBF "
+                f"kernel k(x, y) = exp(-||x - y||² / (2 h²)) is only "
+                f"well-defined for h > 0."
+            )
 
     def __call__(
         self,
