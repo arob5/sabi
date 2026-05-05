@@ -534,8 +534,6 @@ def _run_acquisition(
         X=X,
         Y_raw=Y_raw,
         Y_train=Y_train_for_acq,
-        tempering_state=round_state.current_intermediate.state,
-        target_tempering_state=round_state.target_intermediate.state,
     )
     x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key)
     y_new_raw = problem.target_map(x_new)

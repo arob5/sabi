@@ -32,8 +32,7 @@ def make_acquisition_state(
         seed: PRNG seed for the initial-design draw.
 
     Returns:
-        `AcquisitionState` with `tempering_state=None` and
-        `target_tempering_state=None` (untempered).
+        `AcquisitionState` populated from the fitted SP / design.
     """
     from sabi.acquisitions.base import AcquisitionState
     from sabi.emulators import TinyGPEmulator
@@ -59,6 +58,4 @@ def make_acquisition_state(
         X=X,
         Y_raw=Y,
         Y_train=Y,
-        tempering_state=None,
-        target_tempering_state=None,
     )
