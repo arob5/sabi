@@ -251,50 +251,83 @@ def test_local_parallel_all_failures_surfaced(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _write_fake_run(run_dir: Path, seed: int, problem: str = "gaussian") -> None:
-    run_dir.mkdir(parents=True)
-    summary = {
-        "problem": problem,
-        "n_evals_final": 20,
-        "final_metrics": {"mmd2": 0.01 + seed * 0.001},
-        "tempering_states": [],
-    }
-    (run_dir / "summary.json").write_text(json.dumps(summary))
-    metrics_rows = [
-        json.dumps({"round": r, "mmd2": 0.05 - r * 0.005}) for r in range(3)
-    ]
-    (run_dir / "metrics.jsonl").write_text("\n".join(metrics_rows))
-    # Minimal config.yaml so aggregate_sweep can read seed/problem/etc.
-    config_yaml = f"seed: {seed}\nproblem:\n  name: {problem}\nemulator:\n  name: gp\nacquisition:\n  name: ei\n"
-    (run_dir / "config.yaml").write_text(config_yaml)
+def _write_fake_sweep(
+    sweep_dir: Path,
+    runs: list[dict],
+) -> None:
+    """Write a fake completed sweep under *sweep_dir*.
+
+    Parameters
+    ----------
+    runs:
+        Each dict must have ``seed`` (int) and may have ``problem`` (str) and
+        arbitrary extra override keys (e.g. ``algorithm.n_rounds``).  A
+        subdirectory ``run_<seed>`` is created for each entry.
+    """
+    # Write manifest.tsv
+    with (sweep_dir / "manifest.tsv").open("w") as mf:
+        mf.write("task_id\toutput_dir\toverrides\n")
+        for i, run in enumerate(runs, start=1):
+            run_dir = sweep_dir / f"run_{run['seed']}"
+            overrides = " ".join(f"{k}={v}" for k, v in run.items())
+            mf.write(f"{i}\t{run_dir}\t{overrides}\n")
+
+    # Write per-run files
+    for run in runs:
+        seed = run["seed"]
+        problem = run.get("problem", "gaussian")
+        run_dir = sweep_dir / f"run_{seed}"
+        run_dir.mkdir(parents=True)
+        summary = {
+            "problem": problem,
+            "n_evals_final": 20,
+            "final_metrics": {"mmd2": 0.01 + seed * 0.001},
+            "tempering_states": [],
+        }
+        (run_dir / "summary.json").write_text(json.dumps(summary))
+        metrics_rows = [
+            json.dumps({"round": r, "mmd2": 0.05 - r * 0.005}) for r in range(3)
+        ]
+        (run_dir / "metrics.jsonl").write_text("\n".join(metrics_rows))
 
 
 def test_aggregate_sweep_row_count(tmp_path):
-    for i in range(4):
-        _write_fake_run(tmp_path / f"run_{i}", seed=i)
+    _write_fake_sweep(tmp_path, [{"seed": i} for i in range(4)])
     table = aggregate_sweep(tmp_path)
     assert len(table) == 4
 
 
 def test_aggregate_sweep_writes_parquet(tmp_path):
-    _write_fake_run(tmp_path / "run_0", seed=0)
+    _write_fake_sweep(tmp_path, [{"seed": 0}])
     aggregate_sweep(tmp_path)
     assert (tmp_path / "sweep_results.parquet").exists()
 
 
 def test_aggregate_sweep_columns_include_seed_and_metrics(tmp_path):
-    _write_fake_run(tmp_path / "run_0", seed=42)
+    _write_fake_sweep(tmp_path, [{"seed": 42}])
     table = aggregate_sweep(tmp_path)
     assert "seed" in table.schema.names
     assert "final_mmd2" in table.schema.names
 
 
 def test_aggregate_sweep_seed_values_round_trip(tmp_path):
-    for seed in (7, 13):
-        _write_fake_run(tmp_path / f"run_{seed}", seed=seed)
+    _write_fake_sweep(tmp_path, [{"seed": 7}, {"seed": 13}])
     table = aggregate_sweep(tmp_path)
     seeds = sorted(table.column("seed").to_pylist())
     assert seeds == [7, 13]
+
+
+def test_aggregate_sweep_nested_override_becomes_column(tmp_path):
+    # Nested overrides like algorithm.n_rounds should appear as columns
+    # when a manifest is present — this was not possible with config.yaml only.
+    _write_fake_sweep(
+        tmp_path,
+        [{"seed": 0, "algorithm.n_rounds": 5}, {"seed": 1, "algorithm.n_rounds": 10}],
+    )
+    table = aggregate_sweep(tmp_path)
+    assert "algorithm.n_rounds" in table.schema.names
+    rounds = sorted(table.column("algorithm.n_rounds").to_pylist())
+    assert rounds == [5, 10]
 
 
 def test_aggregate_sweep_empty_dir_raises(tmp_path):
@@ -303,8 +336,19 @@ def test_aggregate_sweep_empty_dir_raises(tmp_path):
 
 
 def test_aggregate_sweep_skips_dirs_without_summary(tmp_path):
-    _write_fake_run(tmp_path / "run_0", seed=0)
+    _write_fake_sweep(tmp_path, [{"seed": 0}])
     (tmp_path / "not_a_run").mkdir()  # no summary.json
+    table = aggregate_sweep(tmp_path)
+    assert len(table) == 1
+
+
+def test_aggregate_sweep_no_manifest_still_works(tmp_path):
+    # Falls back gracefully when no manifest.tsv exists (e.g. manually created
+    # run directories) — rows are produced with only summary/metrics columns.
+    run_dir = tmp_path / "run_0"
+    run_dir.mkdir()
+    summary = {"problem": "gaussian", "n_evals_final": 20, "final_metrics": {}}
+    (run_dir / "summary.json").write_text(json.dumps(summary))
     table = aggregate_sweep(tmp_path)
     assert len(table) == 1
 

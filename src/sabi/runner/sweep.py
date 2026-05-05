@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from omegaconf import OmegaConf
 
 from sabi.runner.backends import RunSpec
 
@@ -88,15 +87,57 @@ def enumerate_sweep(
     return specs
 
 
+def _load_manifest(sweep_dir: Path) -> dict[str, dict[str, str | int | float]]:
+    """Parse ``manifest.tsv`` → mapping from output_dir string to override dict.
+
+    Override values are coerced to ``int`` or ``float`` where possible so
+    that numeric sweep dimensions (``seed``, ``algorithm.n_rounds``, etc.)
+    arrive as the right type in the aggregated table.
+    """
+    manifest_path = sweep_dir / "manifest.tsv"
+    if not manifest_path.exists():
+        return {}
+    result: dict[str, dict[str, str | int | float]] = {}
+    for line in manifest_path.read_text().splitlines()[1:]:  # skip header
+        parts = line.split("\t", 2)
+        if len(parts) < 3:
+            continue
+        _, out_dir, overrides_str = parts
+        overrides: dict[str, str | int | float] = {}
+        for token in overrides_str.split():
+            if "=" in token:
+                k, v = token.split("=", 1)
+                overrides[k] = _coerce(v)
+        result[out_dir.strip()] = overrides
+    return result
+
+
+def _coerce(v: str) -> str | int | float:
+    try:
+        return int(v)
+    except ValueError:
+        pass
+    try:
+        return float(v)
+    except ValueError:
+        pass
+    return v
+
+
 def aggregate_sweep(sweep_dir: Path) -> pa.Table:
     """Collect per-run outputs from a completed sweep into a tidy table.
 
     For each subdirectory of *sweep_dir* that contains a ``summary.json``
-    file, reads ``summary.json``, ``config.yaml``, and the last row of
+    file, reads the manifest (primary), ``summary.json``, and the last row of
     ``metrics.jsonl`` (if present) and merges everything into one row.
 
+    Override columns come from ``manifest.tsv`` when available, covering all
+    submitted keys including nested ones (e.g. ``algorithm.n_rounds``).  This
+    is more complete than reading ``config.yaml``, which only surfaces fields
+    that happen to appear at the Hydra top level.
+
     Writes the result to ``sweep_dir/sweep_results.parquet`` and returns the
-    :class:`pyarrow.Table` (rows = runs, columns = config keys + metrics).
+    :class:`pyarrow.Table` (rows = runs, columns = override keys + metrics).
 
     Parameters
     ----------
@@ -109,6 +150,7 @@ def aggregate_sweep(sweep_dir: Path) -> pa.Table:
     ValueError
         If no completed runs (subdirectories with ``summary.json``) are found.
     """
+    manifest_overrides = _load_manifest(sweep_dir)
     rows: list[dict] = []
 
     for run_dir in sorted(sweep_dir.iterdir()):
@@ -121,17 +163,8 @@ def aggregate_sweep(sweep_dir: Path) -> pa.Table:
         summary = json.loads(summary_path.read_text())
         row: dict = {"run_dir": str(run_dir)}
 
-        # Pull top-level config fields from the saved config.yaml.
-        config_path = run_dir / "config.yaml"
-        if config_path.exists():
-            cfg = OmegaConf.load(config_path)
-            row["seed"] = int(cfg.get("seed", -1))
-            if hasattr(cfg, "problem"):
-                row["problem"] = str(cfg.problem.get("name", ""))
-            if hasattr(cfg, "emulator"):
-                row["emulator"] = str(cfg.emulator.get("name", ""))
-            if hasattr(cfg, "acquisition"):
-                row["acquisition"] = str(cfg.acquisition.get("name", ""))
+        # Override values from manifest (covers all submitted keys).
+        row.update(manifest_overrides.get(str(run_dir), {}))
 
         row["n_evals_final"] = summary.get("n_evals_final")
         for k, v in summary.get("final_metrics", {}).items():
@@ -140,7 +173,7 @@ def aggregate_sweep(sweep_dir: Path) -> pa.Table:
         # Last-round metrics from metrics.jsonl.
         metrics_path = run_dir / "metrics.jsonl"
         if metrics_path.exists():
-            lines = [l for l in metrics_path.read_text().splitlines() if l.strip()]
+            lines = [ln for ln in metrics_path.read_text().splitlines() if ln.strip()]
             if lines:
                 for k, v in json.loads(lines[-1]).items():
                     row[f"last_round_{k}"] = v
