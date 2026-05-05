@@ -52,11 +52,21 @@ jobs:
       - name: Build docs site
         run: uv run sphinx-build -W -b html docs docs/_build/html
 
-      - name: Upload site artifact
+      - name: Upload site artifact for Pages deploy (main only)
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/_build/html
+
+      # Plain artifact so PR reviewers can download a zip of the rendered
+      # site from the Actions UI. Unzip → open index.html locally.
+      - name: Upload site artifact for PR preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: docs/_build/html
+          retention-days: 14
 
   deploy:
     if: github.ref == 'refs/heads/main'
