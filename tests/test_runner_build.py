@@ -15,7 +15,8 @@ from sabi.runner.build import build_algorithm, build_problem
 def _cfg(with_metric=True):
     d = {
         "problem": {
-            "name": "gaussian2d",
+            "name": "gaussian",
+            "d": 2,
             "mean": [0.0, 0.0],
             "cov": [[1.0, 0.0], [0.0, 1.0]],
             "bounds_radius": 5.0,
@@ -33,7 +34,7 @@ def _cfg(with_metric=True):
 def test_build_problem_returns_problem():
     problem = build_problem(_cfg().problem)
     assert isinstance(problem, Problem)
-    assert problem.name == "gaussian2d"
+    assert problem.name == "gaussian"
     assert problem.input_shape == (2,)
     assert problem.output_shape == ()
 

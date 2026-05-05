@@ -29,21 +29,13 @@ from sabi.metrics.mmd import MMD
 from sabi.metrics.scheduling import MetricTarget, ScheduledMetric
 from sabi.problems.banana import banana
 from sabi.problems.base import Problem
-from sabi.problems.gaussian import gaussian, gaussian2d
+from sabi.problems.gaussian import gaussian
 from sabi.problems.neals_funnel import neals_funnel
 from sabi.emulators import TinyGPEmulator
 
 
 def build_problem(cfg: DictConfig) -> Problem:
     name = cfg.name
-    if name == "gaussian2d":
-        # Back-compat dispatch: the historical 2-D wrapper. Use `name:
-        # gaussian` with `d: 2` for the generic d-D form.
-        return gaussian2d(
-            mean=tuple(cfg.get("mean", (0.0, 0.0))),
-            cov=tuple(tuple(row) for row in cfg.get("cov", ((1.0, 0.5), (0.5, 1.0)))),
-            bounds_radius=float(cfg.get("bounds_radius", 5.0)),
-        )
     if name == "gaussian":
         # Generic d-D dispatch. `mean` / `cov` are optional; omit to use
         # gaussian()'s defaults (zero mean, identity covariance).

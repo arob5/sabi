@@ -52,7 +52,7 @@ class Problem:
             reference-based metrics (analytic when one fits naturally,
             otherwise an `EmpiricalDistribution` over precomputed
             samples).
-        name: human-readable benchmark name (e.g. ``"gaussian2d"``,
+        name: human-readable benchmark name (e.g. ``"gaussian"``,
             ``"banana"``). Used for cache keys and metadata.
     """
 

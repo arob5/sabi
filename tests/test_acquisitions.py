@@ -11,7 +11,7 @@ from sabi.acquisitions.random import PriorSampling
 from sabi.emulators.base import Emulator
 from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
-from sabi.problems.gaussian import gaussian2d
+from sabi.problems.benchmarks import gaussian_2d
 from sabi.sampling import PriorSampler
 from sabi.emulators import TinyGPEmulator
 
@@ -19,7 +19,7 @@ from tests.conftest import make_acquisition_state
 
 
 def test_prior_sampling_acquisition_shape_and_bounds():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     state = make_acquisition_state(problem=problem)
     batch = PriorSampling().select_batch(state, q=4, key=jax.random.key(7))
     assert batch.shape == (4,) + problem.input_shape
@@ -28,7 +28,7 @@ def test_prior_sampling_acquisition_shape_and_bounds():
 
 
 def test_ei_acquisition_shape():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     state = make_acquisition_state(problem=problem)
     batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)).select_batch(
         state, q=3, key=jax.random.key(11)
@@ -39,7 +39,7 @@ def test_ei_acquisition_shape():
 def test_ei_picks_points_with_higher_emulator_mean_than_random():
     """EI is defined to prefer points with high emulator mean + variance.
     Verify directly against the emulator (decouples from GP fit quality)."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     state = make_acquisition_state(problem=problem, n=60)
 
     ei_batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=4096)).select_batch(
@@ -57,7 +57,7 @@ def test_ei_picks_points_with_higher_emulator_mean_than_random():
 
 
 def test_ei_average_best_beats_random_average_best_across_seeds():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     state = make_acquisition_state(problem=problem, n=60)
 
     ei_bests = []
@@ -106,7 +106,7 @@ def test_ei_collapses_to_zero_at_zero_variance():
     """`EI(x) = 0` whenever `σ(x) ≤ 1e-30` — the docstring promise at
     [src/sabi/acquisitions/ei.py:14]. Uses a stub emulator since the
     real GP's jitter floor keeps σ orders of magnitude above 1e-30."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     # Train Y_train so `best = max(Y_train)` is a finite scalar.
     X = PriorSampler().sample(problem, jax.random.key(0), 4)
     Y = problem.target_map(X)
@@ -137,7 +137,7 @@ def test_ei_raises_on_degenerate_surrogate_emulator():
     `WeightedEmpiricalRandomMeasure` (the no-emulator baseline) at
     `state.surrogate_distribution` should raise with a message that
     points the user at the swap."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     X = PriorSampler().sample(problem, jax.random.key(0), 8)
     Y = problem.target_map(X)
     sp = WeightedEmpiricalRandomMeasure(

@@ -63,9 +63,8 @@ def banana_10d() -> BenchmarkProblem:
 def gaussian_2d() -> BenchmarkProblem:
     """Validated 2-D Gaussian benchmark (mean=0, cov=[[1, 0.5], [0.5, 1]]).
 
-    Preserves the historical `gaussian2d` defaults from the pre-refactor
-    factory: zero mean, unit marginal variances, off-diagonal correlation
-    0.5. Reference is the analytic ProbPipe `MultivariateNormal` itself.
+    Zero mean, unit marginal variances, off-diagonal correlation 0.5.
+    Reference is the analytic ProbPipe `MultivariateNormal` itself.
     """
     problem = gaussian(d=2, mean=(0.0, 0.0), cov=((1.0, 0.5), (0.5, 1.0)))
     return BenchmarkProblem(

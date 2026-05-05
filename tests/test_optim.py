@@ -118,7 +118,7 @@ def test_continuous_multistart_constrained_to_support():
     """Optimum of an unbounded concave function lands inside the support box."""
     state = _state()
     # Target outside the support box (which is [mu-5, mu+5]² = [-5, 5]²
-    # for default gaussian2d). Optimizer should clamp at the boundary.
+    # for default gaussian_2d). Optimizer should clamp at the boundary.
     target = jnp.asarray([20.0, -20.0])
     optimizer = ContinuousMultiStartOptimizer(
         n_starts=4,

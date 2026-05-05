@@ -39,7 +39,7 @@ from sabi.metrics import (
     normalize_metrics,
     validate_metric_keys,
 )
-from sabi.problems.gaussian import gaussian2d
+from sabi.problems.benchmarks import gaussian_2d
 
 
 def _algorithm(*, metrics, n_rounds=4, **kwargs):
@@ -209,7 +209,7 @@ def test_collision_caught_before_loop_starts():
     def bad_factory() -> TinyGPEmulator:
         raise RuntimeError("emulator factory should not be called")
 
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = Algorithm(
         emulator_factory=bad_factory,
         acquisition=PriorSampling(),
@@ -233,7 +233,7 @@ def test_collision_caught_before_loop_starts():
 def test_round_0_row_present_with_no_metrics():
     """Even with metrics=(), the loop emits one row per round — round 0
     has bookkeeping fields but no metric values."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(metrics=(), n_rounds=3)
     result = run(problem, alg, jax.random.key(0))
     assert len(result.per_round_metrics) == 3
@@ -249,7 +249,7 @@ def test_round_0_row_present_with_no_metrics():
 def test_bare_metric_back_compat_fires_every_round():
     """Passing a bare MMD (auto-wrapped at default config)
     should fire on every round including round 0."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(metrics=(MMD(n_estimate_samples=256, n_reference_samples=256),), n_rounds=4)
     result = run(problem, alg, jax.random.key(0))
     assert len(result.per_round_metrics) == 4
@@ -261,7 +261,7 @@ def test_bare_metric_back_compat_fires_every_round():
 
 def test_every_k_fires_only_on_matching_rounds():
     """ScheduledMetric(every=3) with n_rounds=7 → fires at rounds 0, 3, 6."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
@@ -279,7 +279,7 @@ def test_every_k_fires_only_on_matching_rounds():
 
 def test_final_false_excludes_from_final_metrics():
     """final=False keeps the metric out of the final eval."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
@@ -301,7 +301,7 @@ def test_final_false_excludes_from_final_metrics():
 def test_final_only_metric_via_large_every():
     """every=large, final=True: the metric appears at round 0 only
     (since only 0 % large == 0) plus final_metrics."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
@@ -331,7 +331,7 @@ def test_terminal_target_differs_from_current_under_tempering():
     from sabi.tempering.likelihood import LikelihoodTemperingViaForm
     from sabi.tempering.schedule import FixedSchedule
 
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=PriorSampling(),
@@ -378,7 +378,7 @@ def test_surrogate_aware_metric_reads_surrogate_distribution():
             assert ctx.surrogate_distribution is not None
             return {"n_design": float(ctx.X.shape[0])}
 
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(metrics=(DesignSizeMetric(),), n_rounds=3)
     result = run(problem, alg, jax.random.key(0))
     # Round 0: 8 initial points; rounds 1, 2: 9, 10 (PriorSampling, q=1).
@@ -394,14 +394,14 @@ def test_surrogate_aware_metric_reads_surrogate_distribution():
 def test_final_estimate_populated_with_no_metrics():
     """RunResult.final_estimate is built unconditionally, regardless of
     whether any metric is final=True."""
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(metrics=(), n_rounds=3)
     result = run(problem, alg, jax.random.key(0))
     assert isinstance(result.final_estimate, Distribution)
 
 
 def test_final_estimate_populated_when_all_metrics_final_false():
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(
         metrics=(
             ScheduledMetric(
@@ -437,7 +437,7 @@ def test_runtime_collision_backstop_for_undeclared_keys():
         def __call__(self, ctx, *, key):
             return {"score": 2.0}
 
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(metrics=(UndeclaredA(), UndeclaredB()), n_rounds=2)
     with pytest.raises(ValueError, match=r"key collision.*'score'"):
         run(problem, alg, jax.random.key(0))
@@ -459,7 +459,7 @@ def test_metric_context_metric_target_reflects_wrapper():
         def __call__(self, ctx, *, key):
             return {"target_value": 1.0 if ctx.metric_target == MetricTarget.TERMINAL else 0.0}
 
-    problem = gaussian2d()
+    problem = gaussian_2d()
     alg = _algorithm(
         metrics=(
             ScheduledMetric(metric=TargetRecorder(), target=MetricTarget.TERMINAL),

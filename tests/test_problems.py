@@ -12,11 +12,12 @@ from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi.problems.banana import banana
 from sabi.problems.base import BenchmarkProblem, Problem
-from sabi.problems.gaussian import gaussian, gaussian2d
+from sabi.problems.benchmarks import gaussian_2d
+from sabi.problems.gaussian import gaussian
 
 
-def test_gaussian2d_has_expected_shapes_and_types():
-    problem = gaussian2d()
+def test_gaussian_2d_has_expected_shapes_and_types():
+    problem = gaussian_2d()
     assert problem.input_shape == (2,)
     assert problem.output_shape == ()
     assert isinstance(problem.prior, Distribution)
@@ -24,8 +25,8 @@ def test_gaussian2d_has_expected_shapes_and_types():
     assert isinstance(problem.reference_distribution, MultivariateNormal)
 
 
-def test_gaussian2d_log_prob_integrates_to_one():
-    problem = gaussian2d()
+def test_gaussian_2d_log_prob_integrates_to_one():
+    problem = gaussian_2d()
     xs = jnp.linspace(-6.0, 6.0, 300)
     ys = jnp.linspace(-6.0, 6.0, 300)
     grid = jnp.stack(jnp.meshgrid(xs, ys, indexing="ij"), axis=-1).reshape(-1, 2)
@@ -35,10 +36,10 @@ def test_gaussian2d_log_prob_integrates_to_one():
     assert total == pytest.approx(1.0, abs=1e-3)
 
 
-def test_gaussian2d_reference_distribution_samples_match_moments():
+def test_gaussian_reference_distribution_samples_match_custom_moments():
     """`reference_distribution` is the analytic MVN; sampling from it should
-    reproduce the requested mean and cov."""
-    problem = gaussian2d(mean=(1.0, -0.5), cov=((2.0, 0.3), (0.3, 1.5)))
+    reproduce the requested mean and cov when constructed via `gaussian(d=2, ...)`."""
+    problem = gaussian(d=2, mean=(1.0, -0.5), cov=((2.0, 0.3), (0.3, 1.5)))
     samples = jnp.asarray(
         sample(
             problem.reference_distribution,
@@ -96,11 +97,11 @@ def test_gaussian_rejects_invalid_bounds_radius():
         gaussian(bounds_radius=0.0)
 
 
-def test_gaussian2d_alias_preserves_correlated_default():
-    """`gaussian2d()` (the back-compat wrapper) keeps the historical
-    correlated-covariance default — sampling from its reference
-    reproduces those moments."""
-    problem = gaussian2d()
+def test_gaussian_2d_benchmark_preserves_correlated_default():
+    """`gaussian_2d()` (the validated `BenchmarkProblem` factory) ships
+    a fixed correlated covariance; sampling from its analytic reference
+    should reproduce those moments."""
+    problem = gaussian_2d()
     samples = jnp.asarray(
         sample(
             problem.reference_distribution,
