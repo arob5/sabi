@@ -1,49 +1,29 @@
 """`SurrogateDistribution` — random measure induced by an emulator of the
 target map composed with a `LogDensityForm`.
 
-A `SurrogateDistribution` is a ProbPipe `NumericRandomMeasure[Array]`: every
-emulator function realization defines a deterministic posterior, and the
-random measure is the distribution over these as the emulator's random
-function varies.
+A `SurrogateDistribution` is a ProbPipe `NumericRandomMeasure[Array]`:
+every emulator function realization defines a deterministic posterior,
+and the random measure is the distribution over these. Decoupled from
+`Problem`: takes math primitives directly (`support`, `prior`,
+`log_density_form`, `input_shape`); the loop pulls those from the
+`Problem` per round.
 
-Decoupled from `Problem`: takes math primitives directly (`support`,
-`prior`, `log_density_form`, `input_shape`). The algorithm loop pulls
-those from a `Problem` when constructing the SP each round.
-
-**Degenerate / no-emulator case.** `emulator=None` is allowed and
-denotes a Dirac surrogate posterior — the design points carry the
-posterior structure directly, with no underlying emulator of the target
-map. The Dirac case is concretely realized by
-`sabi.surrogate.weighted_empirical.WeightedEmpiricalRandomMeasure`,
-which is a `SurrogateDistribution` subclass with `emulator=None`. Code
-that hits this base class with a None emulator but no override raises
-`NotImplementedError`; subclasses opt into degeneracy by overriding
-the relevant protocol methods.
-
-Naming: in sabi, "emulator" is reserved for the predictive model fit
-to observations of the target function (an `ArrayRandomFunction`).
-"Surrogate" denotes any approximate quantity replacing its exact
-analog — so `SurrogateDistribution` is the surrogate of the *true*
-posterior, distinct from the emulator that approximates the target
-function.
+`emulator=None` denotes a Dirac surrogate posterior, concretely realized
+by `WeightedEmpiricalRandomMeasure`. The base class raises
+`NotImplementedError` from emulator-touching protocol methods on a
+None emulator; degenerate subclasses opt in by overriding.
 
 Protocol opt-ins:
 
 - `SupportsRandomUnnormalizedLogProb`: returns a thin `RandomFunction`
-  whose `__call__(X)` gets the emulator's predictive at `X` and pushes
-  it through the form via `pushforward_marginal` (closed-form for
-  Gaussian-affine cases, MC empirical via ProbPipe broadcasting otherwise).
-  Requires a non-None `emulator`.
-- `SupportsSampling`: NOT implemented on the base class (sabi's
-  `Emulator` doesn't yet expose function-trajectory sampling).
-  Subclasses with degenerate emulator (e.g. `WeightedEmpiricalRandomMeasure`)
-  may implement it.
-- `SupportsMean` (the unbiased "expected posterior"): NOT implemented
-  on the base class (no closed-form expected posterior; MC backend is
-  future work). Degenerate subclasses may implement it (the inner
-  empirical IS the mean for the Dirac case).
-- `SupportsRandomLogProb`: NOT implemented on the base class
-  (normalization intractable). Degenerate subclasses may implement it.
+  that pushes the emulator's predictive at `X` through the form via
+  `pushforward_marginal`. Requires a non-None `emulator`.
+- `SupportsSampling`, `SupportsMean`, `SupportsRandomLogProb`: not
+  implemented on the base; degenerate subclasses may implement them.
+
+See ``docs/design.md`` §4.5 and ``docs/notation.md`` for the full
+"emulator" vs. "surrogate" naming convention and the architectural
+context.
 """
 
 from __future__ import annotations

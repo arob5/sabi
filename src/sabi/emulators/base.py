@@ -1,59 +1,27 @@
 """`Emulator` — fittable predictive model for some target map.
 
-`Emulator` inherits from ProbPipe's `ArrayRandomFunction`: it IS a random
-function and gets the full shape contract for free
-(`__call__(X, joint_inputs, joint_outputs) -> Distribution`, `input_shape`,
-`output_shape`, `_validate_X`, etc.). The only addition is the abstract
-`fit(X, Y) -> Self`, which signals the algorithmic role: an emulator is
-typically constructed by conditioning a prior random function on training
-evaluations of the target.
-
-Concrete Gaussian emulators inherit from both `Emulator` and
-`GaussianRandomFunction` (diamond inheritance over `ArrayRandomFunction`,
-resolved by Python's C3 MRO). See `sabi.emulators.tinygp.gp.TinyGPEmulator`.
-
-Forward-look: ProbPipe's `condition_on(prior_rf, X=X, y=Y)` is the
-natural way to build a posterior random function from training data.
-The `fit` method here is a bridge that captures the same idea without
-requiring sabi to wire ProbPipe's full conditioning machinery yet.
-
-Naming convention: in sabi, "emulator" is reserved specifically for the
-predictive model fit to observations of the target function. The broader
-word "surrogate" denotes any approximate quantity replacing its exact
-analog (hence `SurrogateDistribution` for the surrogate of the true
-posterior).
+`Emulator` IS a ProbPipe `ArrayRandomFunction` and inherits the full
+shape contract. The only addition is the abstract `fit(X, Y) -> Self`.
+Concrete Gaussian emulators (`TinyGPEmulator`, `DSPGPEmulator`) inherit
+from both `Emulator` and `GaussianRandomFunction`. See ``docs/design.md``
+§4.3 for the architectural context and ``docs/notation.md`` for the
+"emulator" vs. "surrogate" naming convention.
 
 Latent vs. observation predictive
 ---------------------------------
 
-Sabi emulators report the **latent** posterior. Concretely:
+Sabi emulators report the **latent** posterior — `predict_*` methods
+do NOT add observation noise to the diagonal. The GP's noise term in
+the deterministic-target setting is primarily a Cholesky-stability
+regularizer; acquisitions (EI, etc.) and pushforward-based estimators
+want the latent uncertainty.
 
-- ``predict_mean(X)``: posterior mean of the latent function ``f(X)``.
-- ``predict_variance(X)``: marginal posterior variance of ``f(X)``,
-  with **no observation noise added to the diagonal**.
-- ``predict_covariance(X, joint_inputs=True)``: full posterior
-  covariance of ``f(X)``, with no observation noise added.
-
-Rationale: sabi targets sequential surrogate-based Bayesian inference
-on deterministic targets. The GP's noise term is primarily a
-Cholesky-stability regularizer rather than a model of real measurement
-noise. Acquisition functions (EI, etc.) and pushforward-based posterior
-estimators want the *latent* uncertainty — the uncertainty over the
-true function value at unobserved inputs — not the broader observation-
-predictive uncertainty.
-
-Callers that want the observation-predictive distribution can build it
-explicitly: ``Var[y* | data] = predict_variance(X) + obs_noise_variance``,
-where ``obs_noise_variance`` is read from the emulator's
-``obs_noise_variance`` property (see ``Emulator.obs_noise_variance``).
-Backends that have a fitted observation-noise variance expose it
-there (e.g. ``DSPGPEmulator`` returns the squared MAP-fitted
-``obs_stddev``); backends without one return ``None``.
-
-When noisy-target work lands and the latent vs. observation
-distinction becomes user-facing, this module will grow a separate
-``predict_obs_*`` family rather than overloading the existing
-``predict_*`` methods.
+Callers that want the observation-predictive distribution build it
+explicitly: ``Var[y* | data] = predict_variance(X) + obs_noise_variance``.
+Backends with a fitted noise term expose it via the
+``obs_noise_variance`` property; backends without one return ``None``.
+When noisy targets become user-facing, this module will grow a separate
+``predict_obs_*`` family rather than overloading the existing methods.
 """
 
 from __future__ import annotations
