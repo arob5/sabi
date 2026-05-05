@@ -45,6 +45,17 @@ jobs:
       - name: Sync deps (docs + dev + probpipe + gpjax)
         run: uv sync --extra docs --extra dev --extra probpipe --extra gpjax
 
+      # Surface the actual Python traceback if the Getting Started notebook
+      # fails — sphinx-build / myst-nb tend to swallow it. Runs the notebook
+      # the same way myst-nb will, but with stderr in the build log.
+      - name: Smoke-test the Getting Started notebook
+        run: |
+          uv run jupyter nbconvert \
+            --to notebook \
+            --execute docs/getting_started.ipynb \
+            --output /tmp/getting_started_executed.ipynb \
+            --ExecutePreprocessor.timeout=300
+
       - name: Build docs site
         run: uv run sphinx-build -W -b html docs docs/_build/html
 
