@@ -45,6 +45,21 @@ If a class's behavior depends on a contract documented elsewhere
 point to it rather than restating. Docstrings should add what's
 specific; the shared contract lives in one place.
 
+### Update tutorials and concepts when behavior changes
+
+PRs that modify or introduce user-facing functionality must update the
+corresponding tutorial(s) and concepts page(s). "User-facing" means
+anything visible on the docs site: a public class or function
+signature, a flag a user might set in a Hydra config, a default that
+affects behavior, or a shape contract. The auto-generated API
+reference picks up docstring changes for free — but tutorial prose,
+example notebooks, and concepts pages do not. If the change makes
+existing prose wrong or stale, fix it in the same PR.
+
+If the change is genuinely tutorial-irrelevant (purely internal
+refactor, perf-only change, test-only edit), say so in the PR
+description so reviewers don't have to guess.
+
 ## Coding conventions
 
 ### Modern Python type hints
@@ -162,12 +177,6 @@ When reviewing a PR that touches `run()` or a similar loop, ask:
 algorithm by reading only the loop body?" If the answer is no, the
 change needs to push complexity into helpers before it lands.
 
-> **Status note:** the current `run()` body does not yet satisfy this
-> invariant — the refactor lives in [issue #20](https://github.com/arob5/sabi/issues/20).
-> The invariant applies going forward: new contributions to the loop
-> should not make the situation worse, and the issue-#20 refactor is
-> the canonical example of how to bring it into compliance.
-
 ## Tests
 
 - One test file per source module where practical (`tests/test_loop.py`
@@ -175,8 +184,7 @@ change needs to push complexity into helpers before it lands.
   `acquisitions/optim.py`, etc.).
 - Prefer `scripts/python -m pytest` over the bare `pytest` command —
   the wrapper threads `PYTHONPATH` for the worktree + ProbPipe pin.
-  See [`.claude/worktree_probpipe.md`](../.claude/worktree_probpipe.md)
-  for why.
+  See `.claude/worktree_probpipe.md` for why.
 - Numerical assertions: pick tolerances that survive seed-dependent
   variance with the configured `n_initial` / `n_rounds` / sample
   budgets. A 5% slack on a top-level metric is usually right; tighter

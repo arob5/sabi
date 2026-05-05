@@ -4,6 +4,8 @@ A test framework for algorithms that perform **s**equential **a**daptive **B**ay
 
 Status: design phase. See [`docs/design.md`](docs/design.md).
 
+Documentation, including a Getting Started walkthrough and the auto-generated API reference, is published at [arob5.github.io/sabi](https://arob5.github.io/sabi/).
+
 ## Scope
 
 - Pluggable benchmarks, surrogates, acquisitions, posterior estimators, and metrics

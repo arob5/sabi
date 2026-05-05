@@ -31,6 +31,13 @@ pyvbmc = ["pyvbmc"]
 # minor — gpjax 0.x has had API churn across minor versions, so any move
 # off 0.14 should be a deliberate compatibility audit.
 gpjax = ["gpjax>=0.14,<0.15"]
+docs = [
+  "sphinx>=7",
+  "myst-nb>=1.0",
+  "sphinx-autodoc2>=0.5",
+  "furo>=2024.0",
+  "ipykernel>=6",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sabi"]
