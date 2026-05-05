@@ -50,7 +50,7 @@ jobs:
       # the same way myst-nb will, but with stderr in the build log.
       - name: Smoke-test the Getting Started notebook
         run: |
-          uv run jupyter nbconvert \
+          uv run --with nbconvert jupyter nbconvert \
             --to notebook \
             --execute docs/getting_started.ipynb \
             --output /tmp/getting_started_executed.ipynb \
