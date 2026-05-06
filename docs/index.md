@@ -7,15 +7,25 @@ into [ProbPipe](https://github.com/arob5/prob-pipe).
 
 ## Where to start
 
-- **{doc}`Getting Started <getting_started>`** — a 2D run end to end with
-  visualizations of the target, acquired points, surrogate posterior, and a
-  per-round metric trajectory.
-- **Concepts** — the design notes that have shaped the library:
-  {doc}`design <design>`, {doc}`notation <notation>`,
-  {doc}`emulators <emulators>`, {doc}`tempering <tempering>`,
-  {doc}`scheduled metrics <scheduled_metrics>`.
-- **API reference** — auto-generated from the `sabi.*` source tree; rendered
-  docstrings include the math.
+The **spine** below is the curated read path for a new user. Read it in
+order; each page sets up the next.
+
+1. **{doc}`Getting Started <getting_started>`** — a 2D run end to end
+   with the four-panel result.
+2. **{doc}`Sabi at a glance <overview>`** — the five abstractions, the
+   emulator-vs-surrogate distinction, what `Algorithm` composes.
+3. **{doc}`Notation <notation>`** — shape conventions, `x` vs `θ`, the
+   public-batched / private-single-point split.
+4. **{doc}`What happens in run() <run_walkthrough>`** — every helper
+   inside the loop, with file:line links into `loop.py`.
+
+Once you've read the spine:
+
+- **Concepts** — the long-form design notes:
+  {doc}`design <design>`, {doc}`emulators <emulators>`,
+  {doc}`tempering <tempering>`, {doc}`scheduled metrics <scheduled_metrics>`.
+- **API reference** — auto-generated from the `sabi.*` source tree;
+  rendered docstrings include the math.
 - **{doc}`Contributing <contributing>`** — code/docs conventions for PRs.
 
 ## Project status
@@ -27,9 +37,12 @@ in {doc}`probpipe_issues <probpipe_issues>`.
 
 ```{toctree}
 :hidden:
-:caption: Tutorials
+:caption: Tutorials (the spine)
 
 getting_started
+overview
+notation
+run_walkthrough
 ```
 
 ```{toctree}
@@ -37,7 +50,6 @@ getting_started
 :caption: Concepts
 
 design
-notation
 emulators
 tempering
 scheduled_metrics
