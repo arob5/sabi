@@ -1,4 +1,4 @@
-# sabi — Notation
+# Notation
 
 Shape, symbol, and naming conventions used throughout sabi. **Code and
 docs follow these exactly** — if you're tempted to use `theta` for an

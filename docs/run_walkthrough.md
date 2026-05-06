@@ -1,4 +1,4 @@
-# What happens when you call `run()`
+# Anatomy of a run
 
 This page traces one execution of `run(problem, algorithm, key)` from
 [`src/sabi/algorithms/loop.py`](../src/sabi/algorithms/loop.py). The

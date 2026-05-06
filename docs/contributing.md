@@ -15,6 +15,37 @@ decomposition, and worked case examples — see
 
 ## Documentation
 
+### Spelling: `SABI` in prose, `sabi` in code
+
+`SABI` is the project name in prose — it's an acronym for **Sequential
+Adaptive Bayesian Inference**. The lowercase `sabi` is the import name
+and locked into paths, branches, and configs. Pick by context:
+
+- In documentation prose, page titles, alt text, headings, and PR
+  descriptions: **`SABI`**.
+- In code, imports, file paths, branch names, and Hydra/CLI flags:
+  **`sabi`**.
+- In docstrings, refer to the Python package as `sabi` (in code
+  voice) and the project as `SABI` (in prose voice).
+
+### Don't bake in GP assumptions outside GP-specific docs
+
+Every emulator implemented today is a Gaussian process, but the
+`Emulator` interface is deliberately general — future emulators will
+not be GPs. GP references are appropriate in:
+
+- GP-specific concept and API pages
+  ([`emulators.md`](emulators.md), the `tinygp` / `gpjax` API pages,
+  GP-specific tutorials).
+- Tutorials that happen to use a GP-based algorithm and call out the
+  choice (Getting Started, GP-emulator deep-dives).
+
+Outside those, prose describing the `Emulator` abstraction must not
+assume GPs — write to the abstract contract.
+
+- Good: "the emulator's predictive at `x_new`"
+- Bad: "the GP posterior at `x_new`"
+
 ### Math goes in docstrings
 
 When a function, class, or method implements a non-trivial mathematical

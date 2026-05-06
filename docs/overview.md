@@ -1,4 +1,4 @@
-# Sabi at a glance
+# SABI at a glance
 
 Sabi is a **test framework for sequential, surrogate-based Bayesian
 inference algorithms** — not an inference library you'd run on your
