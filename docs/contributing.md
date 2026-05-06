@@ -15,6 +15,37 @@ decomposition, and worked case examples — see
 
 ## Documentation
 
+### Spelling: `SABI` in prose, `sabi` in code
+
+`SABI` is the project name in prose — it's an acronym for **Sequential
+Adaptive Bayesian Inference**. The lowercase `sabi` is the import name
+and locked into paths, branches, and configs. Pick by context:
+
+- In documentation prose, page titles, alt text, headings, and PR
+  descriptions: **`SABI`**.
+- In code, imports, file paths, branch names, and Hydra/CLI flags:
+  **`sabi`**.
+- In docstrings, refer to the Python package as `sabi` (in code
+  voice) and the project as `SABI` (in prose voice).
+
+### Don't bake in GP assumptions outside GP-specific docs
+
+Every emulator implemented today is a Gaussian process, but the
+`Emulator` interface is deliberately general — future emulators will
+not be GPs. GP references are appropriate in:
+
+- GP-specific concept and API pages
+  ([`emulators.md`](emulators.md), the `tinygp` / `gpjax` API pages,
+  GP-specific tutorials).
+- Tutorials that happen to use a GP-based algorithm and call out the
+  choice (Getting Started, GP-emulator deep-dives).
+
+Outside those, prose describing the `Emulator` abstraction must not
+assume GPs — write to the abstract contract.
+
+- Good: "the emulator's predictive at `x_new`"
+- Bad: "the GP posterior at `x_new`"
+
 ### Math goes in docstrings
 
 When a function, class, or method implements a non-trivial mathematical
@@ -45,20 +76,29 @@ If a class's behavior depends on a contract documented elsewhere
 point to it rather than restating. Docstrings should add what's
 specific; the shared contract lives in one place.
 
-### Update tutorials and concepts when behavior changes
+### Update the spine and concepts when behavior changes
 
 PRs that modify or introduce user-facing functionality must update the
-corresponding tutorial(s) and concepts page(s). "User-facing" means
-anything visible on the docs site: a public class or function
-signature, a flag a user might set in a Hydra config, a default that
-affects behavior, or a shape contract. The auto-generated API
-reference picks up docstring changes for free — but tutorial prose,
+corresponding **spine** page(s) and concepts page(s). The spine is the
+curated read path for new users:
+
+- [`getting_started`](getting_started.ipynb) — the end-to-end run.
+- [`overview`](overview.md) — the five abstractions and how they
+  compose.
+- [`notation`](notation.md) — shape, symbol, and naming conventions.
+- [`run_walkthrough`](run_walkthrough.md) — what `run()` does, helper
+  by helper.
+
+"User-facing" means anything visible on the docs site: a public class
+or function signature, a flag a user might set in a Hydra config, a
+default that affects behavior, or a shape contract. The auto-generated
+API reference picks up docstring changes for free — but spine prose,
 example notebooks, and concepts pages do not. If the change makes
 existing prose wrong or stale, fix it in the same PR.
 
-If the change is genuinely tutorial-irrelevant (purely internal
-refactor, perf-only change, test-only edit), say so in the PR
-description so reviewers don't have to guess.
+If the change is genuinely spine-irrelevant (purely internal refactor,
+perf-only change, test-only edit), say so in the PR description so
+reviewers don't have to guess.
 
 ### Notebook outputs are cached
 
