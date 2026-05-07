@@ -1,6 +1,6 @@
-# Form abstraction refactor — `DensityForm`, `Map`, and bridging
+# Form abstraction refactor — `DensityDecomposition`, `Map`, and bridging
 
-**Status:** draft v0.3 — pre-implementation
+**Status:** draft v0.4 — pre-implementation
 **Issue:** [#55](https://github.com/arob5/sabi/issues/55)
 **Last updated:** 2026-05-07
 
@@ -8,14 +8,12 @@
 >
 > 1. **Form unification.** Collapse today's `LogDensityForm` hierarchy
 >    (`Identity`, `LogLikPlusPrior`, `ForwardModel`) into a single
->    `DensityForm` parameterised by a `Map` (the link from emulator output
->    to log-density-residual) plus an additive `Map` shift (the
->    deterministic x-dependent term, typically a log-prior). Specific forms
->    — including alternative link functions like softplus and square —
->    become `Map` compositions, not subclasses.
+>    parametric host class with `(link: Map, shift: Map, constraint)`
+>    fields. Specific forms — including alternative link functions like
+>    softplus and square — become `Map` compositions, not subclasses.
 > 2. **Bridging rename and reshape.** `TemperingScheme` becomes
 >    `BridgingScheme`. Likelihood tempering is one bridge family among
->    several future ones; bridges operate on a `DensityForm` by composing
+>    several future ones; bridges operate on the host class by composing
 >    `Map`s on its `link` and `shift`.
 >
 > A `pushforward(Map, Distribution) → Distribution` multi-dispatch op
@@ -23,6 +21,16 @@
 > through forms. The `Map` abstraction is intentionally aligned with what
 > ProbPipe is converging on; sabi's local op becomes a re-export when
 > ProbPipe lands.
+>
+> **Coordination with [PR #63](https://github.com/arob5/sabi/pull/63).** The
+> host class is named `DensityDecomposition` and lives at top-level
+> `src/sabi/density_decomposition.py`, per the `TargetDistribution` /
+> `DensityDecomposition` split that PR #63 introduces. PR #63 carries the
+> rename and extends the class with `target_single` + `output_shape`
+> fields; this PR (#59) contributes the `(link, shift)` `Map` shape,
+> the `Map` ABC + concrete maps, the `pushforward(Map, Distribution)`
+> dispatch, and the bridging restructure. The two PRs land
+> sequentially — recommended order in [§9](#9-phasing-and-follow-up-issues).
 >
 > This is a **design-only** PR: no source code changes. Implementation is
 > split across follow-up issues (see [§9](#9-phasing-and-follow-up-issues)).
@@ -54,27 +62,31 @@ specific. Adding alternative link functions to `LogLikPlusPrior` (issue
 #55's original framing) means either patching the class with a `link`
 field or adding new sibling classes; both fight the underlying structure.
 
-The structural fix is to collapse the hierarchy. Define `DensityForm` as a
-thin combination of:
+The structural fix is to collapse the hierarchy. Define a single host
+class (`DensityDecomposition`, per [PR #63](https://github.com/arob5/sabi/pull/63))
+that combines:
 
 - a `Map` `link: y \mapsto z` (the emulator-output side; ranges from the
   identity to a Gaussian log-likelihood),
 - a `Map` `shift: x \mapsto z'` (the deterministic x-dependent additive
-  term, typically a log-prior),
-- a `Constraint` on $y$.
+  term, typically a log-prior closed in at construction),
+- a `Constraint` on $y$,
+- (per PR #63) `target_single` and `output_shape`, the description of
+  what the emulator approximates.
 
 Specific forms become specific `Map` choices. Alternative link functions
 are concrete `Map` subclasses (`Softplus`, `LogSoftplus`, `Square`, …)
 that slot in. Forward-model emulation is a `Map` choice
-(`GaussianLogLik`). Tempering is `Map` composition on a base form's
+(`GaussianLogLik`). Tempering is `Map` composition on the host's
 `link`. The downstream pushforward / estimator / acquisition machinery
 dispatches on `Map` types, not on form subclasses.
 
 The exponential link is no longer privileged — under this design, the
-default form for log-density emulation is `DensityForm(link=Identity())`;
-log-likelihood-plus-prior under exp link is `DensityForm(link=Identity(),
-shift=LogProb(prior))`; under softplus link, `DensityForm(link=LogSoftplus(),
-shift=LogProb(prior))`. The codepath is the same in all three cases.
+default form for log-density emulation has `link=Identity()`;
+log-likelihood-plus-prior under exp link has `link=Identity(),
+shift=LogProb(modeling_prior)`; under softplus link, `link=LogSoftplus(),
+shift=LogProb(modeling_prior)`. The codepath is the same in all three
+cases.
 
 ## 2. Current state map
 
@@ -82,7 +94,7 @@ The form hierarchy and its consumers:
 
 | Site | What it does |
 |------|--------------|
-| [`src/sabi/problems/forms.py`](../src/sabi/problems/forms.py) | `LogDensityForm` family — `Identity`, `LogLikPlusPrior`, `ForwardModel`. Three classes for one abstraction. |
+| [`src/sabi/problems/forms.py`](../src/sabi/problems/forms.py) | `LogDensityForm` family — `Identity`, `LogLikPlusPrior`, `ForwardModel`. Three classes for one abstraction. (Module moves to top-level `src/sabi/density_decomposition.py` per [PR #63](https://github.com/arob5/sabi/pull/63).) |
 | [`src/sabi/surrogate/_pushforward.py:79`](../src/sabi/surrogate/_pushforward.py) | `pushforward_marginal` dispatches on `(input_dist, form_subclass)` for closed-form Gaussian-affine, falls back to MC for everything else. |
 | [`src/sabi/surrogate/_pushforward.py:144`](../src/sabi/surrogate/_pushforward.py) | `_shift_gaussian_loc` — bespoke handling of "shift `loc` by per-point log-prior, leave `scale_tril` alone." Generalises to any `Affine` Map. |
 | [`src/sabi/surrogate/estimators.py:129`](../src/sabi/surrogate/estimators.py) | `_ExpectedTargetDistribution._unnormalized_log_prob` plug-in mean. The bias note at line 15 is a symptom of the existing exp-link composition. |
@@ -93,8 +105,9 @@ The form hierarchy and its consumers:
 Two things stand out:
 
 - The pushforward / tempering layers branch on form *subclass*. Adding a
-  new link function multiplies this branching. A single `DensityForm` with
-  composable `Map`s collapses the branching into per-Map dispatch.
+  new link function multiplies this branching. A single
+  `DensityDecomposition` with composable `Map`s collapses the branching
+  into per-Map dispatch.
 - `_shift_gaussian_loc` is a one-off Gaussian-affine pushforward primitive.
   Generalising to `pushforward(Affine, Normal | MVN)` makes it the first
   entry in a registry that handles arbitrary `Map`s.
@@ -173,18 +186,31 @@ Distribution)` op also moves up. The migration is rename-level, not
 refactor-level, and is the explicit motivation for the design choices in
 this section.
 
-## 4. The `DensityForm` abstraction
+## 4. The `DensityDecomposition` host class
+
+The host class is `DensityDecomposition`, defined fully in
+[PR #63](https://github.com/arob5/sabi/pull/63)'s
+`docs/density_decomposition.md`. It carries the `link` / `shift` / `constraint`
+fields contributed by this PR, plus `target_single` and `output_shape`
+contributed by PR #63 (the description of what the emulator approximates).
+The combined shape:
 
 ```python
 @dataclass(frozen=True)
-class DensityForm:
-    link:  Map                                          # y → log-density-residual
-    shift: Map = Constant(0.0)                          # x → additive shift, default zero
-    constraint: Constraint = NoConstraint               # constraint on y values
+class DensityDecomposition:
+    target_single: Callable[[Array], Array]   # x -> y    (PR #63)
+    output_shape: tuple[int, ...]              # shape of one y    (PR #63)
+    link:  Map                                  # y -> log-density-residual    (this PR)
+    shift: Map = Constant(0.0)                  # x -> additive shift    (this PR)
+    constraint: Constraint = NoConstraint       # constraint on y    (this PR)
 
     def __call__(self, x: Array, y: Array) -> Array:
         """Deterministic evaluation: log-density at (x, y)."""
         return self.link(y) + self.shift(x)
+
+    def density_at(self, x: Array) -> Array:
+        """Compose target_single with link/shift: log-density at x."""
+        return self(x, self.target_single(x))
 
     def pushforward(self, x: Array, y: Distribution) -> Distribution:
         """Push the emulator's predictive `y` at point(s) `x` to log-density."""
@@ -192,51 +218,64 @@ class DensityForm:
         return pushforward(per_x_map, y)
 ```
 
-The form decomposes log-density as $\Phi(x, y) = \mathrm{link}(y) +
-\mathrm{shift}(x)$ — a single-variable `link` (in $y$) plus a deterministic
-additive shift (in $x$). All x-dependence enters through the shift.
+The decomposition's log-density is $\Phi(x, y) = \mathrm{link}(y) +
+\mathrm{shift}(x)$ — a single-variable `link` (in $y$) plus a
+deterministic additive shift (in $x$). All x-dependence enters through
+the shift. The modeling prior, when present, closes into the `shift`
+`Map` at construction time (typically `shift = LogProb(modeling_prior)`)
+— it is not pulled from a `target.prior` field at call time. PR #63
+drops the `prior` field from `TargetDistribution` for exactly this
+reason.
 
-### 4.1 Specific forms
+### 4.1 Specific decompositions
 
-The current `LogDensityForm` subclasses become construction idioms:
+The current `LogDensityForm` subclasses become construction idioms.
+The ProbPipe-style examples below show the `link` / `shift` choices
+this PR introduces; PR #63's helper classmethods (`identity_from_target`,
+`likelihood_with_prior`, `forward_model`) wrap the common patterns and
+are the recommended user-facing entry points.
 
 ```python
 # Today's Identity (log-density emulator):
-DensityForm(link=Identity())
+DensityDecomposition(target_single=..., output_shape=(), link=Identity())
 
 # Today's LogLikPlusPrior (log-likelihood + prior, exp link):
-DensityForm(link=Identity(), shift=LogProb(prior))
+DensityDecomposition(target_single=..., output_shape=(),
+                     link=Identity(), shift=LogProb(modeling_prior))
 
 # Today's ForwardModel with Gaussian likelihood:
-DensityForm(link=GaussianLogLik(obs, cov), shift=LogProb(prior))
+DensityDecomposition(target_single=..., output_shape=(d,),
+                     link=GaussianLogLik(obs, cov), shift=LogProb(modeling_prior))
 
 # New: log-likelihood + prior, softplus link (issue #55's motivation):
-DensityForm(link=LogSoftplus(), shift=LogProb(prior))
+DensityDecomposition(target_single=..., output_shape=(),
+                     link=LogSoftplus(), shift=LogProb(modeling_prior))
 
 # New: log-likelihood + prior, square link:
-DensityForm(link=LogSquare(), shift=LogProb(prior), constraint=NonNegative())
+DensityDecomposition(target_single=..., output_shape=(),
+                     link=LogSquare(), shift=LogProb(modeling_prior),
+                     constraint=NonNegative())
 ```
 
-No subclasses; the variation is entirely in the `Map`s. Convenience
-constructors (e.g. `log_lik_with_prior(prior, link=Identity())`) can be
-added if they aid discoverability, but they're sugar.
+No subclasses; the variation is entirely in the `Map`s.
 
 ### 4.2 What the emulator emits, in each case
 
 It is worth being explicit about this, since the answer changes with
 `link` and was the source of confusion in earlier drafts of this doc:
 
-| Form | What the emulator's $y$ represents |
-|------|-------------------------------------|
-| `link=Identity()`, `shift=Constant(0)` | log-density (full, prior absorbed). |
-| `link=Identity()`, `shift=LogProb(prior)` | log-likelihood. |
-| `link=LogSoftplus()`, `shift=LogProb(prior)` | $\mathrm{softplus}^{-1}(\mathrm{lik})$ — neither log nor density. The whole point of softplus is that this quantity has a more compact range than $\log\mathrm{lik}$ in the high-density region. |
-| `link=LogSquare()`, `shift=LogProb(prior)` | $\sqrt{\mathrm{lik}}$ (with sign). |
-| `link=GaussianLogLik(obs, C)`, `shift=LogProb(prior)` | A forward-model output (e.g. simulated observations). The likelihood is computed from $y$ via the Gaussian density. |
+| Decomposition | What the emulator's $y$ represents |
+|---------------|-------------------------------------|
+| `link=Identity()`, `shift=Constant(0)` | log-density (full, modeling prior absorbed into `target_single`). |
+| `link=Identity()`, `shift=LogProb(modeling_prior)` | log-likelihood. |
+| `link=LogSoftplus()`, `shift=LogProb(modeling_prior)` | $\mathrm{softplus}^{-1}(\mathrm{lik})$ — neither log nor density. The whole point of softplus is that this quantity has a more compact range than $\log\mathrm{lik}$ in the high-density region. |
+| `link=LogSquare()`, `shift=LogProb(modeling_prior)` | $\sqrt{\mathrm{lik}}$ (with sign). |
+| `link=GaussianLogLik(obs, C)`, `shift=LogProb(modeling_prior)` | A forward-model output (e.g. simulated observations). The likelihood is computed from $y$ via the Gaussian density. |
 
-`link=Identity()` with a `LogProb` shift is the common case: log-likelihood
-emulation, exp link, prior added. Choosing a non-identity `link` is opting
-into a different emulated quantity, deliberately.
+`link=Identity()` with a `LogProb` shift is the common case:
+log-likelihood emulation, exp link, modeling prior added. Choosing a
+non-identity `link` is opting into a different emulated quantity,
+deliberately.
 
 ### 4.3 Constraints
 
@@ -247,8 +286,8 @@ into a different emulated quantity, deliberately.
 - `Positive` — for any link whose `log_link` has a singularity at zero.
 
 Acquisitions and pushforward primitives can read the constraint to
-validate inputs or pin sign conventions; the `DensityForm` itself does
-not enforce it (no runtime checks on $y$).
+validate inputs or pin sign conventions; the `DensityDecomposition`
+itself does not enforce it (no runtime checks on $y$).
 
 ## 5. Pushforward dispatch
 
@@ -274,12 +313,12 @@ For the typical sabi cases:
 ### 5.2 Closed-form Gaussian-affine path
 
 The common case in sabi today is `link=Identity()` with
-`shift=LogProb(prior)`. The form's pushforward composes
-`Affine(slope=1, intercept=shift(x)) @ Identity = Affine(slope=1, intercept=shift(x))`.
-Pushing a `Normal` or `MVN` through this `Affine` shifts `loc` by
-`shift(x)` and leaves `scale` / `scale_tril` unchanged — equivalent to
-today's `_shift_gaussian_loc`, but as a generic Affine pushforward
-rather than form-specific code.
+`shift=LogProb(modeling_prior)`. The decomposition's pushforward
+composes `Affine(slope=1, intercept=shift(x)) @ Identity =
+Affine(slope=1, intercept=shift(x))`. Pushing a `Normal` or `MVN`
+through this `Affine` shifts `loc` by `shift(x)` and leaves `scale` /
+`scale_tril` unchanged — equivalent to today's `_shift_gaussian_loc`,
+but as a generic Affine pushforward rather than form-specific code.
 
 ### 5.3 MC fallback for nonlinear and joint cases
 
@@ -293,20 +332,21 @@ machinery (`_batch_form` at
 [`src/sabi/surrogate/_pushforward.py:163`](../src/sabi/surrogate/_pushforward.py)),
 generalised from "form-specific MC" to "any Map".
 
-### 5.4 Worked example: joint MVN through a form with softplus link
+### 5.4 Worked example: joint MVN through a softplus-link decomposition
 
 Setting: GP emulator at $n$ query points, joint mode (returns
-`MVN(loc=(n,), scale_tril=(n, n))`); form is
-`DensityForm(link=LogSoftplus(), shift=LogProb(prior))`.
+`MVN(loc=(n,), scale_tril=(n, n))`); decomposition is
+`DensityDecomposition(target_single=..., output_shape=(),
+link=LogSoftplus(), shift=LogProb(modeling_prior))`.
 
 ```python
-emulator_pred = emulator(X)                 # MVN(event_shape=(n,))
-log_density_pred = form.pushforward(X, emulator_pred)
+emulator_pred = emulator(X)                                  # MVN(event_shape=(n,))
+log_density_pred = decomposition.pushforward(X, emulator_pred)
 ```
 
 Internally:
 
-1. `form.pushforward` constructs `per_x_map = Affine(slope=1, intercept=shift(X)) @ LogSoftplus()`.
+1. `decomposition.pushforward` constructs `per_x_map = Affine(slope=1, intercept=shift(X)) @ LogSoftplus()`.
    `shift(X)` has shape `(n,)`; `Affine.intercept` has shape `(n,)`.
 2. `pushforward(per_x_map, emulator_pred)` recurses through `Compose`:
    first `pushforward(LogSoftplus(), MVN)` — no closed form, MC fallback
@@ -318,18 +358,18 @@ Internally:
    shape `(S, n)`, with joint structure preserved through the Affine
    shift.
 
-For the same form under joint MVN with `link=Identity()` (the common
-case), the entire path is closed form: step 2 collapses to identity, step
-3 is `pushforward(Affine, MVN)` → `MVN`, no MC needed.
+For the same decomposition under joint MVN with `link=Identity()` (the
+common case), the entire path is closed form: step 2 collapses to
+identity, step 3 is `pushforward(Affine, MVN)` → `MVN`, no MC needed.
 
 ### 5.5 Point-set agnostic
 
-The form's `pushforward(x, y)` doesn't care about the choice of $X$ — it
-operates on whatever `Distribution` the emulator produces. Per-point
-marginal mode (`Normal` with `batch_shape=(n,)`), joint mode (`MVN` with
-`event_shape=(n,)`), heteroskedastic Gaussian, mixture, Student-$t$:
-all handled as long as the dispatch table has entries for the relevant
-`(Map, Distribution)` pair, otherwise MC.
+The decomposition's `pushforward(x, y)` doesn't care about the choice
+of $X$ — it operates on whatever `Distribution` the emulator produces.
+Per-point marginal mode (`Normal` with `batch_shape=(n,)`), joint mode
+(`MVN` with `event_shape=(n,)`), heteroskedastic Gaussian, mixture,
+Student-$t$: all handled as long as the dispatch table has entries for
+the relevant `(Map, Distribution)` pair, otherwise MC.
 
 ## 6. Acquisition customisation axes
 
@@ -416,20 +456,25 @@ work) and demonstrated end-to-end in the bridging tutorial notebook
 ## 7. ProbPipe boundary — log-density at the MCMC seam
 
 Today, sabi exposes `TargetDistribution._unnormalized_log_prob(x) →
-log-density` to ProbPipe's `SupportsUnnormalizedLogProb` protocol. This
-is unchanged by the refactor: the form composes
-`link.log_link(y) + shift(x)` and returns the result. ProbPipe MCMC sees
-a log-density just like it does today.
+log-density` to ProbPipe's `SupportsUnnormalizedLogProb` protocol.
+After [PR #63](https://github.com/arob5/sabi/pull/63),
+`TargetDistribution` may implement `_unnormalized_log_prob`
+analytically (for benchmarks) or raise `NotImplementedError` (for user
+inverse problems). The MCMC-relevant random log-density boundary moves
+to `EmulatedDistribution._random_unnormalized_log_prob`, which composes
+the decomposition: `decomposition.link(y) + decomposition.shift(x)`,
+pushed through the emulator predictive. ProbPipe MCMC sees the same
+shape it does today.
 
 For `Map`s whose `log_link` is numerically singular at certain inputs
 (e.g. `LogSquare` at $z = 0$), the `Map` author handles stability —
-not the boundary. The constraint metadata on `DensityForm` can express
-"$y$ should be non-negative" / "$y$ should be away from zero" so
-acquisitions can avoid problematic regions.
+not the boundary. The constraint metadata on `DensityDecomposition` can
+express "$y$ should be non-negative" / "$y$ should be away from zero"
+so acquisitions can avoid problematic regions.
 
 A second protocol returning density-scale (`SupportsUnnormalizedDensity`)
 could be added later if and when ProbPipe lands one; sabi does not need
-it to ship the form refactor.
+it to ship the refactor.
 
 ## 8. Bridging
 
@@ -452,6 +497,12 @@ Conflating them means new bridge families inherit a `ViaForm`/`ViaTarget`
 distinction whether or not it makes sense for them, and link-compatibility
 dispatch has nowhere clean to live. Renaming and reshaping in the same
 pass.
+
+(Note: under the post-#63 layout, the `DensityDecomposition` lives on
+`Algorithm`, not on `Problem` or `IntermediateTarget`. Bridges produce a
+new `DensityDecomposition` per state; the bridging scheme reads the base
+decomposition off the algorithm and composes `Map`s on its `link` /
+`shift`.)
 
 ### 8.2 The new shape
 
@@ -491,12 +542,16 @@ but mechanical.)
 class LikelihoodBridgeViaForm(BridgingScheme):
     initial: TargetDistribution
 
-    def intermediate_form(self, base: DensityForm, beta: float) -> DensityForm:
-        # The base form represents log_target = base.link(y) + base.shift(x),
-        # with shift typically = LogProb(prior). Tempering raises the likelihood
-        # part to β: π_init · (π_target / π_init)^β = link(y)^β · π_init(x).
+    def intermediate_decomposition(
+        self, base: DensityDecomposition, beta: float
+    ) -> DensityDecomposition:
+        # The base decomposition represents log_target = base.link(y) + base.shift(x),
+        # with shift typically = LogProb(modeling_prior). Tempering raises the
+        # likelihood part to β: π_init · (π_target / π_init)^β = link(y)^β · π_init(x).
         # In log-space: β · base.link(y) + base.shift(x).
-        return DensityForm(
+        return DensityDecomposition(
+            target_single=base.target_single,                     # unchanged
+            output_shape=base.output_shape,                       # unchanged
             link=Affine(slope=beta, intercept=0.0) @ base.link,   # scale link by β
             shift=base.shift,                                     # unchanged (= log p_init)
             constraint=base.constraint,
@@ -507,32 +562,38 @@ Note that the β-scaling is just a `Map` composition — nothing about it
 depends on `base.link`. This works under any link, including the new
 `LogSoftplus` and `LogSquare` cases. The current
 `_LogLikPlusPriorTempered` and `_ForwardModelTempered` collapse into
-this single rule.
+this single rule. `target_single` and `output_shape` are passed through
+unchanged: bridging modifies how the emulator's output composes into
+log-density, not what the emulator approximates.
 
-### 8.4 `GeometricBridge` — for forms with shift = Constant(0)
+### 8.4 `GeometricBridge` — for decompositions with shift = Constant(0)
 
-The current `_IdentityTempered` has `Identity` base form (no prior in the
-form) and produces $(1-\beta) \log\pi_0(x) + \beta \cdot y$. This is the
-geometric bridge:
+The current `_IdentityTempered` has `Identity` base form (no prior in
+the decomposition) and produces $(1-\beta) \log\pi_0(x) + \beta \cdot
+y$. This is the geometric bridge:
 
 ```python
 class GeometricBridge(BridgingScheme):
     initial: TargetDistribution
 
-    def intermediate_form(self, base: DensityForm, beta: float) -> DensityForm:
+    def intermediate_decomposition(
+        self, base: DensityDecomposition, beta: float
+    ) -> DensityDecomposition:
         # base.shift is typically Constant(0); base.link encodes the full
-        # target log-density. New form interpolates between log p_init and
-        # base via β.
-        return DensityForm(
+        # target log-density. New decomposition interpolates between log p_init
+        # and base via β.
+        return DensityDecomposition(
+            target_single=base.target_single,
+            output_shape=base.output_shape,
             link=Affine(slope=beta, intercept=0.0) @ base.link,
             shift=Affine(slope=(1 - beta), intercept=0.0) @ LogProb(self.initial),
             constraint=base.constraint,
         )
 ```
 
-The two bridges share "scale link by β" and differ only in shift handling:
-`LikelihoodBridgeViaForm` keeps the existing shift (because that shift
-*is* $\log\pi_\mathrm{init}$, not a separate term to bridge);
+The two bridges share "scale link by β" and differ only in shift
+handling: `LikelihoodBridgeViaForm` keeps the existing shift (because
+that shift *is* $\log\pi_\mathrm{init}$, not a separate term to bridge);
 `GeometricBridge` constructs a new shift $(1-\beta)\log\pi_\mathrm{init}$.
 
 ### 8.5 `LikelihoodBridgeViaTargetRescale` — exp-link-only optimisation
@@ -547,27 +608,27 @@ raising the link's output to power $\beta$.
 class LikelihoodBridgeViaTargetRescale(BridgingScheme):
     initial: TargetDistribution
 
-    def intermediate_target(self, base_form: DensityForm, beta: float):
-        if not isinstance(base_form.link, Identity):
+    def intermediate_target(self, base: DensityDecomposition, beta: float):
+        if not isinstance(base.link, Identity):
             raise NotImplementedError(
-                f"LikelihoodBridgeViaTargetRescale requires base_form.link "
+                f"LikelihoodBridgeViaTargetRescale requires base.link "
                 f"to be Identity (so y is log-likelihood and scaling y by β "
                 f"is equivalent to scaling the link by β). "
-                f"Got link={type(base_form.link).__name__}. "
+                f"Got link={type(base.link).__name__}. "
                 f"Use LikelihoodBridgeViaForm for non-Identity links."
             )
         # ... existing target-rescale logic.
 ```
 
-`ForwardModel` forms have `link=GaussianLogLik(obs, C)` — also not
-`Identity`, so the same error fires. No special `ForwardModel`-specific
+Forward-model decompositions (`link=GaussianLogLik(obs, C)`) are also
+not `Identity`, so the same error fires. No special forward-model
 branch is needed.
 
 ### 8.6 Future bridge families
 
 `LikelihoodBridgeViaForm` and `GeometricBridge` are the first two concrete
 bridges. Future families slot in as additional `BridgingScheme` subclasses
-without affecting `Map` or `DensityForm`:
+without affecting `Map` or `DensityDecomposition`:
 
 - `MixtureBridge`: $\pi_\beta = (1-\beta)\pi_0 + \beta\pi_\mathrm{target}$.
   Algebraically additive in densities, not multiplicative; pushforward
@@ -576,15 +637,18 @@ without affecting `Map` or `DensityForm`:
   L_i(x)$ for a sequence of data subsets. State PyTree is a subset
   index, not a scalar.
 
-Neither requires changes to `Map` or `DensityForm`. The bridge abstraction
-is link-agnostic in its mathematical content; link-compatibility checks
-live per-strategy as in §8.5.
+Neither requires changes to `Map` or `DensityDecomposition`. The bridge
+abstraction is link-agnostic in its mathematical content; link-compatibility
+checks live per-strategy as in §8.5.
 
 ## 9. Phasing and follow-up issues
 
 This doc is the deliverable for **Phase 1** of the issue. Subsequent
-phases land in their own PRs / issues. The phasing acknowledges that
-this is now a materially larger refactor than the original issue scoped.
+phases land in their own PRs / issues. The phasing is now coordinated
+with [PR #63](https://github.com/arob5/sabi/pull/63) — that PR's
+implementation lands between this PR's Phase 2 and Phase 3, performing
+the rename + extension of the host class. Phases 3+ in this PR proceed
+against the post-#63 codebase.
 
 1. **Phase 1 — design doc** (this PR). No code changes.
 2. **Phase 2 — `Map` + `pushforward` infrastructure** (separate
@@ -594,46 +658,60 @@ this is now a materially larger refactor than the original issue scoped.
    Distribution)` multiple-dispatch op with closed-form registrations
    for the entries in [§5.1](#51-dispatch-table) and an MC fallback
    that generalises today's `_batch_form`. No form / surrogate /
-   bridging changes yet — this phase ships the primitives.
-3. **Phase 3 — `DensityForm` rewrite** (separate issue/PR). Collapse
-   `LogDensityForm` family into single `DensityForm(link, shift,
-   constraint)` per [§4](#4-the-densityform-abstraction). Update
-   construction sites in problems / tests to use the new constructor
-   shape. The closed-form pushforward for `(Affine, Normal | MVN)`
-   makes `_shift_gaussian_loc` redundant; remove. `pushforward_marginal`
-   becomes a thin wrapper around `form.pushforward(x, y)`.
-4. **Phase 4 — acquisition layered access** (separate issue/PR).
+   bridging changes yet — this phase ships the primitives both this PR
+   and PR #63 depend on.
+3. **PR #63's implementation** (sibling PR, lands between this PR's
+   phases 2 and 3). Renames `LogDensityForm` family →
+   `DensityDecomposition` (single class with `target_single`,
+   `output_shape`, `link`, `shift`, `constraint`), moves it to
+   top-level `src/sabi/density_decomposition.py`, restructures
+   `TargetDistribution` to drop its `prior` / `target_single` /
+   `output_shape` / `log_density_form` fields, splits the prior roles
+   across `Algorithm` / per-optimizer fields, and removes
+   `sampling.py`. See PR #63's design doc for the full migration
+   footprint.
+4. **Phase 3 (this PR, post-#63) — concrete `Map` subclasses for
+   non-default links** (separate issue/PR, possibly merged with Phase
+   2). After PR #63 lands, the `DensityDecomposition` shape is in
+   place; this phase ensures the `Softplus` / `LogSoftplus` / `Square`
+   / `LogSquare` `Map` subclasses are wired in with their pushforward
+   dispatch entries. (Largely subsumed by Phase 2 if the `Map` infra
+   ships all concrete subclasses together. Kept as a placeholder
+   phase in case shipping happens incrementally.)
+5. **Phase 4 — acquisition layered access** (separate issue/PR).
    `EmulatedDistribution` already exposes `emulator` as a property and
    implements `_random_unnormalized_log_prob` (via the
-   `pushforward_marginal` path that becomes `form.pushforward` after
-   Phase 3). Phase 4's work is acquisition-side: introduce the
-   `PredictiveLayer` enum and add `target_layer` parameter to
-   acquisitions that benefit (likely just `MaxVariance` for now), with
-   the dispatch wired to `surr_dist.emulator(X)` /
+   `pushforward_marginal` path that becomes
+   `decomposition.pushforward` after PR #63). Phase 4's work is
+   acquisition-side: introduce the `PredictiveLayer` enum and add
+   `target_layer` parameter to acquisitions that benefit (likely just
+   `MaxVariance` for now), with the dispatch wired to
+   `surr_dist.emulator(X)` /
    `random_unnormalized_log_prob(surr_dist, X)` /
    `pushforward(Exp(), random_unnormalized_log_prob(surr_dist, X))`
    per [§6.2](#62-axis-2-which-predictive-layer-to-target). No new
    methods on `SurrogateDistribution`.
-5. **Phase 5 — bridging rename + collapse** (separate issue/PR).
+6. **Phase 5 — bridging rename + collapse** (separate issue/PR).
    `sabi.tempering` → `sabi.bridging`; `TemperingScheme` →
    `BridgingScheme`; per-form-type `_*Tempered` classes collapse into
-   `LikelihoodBridgeViaForm.intermediate_form` returning a single
-   `DensityForm` (per [§8.3](#83-likelihoodbridgeviaform-link-agnostic-bridging-via-map-composition));
+   `LikelihoodBridgeViaForm.intermediate_decomposition` returning a
+   single `DensityDecomposition` (per
+   [§8.3](#83-likelihoodbridgeviaform-link-agnostic-bridging-via-map-composition));
    `_IdentityTempered` becomes `GeometricBridge`;
    `LikelihoodTemperingViaTarget` becomes
    `LikelihoodBridgeViaTargetRescale` raising on non-`Identity` link.
-6. **Phase 6 — softplus link end-to-end** (separate issue/PR). Verify
+7. **Phase 6 — softplus link end-to-end** (separate issue/PR). Verify
    `Softplus` and `LogSoftplus` numerical stability in `log_link`;
    register pushforward dispatch entries (closed-form where applicable,
    MC fallback elsewhere); end-to-end test on a synthetic 2D posterior
    comparing GP fit quality and posterior recovery against the
    `Identity` link baseline.
-7. **Phase 7 — square link end-to-end** (separate issue/PR). Verify
+8. **Phase 7 — square link end-to-end** (separate issue/PR). Verify
    `Square` and `LogSquare` numerical stability; pin sign convention
    via `NonNegative` constraint and any required output transform;
    register non-central χ² closed-form pushforward; benchmark
    validation.
-8. **Phase 8 — bridging tutorial notebook** (separate issue/PR). New
+9. **Phase 8 — bridging tutorial notebook** (separate issue/PR). New
    notebook `docs/tutorials/bridging.ipynb` (or similar) walking through
    several worked cases: untempered, `LikelihoodBridgeViaForm` under
    `Identity` link, `LikelihoodBridgeViaForm` under `LogSoftplus` link,
@@ -642,16 +720,13 @@ this is now a materially larger refactor than the original issue scoped.
    Covers the documentation requirement; the notebook is the primary
    artefact for "bridging × emulators × acquisitions interaction"
    understanding.
-9. **Phase 9 — link-aware acquisition audit** (separate issue/PR).
-   Audit acquisitions for tail-sensitivity introduced by exp link;
-   introduce link-aware variants of EI / VBMC-style acquisitions where
-   the closed-form depends on the link choice.
+10. **Phase 9 — link-aware acquisition audit** (separate issue/PR).
+    Audit acquisitions for tail-sensitivity introduced by exp link;
+    introduce link-aware variants of EI / VBMC-style acquisitions where
+    the closed-form depends on the link choice.
 
-Phases 2 and 3 are tightly coupled but worth separating: Phase 2's
-infrastructure can land and be unit-tested in isolation (test the maps,
-the pushforward dispatch); Phase 3 wires them into the existing form
-hierarchy. Phases 6 and 7 can land in either order. Phase 8 lands
-incrementally as 6/7 enable each scenario.
+Phases 6 and 7 can land in either order. Phase 8 lands incrementally
+as 6/7 enable each scenario.
 
 ## 10. Open questions
 
@@ -660,43 +735,47 @@ incrementally as 6/7 enable each scenario.
    everywhere via a prior or an output transform, but this gives back
    the non-negativity constraint we were trying to avoid. Defer to
    Phase 7.
-2. **Per-`Problem` vs per-run link choice.** Is the `link` a property
-   of the `Problem` (the user picks it once) or a per-run config (the
-   runner sweeps it for ablation)? Default: `Problem` carries it (via
-   the form's `link` field), but the runner can override for ablation
-   by constructing a copy of the problem with a different form.
-3. **Heteroskedastic forward models.** Forms where the likelihood depends
-   on $x$ multiplicatively (e.g. $\log\mathcal{N}(\mathrm{obs} \mid f(x),
-   C(x))$ with $x$-dependent noise covariance) violate the
-   "additive x-shift only" constraint. The shape of `DensityForm` doesn't
-   support this directly. Users with this case can subclass `DensityForm`
-   and override `__call__` / `pushforward`; no abstraction in the base
-   needs to bend. Worth a paragraph in the user-facing docs, not a
-   feature in v1.
-4. **Default `link` and `shift` arguments.** Should `DensityForm()` with
-   no arguments give `link=Identity(), shift=Constant(0)` (a
-   log-density-emulator form)? It's the "simplest" default, but may
-   confuse users who expect to specify a prior. Lean toward requiring
-   explicit `link` (no default) but defaulting `shift=Constant(0)`.
+2. **Per-`Problem` vs per-run link choice.** Resolved by [PR #63](https://github.com/arob5/sabi/pull/63):
+   the `DensityDecomposition` lives on `Algorithm`, not `Problem`. The
+   user constructs a decomposition and pairs it with a benchmark at
+   algorithm-construction time; ablations are handled by passing a
+   different decomposition to the runner.
+3. **Heteroskedastic forward models.** Decompositions where the
+   likelihood depends on $x$ multiplicatively (e.g. $\log\mathcal{N}(\mathrm{obs}
+   \mid f(x), C(x))$ with $x$-dependent noise covariance) violate the
+   "additive x-shift only" constraint. The shape of
+   `DensityDecomposition` doesn't support this directly. Users with
+   this case can subclass `DensityDecomposition` and override
+   `__call__` / `pushforward`; no abstraction in the base needs to
+   bend. Worth a paragraph in the user-facing docs, not a feature in v1.
+4. **Default `link` and `shift` arguments.** PR #63 defaults
+   `shift=Constant(0.0)` on `DensityDecomposition` and requires explicit
+   `link`. That matches the lean here.
 5. **Bijector unification.** When ProbPipe's bijectors land as a `Map`
    subclass, can sabi's `Map` ABC be the same? Likely yes; revisit when
    ProbPipe ships.
 
 ## 11. Composition with adjacent issues
 
+- **[PR #63](https://github.com/arob5/sabi/pull/63) — `TargetDistribution`
+  / `DensityDecomposition` split.** Sibling design PR. Hosts the
+  `DensityDecomposition` class this PR's `link` / `shift` machinery
+  plugs into; recommended landing order is in
+  [§9](#9-phasing-and-follow-up-issues).
 - **#3 — input/output transforms.** Output-side warps (e.g. an affine
-  standardisation of `Y_train`) sit *between* the emulator and the form
-  in the layer chain. A learned warp composed with `link=Identity()`
-  can recover softplus-like behaviour, but the abstractions are
-  conceptually distinct — the form's link is a fixed mathematical
-  relationship, the warp is a learned change of variables.
+  standardisation of `Y_train`) sit *between* the emulator and the
+  decomposition in the layer chain. A learned warp composed with
+  `link=Identity()` can recover softplus-like behaviour, but the
+  abstractions are conceptually distinct — the decomposition's link is
+  a fixed mathematical relationship, the warp is a learned change of
+  variables.
 - **#50 — noisy targets.** Both touch the pushforward dispatch. The
   noise enters by perturbing the emulator's predictive at observed
-  points; the form's `link` is downstream of that. The closed-form
-  pushforward registrations in [§5.1](#51-dispatch-table) must compose
-  with whatever noise model #50 lands. Designing the form abstraction
-  first means the noise work has fewer link-specific decisions to
-  make.
+  points; the decomposition's `link` is downstream of that. The
+  closed-form pushforward registrations in [§5.1](#51-dispatch-table)
+  must compose with whatever noise model #50 lands. Designing the
+  decomposition abstraction first means the noise work has fewer
+  link-specific decisions to make.
 - **#4 — `update_emulator` cheap-path dispatch.** The emulator-update
   optimisation interacts with `LikelihoodBridgeViaTargetRescale`: when
   only $Y_\mathrm{train}$ is rescaled, a cheap update is possible.
