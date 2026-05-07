@@ -350,27 +350,32 @@ and is orthogonal to which layer is queried.
 
 ### 6.2 Axis 2: which predictive layer to target
 
-New axis, surfaced by the `Map`-dispatch design. A `SurrogateDistribution`
-exposes layered predictives by composing different Maps on top of the
-emulator predictive:
+New axis, surfaced by the `Map`-dispatch design. The three layers map to
+ProbPipe primitives that already exist (or compose trivially from ones that
+do), so no new sabi-side methods are needed:
 
-```python
-class SurrogateDistribution:
-    def emulator_predictive_at(self, x) -> Distribution:
-        """Raw emulator predictive (the y distribution itself)."""
-        return self._emulator(x)
+| Layer | Op | What it returns |
+|-------|-----|-----------------|
+| Emulator (raw $y$) | `surr_dist.emulator(X)` | `Distribution[Array]` over $y$ — the emulator predictive at $X$. |
+| Unnormalised log-density | `random_unnormalized_log_prob(surr_dist, X)` | `Distribution[Array]` over $\log\tilde p(X)$ — what `EmulatedDistribution` exposes via `_random_unnormalized_log_prob`. |
+| Unnormalised density | `pushforward(Exp(), random_unnormalized_log_prob(surr_dist, X))` | `Distribution[Array]` over $\tilde p(X)$. |
 
-    def log_density_predictive_at(self, x) -> Distribution:
-        """Pushed through the form: log-density distribution at x."""
-        return self._form.pushforward(x, self._emulator(x))
+`EmulatedDistribution` exposes `emulator` as a property (so callers can
+write `surr_dist.emulator(X)` to get the raw predictive) and implements
+`_random_unnormalized_log_prob() -> RandomFunction` (per ProbPipe's
+`SupportsRandomUnnormalizedLogProb`); the `RandomFunction` returned
+pushes the emulator predictive through `form.pushforward` under the
+hood. Both the deterministic and random log-density paths converge here:
+`unnormalized_log_prob(target_dist, x)` and
+`random_unnormalized_log_prob(surr_dist, X)` are the non-random and
+random analogues of the same quantity.
 
-    def density_predictive_at(self, x) -> Distribution:
-        """Pushed through the form, then exp'd: density distribution at x."""
-        return pushforward(Exp(), self.log_density_predictive_at(x))
-```
-
-Each layer is a separate `Distribution`, accessed via a different `Map`
-composition. Acquisitions pick the layer they want.
+The density layer falls out of `Exp` map composition: `pushforward(Exp(),
+log_density_dist)` is the (random) unnormalised density. ProbPipe could
+later add a `random_unnormalized_prob` op as the analogue of its existing
+deterministic `unnormalized_prob` (which is `exp(unnormalized_log_prob)`);
+sabi's pushforward composition gives the same result without waiting on
+that op.
 
 ### 6.3 Acquisition example
 
@@ -380,11 +385,14 @@ class MaxVariance(Acquisition):
     target_intermediate: AcquisitionTarget = AcquisitionTarget.CURRENT
     target_layer: PredictiveLayer = PredictiveLayer.LOG_DENSITY
 
-    def acquire(self, sp: SurrogateDistribution, X_candidate) -> Array:
+    def acquire(self, surr_dist: SurrogateDistribution, X_candidate) -> Array:
         match self.target_layer:
-            case PredictiveLayer.EMULATOR:    pred = sp.emulator_predictive_at(X_candidate)
-            case PredictiveLayer.LOG_DENSITY: pred = sp.log_density_predictive_at(X_candidate)
-            case PredictiveLayer.DENSITY:     pred = sp.density_predictive_at(X_candidate)
+            case PredictiveLayer.EMULATOR:
+                pred = surr_dist.emulator(X_candidate)
+            case PredictiveLayer.LOG_DENSITY:
+                pred = random_unnormalized_log_prob(surr_dist, X_candidate)
+            case PredictiveLayer.DENSITY:
+                pred = pushforward(Exp(), random_unnormalized_log_prob(surr_dist, X_candidate))
         return variance(pred)
 ```
 
@@ -594,12 +602,18 @@ this is now a materially larger refactor than the original issue scoped.
    shape. The closed-form pushforward for `(Affine, Normal | MVN)`
    makes `_shift_gaussian_loc` redundant; remove. `pushforward_marginal`
    becomes a thin wrapper around `form.pushforward(x, y)`.
-4. **Phase 4 — surrogate layered predictive access** (separate
-   issue/PR). Add `SurrogateDistribution.{emulator,log_density,density}_predictive_at`
-   per [§6.2](#62-axis-2-which-predictive-layer-to-target). Audit
-   current acquisitions for layer-access opportunities; introduce
+4. **Phase 4 — acquisition layered access** (separate issue/PR).
+   `EmulatedDistribution` already exposes `emulator` as a property and
+   implements `_random_unnormalized_log_prob` (via the
+   `pushforward_marginal` path that becomes `form.pushforward` after
+   Phase 3). Phase 4's work is acquisition-side: introduce the
    `PredictiveLayer` enum and add `target_layer` parameter to
-   acquisitions that benefit (likely just `MaxVariance` for now).
+   acquisitions that benefit (likely just `MaxVariance` for now), with
+   the dispatch wired to `surr_dist.emulator(X)` /
+   `random_unnormalized_log_prob(surr_dist, X)` /
+   `pushforward(Exp(), random_unnormalized_log_prob(surr_dist, X))`
+   per [§6.2](#62-axis-2-which-predictive-layer-to-target). No new
+   methods on `SurrogateDistribution`.
 5. **Phase 5 — bridging rename + collapse** (separate issue/PR).
    `sabi.tempering` → `sabi.bridging`; `TemperingScheme` →
    `BridgingScheme`; per-form-type `_*Tempered` classes collapse into
