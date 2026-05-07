@@ -82,9 +82,9 @@ seeds on the optimizers, modeling-prior add-on on the
 | Site | What it does |
 |------|--------------|
 | [`src/sabi/target_distribution.py`](../src/sabi/target_distribution.py) | `TargetDistribution(name, input_shape, output_shape, target_single, log_density_form, prior)` — six fields, three jobs (math identity + emulation strategy + algorithmic prior). |
-| [`src/sabi/problems/forms.py`](../src/sabi/problems/forms.py) | `LogDensityForm` family — three subclasses for one abstraction. PR #59 collapses these into a single parametric `DensityForm`. |
+| `src/sabi/problems/forms.py` (deleted in #65) | Was the `LogDensityForm` family — three subclasses for one abstraction. Replaced by `DensityDecomposition` plus the `Map` ABC. |
 | [`src/sabi/problems/base.py`](../src/sabi/problems/base.py) | `Problem` (post-#61): pure identity wrapper. Unchanged by this refactor. |
-| [`src/sabi/sampling.py`](../src/sabi/sampling.py) | `BatchSampler` ABC + `PriorSampler` wrapper. Reads `problem.target_distribution.prior` and calls ProbPipe's `sample` op. Wrapper layer over a single op. |
+| `src/sabi/sampling.py` (deleted in #65) | Was the `BatchSampler` ABC + `PriorSampler` wrapper. Removed; importers route through `probpipe.sample` directly. |
 | [`src/sabi/acquisitions/random.py`](../src/sabi/acquisitions/random.py) | `PriorSampling` — wraps a `BatchSampler`. Today's only sampling-style acquisition. |
 | [`src/sabi/acquisitions/optim.py`](../src/sabi/acquisitions/optim.py) | `CandidateSetOptimizer.candidate_sampler: BatchSampler` and `ContinuousMultiStartOptimizer.seed_sampler: BatchSampler` — both default to `PriorSampler`. The bijector for unconstrained reparameterization reads `state.problem.target_distribution.support`. |
 | [`src/sabi/algorithms/loop.py`](../src/sabi/algorithms/loop.py) | Calls `target.target_map(X)` for design evaluations (line 320, 542). Reads `support`, `input_shape`, `prior` from `target_distribution` to assemble `SurrogateDistribution`. |

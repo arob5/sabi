@@ -94,9 +94,9 @@ The form hierarchy and its consumers:
 
 | Site | What it does |
 |------|--------------|
-| [`src/sabi/problems/forms.py`](../src/sabi/problems/forms.py) | `LogDensityForm` family — `Identity`, `LogLikPlusPrior`, `ForwardModel`. Three classes for one abstraction. (Module moves to top-level `src/sabi/density_decomposition.py` per [PR #63](https://github.com/arob5/sabi/pull/63).) |
-| [`src/sabi/surrogate/_pushforward.py:79`](../src/sabi/surrogate/_pushforward.py) | `pushforward_marginal` dispatches on `(input_dist, form_subclass)` for closed-form Gaussian-affine, falls back to MC for everything else. |
-| [`src/sabi/surrogate/_pushforward.py:144`](../src/sabi/surrogate/_pushforward.py) | `_shift_gaussian_loc` — bespoke handling of "shift `loc` by per-point log-prior, leave `scale_tril` alone." Generalises to any `Affine` Map. |
+| `src/sabi/problems/forms.py` (was) | `LogDensityForm` family — `Identity`, `LogLikPlusPrior`, `ForwardModel`. Three classes for one abstraction. **Deleted** in [#65](https://github.com/arob5/sabi/pull/73): replaced by `sabi.density_decomposition.DensityDecomposition` (single parametric class with `(link, shift, target_single, output_shape, constraint)`). |
+| `src/sabi/surrogate/_pushforward.py:79` (was) | `pushforward_marginal` dispatched on `(input_dist, form_subclass)` for closed-form Gaussian-affine. **Deleted** in [#65](https://github.com/arob5/sabi/pull/73): subsumed by [`sabi.maps.pushforward`](../src/sabi/maps/_pushforward.py) (multi-dispatch on `(Map, Distribution)` from PR #64). |
+| `src/sabi/surrogate/_pushforward.py:144` (was) | `_shift_gaussian_loc` — bespoke handling of "shift `loc` by per-point log-prior, leave `scale_tril` alone." Generalised to `(Affine, Normal | MultivariateNormal)` registrations in [`sabi.maps`](../src/sabi/maps/_pushforward.py). |
 | [`src/sabi/surrogate/estimators.py:129`](../src/sabi/surrogate/estimators.py) | `_ExpectedTargetDistribution._unnormalized_log_prob` plug-in mean. The bias note at line 15 is a symptom of the existing exp-link composition. |
 | [`src/sabi/surrogate/weighted_empirical.py:64`](../src/sabi/surrogate/weighted_empirical.py) | `WeightedEmpiricalRandomMeasure` log-weights. Form output is converted externally; class is link-agnostic. |
 | [`src/sabi/target_distribution.py:56`](../src/sabi/target_distribution.py) | `TargetDistribution._unnormalized_log_prob` — ProbPipe boundary; consumes log-density. Link-agnostic boundary. |
@@ -327,10 +327,10 @@ For nonlinear element-wise Maps (e.g. `LogSoftplus`) or any
 fallback samples from the input distribution, applies the Map per
 sample, and returns a `NumericEmpiricalDistribution`. The joint
 correlation structure (when applicable) is carried in the sample
-correlations. This is the existing `@workflow_function(n_broadcast_samples=64)`
-machinery (`_batch_form` at
-[`src/sabi/surrogate/_pushforward.py:163`](../src/sabi/surrogate/_pushforward.py)),
-generalised from "form-specific MC" to "any Map".
+correlations. The `@workflow_function(n_broadcast_samples=64)`
+machinery now lives in [`sabi.maps._pushforward._mc_pushforward`](../src/sabi/maps/_pushforward.py)
+(generalised from the original form-specific `_batch_form` to "any
+Map" — and the form-specific dispatch module was removed in #65).
 
 ### 5.4 Worked example: joint MVN through a softplus-link decomposition
 
