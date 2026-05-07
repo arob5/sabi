@@ -88,8 +88,8 @@ seeds on the optimizers, modeling-prior add-on on the
 | [`src/sabi/acquisitions/random.py`](../src/sabi/acquisitions/random.py) | `PriorSampling` — wraps a `BatchSampler`. Today's only sampling-style acquisition. |
 | [`src/sabi/acquisitions/optim.py`](../src/sabi/acquisitions/optim.py) | `CandidateSetOptimizer.candidate_sampler: BatchSampler` and `ContinuousMultiStartOptimizer.seed_sampler: BatchSampler` — both default to `PriorSampler`. The bijector for unconstrained reparameterization reads `state.problem.target_distribution.support`. |
 | [`src/sabi/algorithms/loop.py`](../src/sabi/algorithms/loop.py) | Calls `target.target_map(X)` for design evaluations (line 320, 542). Reads `support`, `input_shape`, `prior` from `target_distribution` to assemble `SurrogateDistribution`. |
-| [`src/sabi/tempering/`](../src/sabi/tempering/) | Intermediate targets carry `target_single` / `target_map` / `prior` / `density_form` through the bridging scheme. After the refactor, intermediates compose `Map`s on a `DensityDecomposition` instead. |
-| [`src/sabi/surrogate/`](../src/sabi/surrogate/) | `EmulatedDistribution` reads `density_form` and `prior` to evaluate surrogate density. After the refactor, reads them off the `DensityDecomposition` from the algorithm. |
+| `src/sabi/tempering/` | Intermediate targets carry `target_single` / `target_map` / `prior` / `density_form` through the bridging scheme. After the refactor, intermediates compose `Map`s on a `DensityDecomposition` instead. |
+| `src/sabi/surrogate/` | `EmulatedDistribution` reads `density_form` and `prior` to evaluate surrogate density. After the refactor, reads them off the `DensityDecomposition` from the algorithm. |
 
 The split is forced by the shape of the data: jobs 1, 2, 3 of
 `TargetDistribution` answer different questions for different consumers,
