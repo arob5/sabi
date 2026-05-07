@@ -37,7 +37,9 @@ def _ctx_for(estimate, problem) -> MetricContext:
     n = 1
     target = problem.target_distribution
     X = jnp.zeros((n,) + target.input_shape)
-    Y = jnp.zeros((n,) + target.output_shape)
+    # Output shape is no longer on the target; for these MMD tests
+    # ``Y`` is unused, so pin to scalar shape.
+    Y = jnp.zeros((n,))
     return MetricContext(
         estimate=estimate,
         surrogate_distribution=None,  # type: ignore[arg-type]

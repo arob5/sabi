@@ -1,38 +1,41 @@
 """Tests for `TemperingScheme`, `NoTempering`, and the per-state
 `IntermediateTarget` they produce.
-
-The form-axis dispatch (`LikelihoodTemperingViaForm` and friends) lands
-in Step 4; this file covers the Step 3 surface only.
 """
 
-import jax
 import jax.numpy as jnp
 import pytest
 
 from sabi._probpipe_compat import independent_uniform
+from sabi.density_decomposition import DensityDecomposition
+from sabi.maps import Identity as MapIdentity
 from sabi.problems.base import Problem
-from sabi.problems.forms import Identity
 from sabi.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import FixedSchedule, TemperingSchedule, UntemperedSchedule
 
 
-def _box_prior():
+def _box_support():
     return independent_uniform(
         low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
-    )
+    ).support
+
+
+def _quad(x):
+    return -0.5 * jnp.sum(x * x)
 
 
 def _target() -> TargetDistribution:
     """Quadratic log-density on R^2."""
     return TargetDistribution(
-        target_single=lambda x: -0.5 * jnp.sum(x * x),
         name="quadratic",
         input_shape=(2,),
-        output_shape=(),
-        log_density_form=Identity(),
-        prior=_box_prior(),
+        support=_box_support(),
+        unnormalized_log_prob=_quad,
     )
+
+
+def _decomposition(target: TargetDistribution) -> DensityDecomposition:
+    return DensityDecomposition.identity_from_target(target)
 
 
 # -------------------------------------------------------------------------
@@ -47,36 +50,30 @@ def test_no_tempering_returns_intermediate_target_subclass():
     assert isinstance(intermediate, TargetDistribution)
 
 
-def test_no_tempering_preserves_target_map_and_form():
+def test_no_tempering_intermediate_decomposition_returns_base_unchanged():
     target = _target()
-    intermediate = NoTempering().intermediate_target(target, state=0.5)
-    # target_single is reused by reference; target_map is re-vmapped
-    # in the constructor (same outputs, distinct closure).
-    assert intermediate.target_single is target.target_single
-    X = jnp.asarray([[0.5, -0.3], [1.0, 1.0]])
-    assert jnp.allclose(intermediate.target_map(X), target.target_map(X))
-    assert intermediate.log_density_form is target.log_density_form
-    assert intermediate.prior is target.prior
-    assert intermediate.support is target.support
+    decomp = _decomposition(target)
+    out = NoTempering().intermediate_decomposition(decomp, state=0.5)
+    assert out is decomp
 
 
 def test_no_tempering_records_state_but_ignores_it():
     target = _target()
     intermediate_a = NoTempering().intermediate_target(target, state="a")
     intermediate_b = NoTempering().intermediate_target(target, state=42.0)
-    # State is recorded.
     assert intermediate_a.state == "a"
     assert intermediate_b.state == 42.0
-    # But the math is identical.
     x = jnp.asarray([0.5, -0.3])
-    assert float(intermediate_a.target_single(x)) == float(intermediate_b.target_single(x))
+    assert float(intermediate_a._unnormalized_log_prob(x)) == pytest.approx(
+        float(intermediate_b._unnormalized_log_prob(x)), abs=1e-6
+    )
 
 
 def test_no_tempering_output_transform_is_identity():
     target = _target()
     intermediate = NoTempering().intermediate_target(target, state=None)
     X = jnp.asarray([[0.0, 0.0], [1.0, -0.5]])
-    Y_raw = jax.vmap(lambda x: -0.5 * jnp.sum(x * x))(X)
+    Y_raw = jnp.asarray([_quad(x) for x in X])
     out = intermediate.output_transform(intermediate.state, X, Y_raw)
     assert jnp.allclose(out, Y_raw)
 
@@ -90,14 +87,22 @@ def test_no_tempering_invariance_flags_are_true():
 
 
 def test_no_tempering_intermediate_acts_as_distribution():
-    """The intermediate is a Distribution; its
-    `_unnormalized_log_prob` works at the un-tempered target's value."""
+    """The intermediate is a Distribution; its `_unnormalized_log_prob`
+    matches the base's."""
     target = _target()
     intermediate = NoTempering().intermediate_target(target, state=None)
     x = jnp.asarray([0.5, -0.3])
-    out = float(intermediate._unnormalized_log_prob(x))
-    expected = float(-0.5 * jnp.sum(x * x))
-    assert out == pytest.approx(expected, abs=1e-6)
+    expected = float(_quad(x))
+    assert float(intermediate._unnormalized_log_prob(x)) == pytest.approx(expected, abs=1e-6)
+
+
+def test_no_tempering_intermediate_propagates_opaque_target():
+    """An intermediate built from an opaque target also raises
+    `NotImplementedError` (no analytical density was supplied)."""
+    target = TargetDistribution(name="opaque", input_shape=(2,), support=_box_support())
+    intermediate = NoTempering().intermediate_target(target, state=None)
+    with pytest.raises(NotImplementedError):
+        intermediate._unnormalized_log_prob(jnp.zeros((2,)))
 
 
 # -------------------------------------------------------------------------
@@ -111,6 +116,9 @@ def test_tempering_scheme_default_invariance_uses_equality():
     class _NullScheme(TemperingScheme):
         def intermediate_target(self, base, state):
             return NoTempering().intermediate_target(base, state)
+
+        def intermediate_decomposition(self, base, state):
+            return base
 
     scheme = _NullScheme()
     assert scheme.is_invariant_target_map(0.5, 0.5)
@@ -136,12 +144,10 @@ def test_fixed_schedule_iterates_and_marks_terminal():
     assert sched.at(0) == (0.1, False)
     assert sched.at(1) == (0.5, False)
     assert sched.at(2) == (1.0, True)
-    # Past the end clamps to the last entry and stays terminal.
     assert sched.at(42) == (1.0, True)
 
 
 def test_fixed_schedule_accepts_non_scalar_states():
-    """States are opaque PyTrees — e.g. subset indices for data tempering."""
     sched = FixedSchedule(states=((0, 1), (0, 1, 2), (0, 1, 2, 3)))
     state, is_terminal_state = sched.at(1)
     assert state == (0, 1, 2)
@@ -159,30 +165,18 @@ def test_fixed_schedule_rejects_empty():
 
 
 def test_terminal_state_default_success_path_for_converging_subclass():
-    """A subclass that overrides only `at` (and clamps past-the-end to a
-    terminal state) gets a working `terminal_state()` for free via the
-    base default, which probes `at(10**9)`."""
-
     class _ConvergingSchedule(TemperingSchedule):
-        """Returns a non-terminal state for round 0, terminal thereafter."""
-
         def at(self, round_idx: int):
             if round_idx == 0:
                 return 0.5, False
             return 1.0, True
 
     sched = _ConvergingSchedule()
-    # The override is omitted — the base default kicks in.
     assert sched.terminal_state() == 1.0
 
 
 def test_terminal_state_default_raise_path_for_nonconverging_subclass():
-    """A subclass whose `at` never returns `is_terminal_state=True` causes
-    the base default to raise `NotImplementedError`."""
-
     class _NeverTerminalSchedule(TemperingSchedule):
-        """Always returns `(state, False)` — never converges to terminal."""
-
         def at(self, round_idx: int):
             return float(round_idx), False
 
@@ -197,18 +191,7 @@ def test_terminal_state_default_raise_path_for_nonconverging_subclass():
 
 
 def test_problem_target_distribution_round_trips_via_no_tempering():
-    """Constructing an intermediate via NoTempering on a Problem's
-    target_distribution should produce a distribution whose log-density
-    matches the underlying ``target_distribution._unnormalized_log_prob``
-    at the same input."""
-    target = TargetDistribution(
-        target_single=lambda x: -0.5 * jnp.sum(x * x),
-        name="quad_problem_target",
-        input_shape=(2,),
-        output_shape=(),
-        log_density_form=Identity(),
-        prior=_box_prior(),
-    )
+    target = _target()
     problem = Problem(target_distribution=target, name="quad_problem")
     intermediate = NoTempering().intermediate_target(
         problem.target_distribution, state=None
@@ -217,3 +200,11 @@ def test_problem_target_distribution_round_trips_via_no_tempering():
     assert float(intermediate._unnormalized_log_prob(x)) == pytest.approx(
         float(problem.target_distribution._unnormalized_log_prob(x)), abs=1e-6
     )
+
+
+def test_no_tempering_decomposition_link_is_identity_map():
+    """The base decomposition's `link` round-trips through NoTempering."""
+    target = _target()
+    decomp = _decomposition(target)
+    out = NoTempering().intermediate_decomposition(decomp, state=None)
+    assert isinstance(out.link, MapIdentity)

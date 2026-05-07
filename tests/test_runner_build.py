@@ -23,6 +23,7 @@ def _cfg(with_metric=True):
         },
         "emulator": {"name": "gp"},
         "acquisition": {"name": "prior_sampling"},
+        "density_decomposition": {"kind": "identity_from_target"},
         "algorithm": {"n_initial": 4, "n_rounds": 2, "q": 1},
         "seed": 0,
     }
@@ -36,7 +37,6 @@ def test_build_problem_returns_problem():
     assert isinstance(problem, Problem)
     assert problem.name == "gaussian"
     assert problem.target_distribution.input_shape == (2,)
-    assert problem.target_distribution.output_shape == ()
 
 
 def test_build_algorithm_wires_components():

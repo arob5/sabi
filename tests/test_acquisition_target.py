@@ -7,8 +7,7 @@ Verifies:
   round's current state.
 - Per-round metric rows reflect the resolved
   `(tempering_state, target_tempering_state)` for each
-  `acquisition_target` value (the row is the canonical place these
-  are surfaced — `AcquisitionState` itself does not re-expose them).
+  `acquisition_target` value.
 - Schedule's `terminal_state()` returns the correct state for both
   built-in schedules.
 """
@@ -18,12 +17,20 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from sabi._probpipe_compat import independent_uniform
 from sabi.acquisitions.base import AcquisitionTarget, resolve_state
-from sabi.acquisitions.random import PriorSampling
+from sabi.acquisitions.random import DistributionSampling
 from sabi.algorithms import Algorithm, run
+from sabi.density_decomposition import DensityDecomposition
 from sabi.emulators import TinyGPEmulator
+from sabi.maps import Identity, LogProb
+from sabi.problems.base import Problem
 from sabi.problems.benchmarks import gaussian_2d
-from sabi.tempering.likelihood import LikelihoodTemperingViaForm
+from sabi.target_distribution import TargetDistribution
+from sabi.tempering.likelihood import (
+    LikelihoodTemperingViaForm,
+    LikelihoodTemperingViaTarget,
+)
 from sabi.tempering.schedule import (
     FixedSchedule,
     UntemperedSchedule,
@@ -45,14 +52,9 @@ def test_fixed_schedule_terminal_state_is_last_entry():
 
 
 def test_default_terminal_state_probes_via_large_round_idx():
-    """The base `TemperingSchedule.terminal_state()` default probes
-    `at(round_idx)` at a very large index. Built-in schedules override
-    with closed-form returns; this test bypasses the override by
-    calling the base method directly."""
     from sabi.tempering.schedule import TemperingSchedule
 
     sched = FixedSchedule(states=(0.1, 0.5, 1.0))
-    # Bypass the override and call the base implementation.
     base_terminal = TemperingSchedule.terminal_state(sched)
     assert base_terminal == 1.0
 
@@ -63,7 +65,6 @@ def test_default_terminal_state_probes_via_large_round_idx():
 
 
 def test_resolve_state_current_returns_current_state():
-    """`CURRENT` ignores the schedule and returns `current_state` verbatim."""
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     out = resolve_state(
         AcquisitionTarget.CURRENT, schedule, round_idx=0, current_state=0.1
@@ -72,7 +73,6 @@ def test_resolve_state_current_returns_current_state():
 
 
 def test_resolve_state_next_advances_one_round():
-    """`NEXT` queries `schedule.at(round_idx + 1)`."""
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     out = resolve_state(
         AcquisitionTarget.NEXT, schedule, round_idx=0, current_state=0.1
@@ -81,11 +81,8 @@ def test_resolve_state_next_advances_one_round():
 
 
 def test_resolve_state_next_clamps_at_last_round():
-    """At the last round, `NEXT` queries past-the-end of the schedule;
-    built-in schedules clamp to the terminal entry, so the resolved
-    state must equal `schedule.terminal_state()`."""
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
-    last_round = len(schedule.states) - 1  # 2: the terminal round.
+    last_round = len(schedule.states) - 1
     out = resolve_state(
         AcquisitionTarget.NEXT,
         schedule,
@@ -97,8 +94,6 @@ def test_resolve_state_next_clamps_at_last_round():
 
 
 def test_resolve_state_next_clamps_for_untempered_schedule():
-    """`UntemperedSchedule` always returns `(None, True)` — `NEXT` past the
-    end still resolves to the schedule's terminal state (None)."""
     schedule = UntemperedSchedule()
     out = resolve_state(
         AcquisitionTarget.NEXT, schedule, round_idx=99, current_state=None
@@ -108,7 +103,6 @@ def test_resolve_state_next_clamps_for_untempered_schedule():
 
 
 def test_resolve_state_terminal_returns_terminal_state():
-    """`TERMINAL` returns `schedule.terminal_state()` regardless of round."""
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     for round_idx in (0, 1, 2, 5):
         out = resolve_state(
@@ -121,14 +115,13 @@ def test_resolve_state_terminal_returns_terminal_state():
 
 
 # -------------------------------------------------------------------------
-# Helpers — read (current, target) tempering states off the per-round
-# metric row, which is where the loop surfaces them.
+# Helpers
 # -------------------------------------------------------------------------
 
 
 def _acq_round_states(result) -> list[tuple]:
     """Return ``[(tempering_state, target_tempering_state), ...]`` for
-    each acquisition round (skipping round 0, the initial design)."""
+    each acquisition round (skipping round 0)."""
     return [
         (row["tempering_state"], row["target_tempering_state"])
         for row in result.per_round_metrics
@@ -142,15 +135,15 @@ def _acq_round_states(result) -> list[tuple]:
 
 
 def test_current_default_target_state_equals_current():
-    """Untempered loop with default acquisition_target=CURRENT:
-    target_tempering_state == tempering_state == None for every
-    acquisition round."""
+    """Untempered loop: target_tempering_state == tempering_state == None."""
     problem = gaussian_2d()
+    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=PriorSampling(),
+        acquisition=DistributionSampling(),
+        density_decomposition=decomposition,
         n_initial=8,
-        n_rounds=3,  # round 0 (initial) + rounds 1, 2 (acquisition).
+        n_rounds=3,
         q=1,
         acquisition_target=AcquisitionTarget.CURRENT,
     )
@@ -169,26 +162,30 @@ def test_current_default_target_state_equals_current():
 
 
 def test_next_with_fixed_schedule_advances_one_step():
-    """With `FixedSchedule((0.1, 0.5, 1.0))` and `acquisition_target=NEXT`:
-    round 0 (initial design, no acquisition call) is at state 0.1.
-    Round 1 acquisition: current=0.5, target=1.0.
-    Round 2 acquisition: current=1.0, target=1.0 (clamped)."""
+    """Round 1 acquisition: current=0.5, target=1.0. Round 2: current=1.0, target=1.0 (clamped)."""
     problem = gaussian_2d()
+    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
+    # Identity-base decomposition: tempering needs an `initial`
+    # distribution (the geometric-bridge case). Use the target's box
+    # support as a uniform initial.
+    box = problem.target_distribution.support
+    initial = independent_uniform(low=jnp.asarray(box.low), high=jnp.asarray(box.high), name="init")
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=PriorSampling(),
+        acquisition=DistributionSampling(),
+        density_decomposition=decomposition,
         n_initial=8,
-        n_rounds=3,  # round 0 + acquisition rounds 1, 2.
+        n_rounds=3,
         q=1,
-        tempering_scheme=LikelihoodTemperingViaForm(),
+        tempering_scheme=LikelihoodTemperingViaForm(initial=initial),
         schedule=schedule,
         acquisition_target=AcquisitionTarget.NEXT,
     )
     result = run(problem, alg, jax.random.key(1))
 
     rounds = _acq_round_states(result)
-    assert len(rounds) == 2  # only acquisition rounds 1, 2.
+    assert len(rounds) == 2
     assert rounds[0] == (0.5, 1.0)
     assert rounds[1] == (1.0, 1.0)
 
@@ -199,19 +196,19 @@ def test_next_with_fixed_schedule_advances_one_step():
 
 
 def test_terminal_target_state_is_terminal_for_every_round():
-    """With `FixedSchedule((0.1, 0.5, 1.0))` and
-    `acquisition_target=TERMINAL`: every acquisition round sees
-    target=1.0; currents walk through the schedule (skipping
-    round 0's state, which is the initial-design round)."""
     problem = gaussian_2d()
+    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
+    box = problem.target_distribution.support
+    initial = independent_uniform(low=jnp.asarray(box.low), high=jnp.asarray(box.high), name="init")
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=PriorSampling(),
+        acquisition=DistributionSampling(),
+        density_decomposition=decomposition,
         n_initial=8,
-        n_rounds=3,  # round 0 + acquisition rounds 1, 2.
+        n_rounds=3,
         q=1,
-        tempering_scheme=LikelihoodTemperingViaForm(),
+        tempering_scheme=LikelihoodTemperingViaForm(initial=initial),
         schedule=schedule,
         acquisition_target=AcquisitionTarget.TERMINAL,
     )
@@ -225,23 +222,21 @@ def test_terminal_target_state_is_terminal_for_every_round():
 
 
 # -------------------------------------------------------------------------
-# Default (CURRENT) is behavior-preserving for untempered runs
+# Default (CURRENT) preserves untempered behavior
 # -------------------------------------------------------------------------
 
 
 def test_default_acquisition_target_preserves_untempered_metrics():
-    """For an untempered loop, `acquisition_target=CURRENT` (default)
-    should yield bit-for-bit identical metrics as the v1.4 baseline.
-    Smoke check via runner is exercised by the manual smoke tests; here
-    we just confirm the run completes cleanly."""
     problem = gaussian_2d()
+    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=PriorSampling(),
+        acquisition=DistributionSampling(),
+        density_decomposition=decomposition,
         n_initial=8,
-        n_rounds=3,  # round 0 + acquisition rounds 1, 2 → 8 + 2 = 10 evals.
+        n_rounds=3,
         q=1,
-    )  # acquisition_target defaults to CURRENT
+    )
     result = run(problem, alg, jax.random.key(0))
     assert result.X.shape == (10,) + problem.target_distribution.input_shape
 
@@ -252,46 +247,41 @@ def test_default_acquisition_target_preserves_untempered_metrics():
 
 
 def test_via_target_with_next_lookahead_runs_to_completion():
-    """`LikelihoodTemperingViaTarget` + `NEXT` look-ahead exercises the
-    refit-emulator-at-target-state path. Just verify the run completes
-    without error; numerical correctness is covered by the per-scheme
-    tests."""
-    from sabi._probpipe_compat import independent_uniform
-    from sabi.problems.base import Problem
-    from sabi.problems.forms import LogLikPlusPrior
-    from sabi.target_distribution import TargetDistribution
-    from sabi.tempering.likelihood import LikelihoodTemperingViaTarget
-
-    # Build a custom problem with LogLikPlusPrior so
-    # LikelihoodTemperingViaTarget applies (it requires that base form).
+    """`LikelihoodTemperingViaTarget` + `NEXT` look-ahead — refit path."""
     prior = independent_uniform(
         low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0), name="p"
     )
+    log_lik = lambda x: -0.5 * jnp.sum(x * x)
+
     target = TargetDistribution(
-        target_single=lambda x: -0.5 * jnp.sum(x * x),  # log-likelihood
         name="quad_loglik_target",
         input_shape=(2,),
-        output_shape=(),
-        log_density_form=LogLikPlusPrior(),
-        prior=prior,
+        support=prior.support,
     )
     problem = Problem(target_distribution=target, name="quad_loglik")
+    # Decomposition emulates log-likelihood: link=Identity, shift=LogProb(prior).
+    decomposition = DensityDecomposition(
+        target_single=log_lik,
+        output_shape=(),
+        link=Identity(),
+        shift=LogProb(prior),
+    )
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=PriorSampling(),
+        acquisition=DistributionSampling(),
+        density_decomposition=decomposition,
+        initial_design_distribution=prior,
+        x_support=prior.support,
         n_initial=8,
-        n_rounds=3,  # round 0 (initial) + acquisition rounds 1, 2.
+        n_rounds=3,
         q=1,
         tempering_scheme=LikelihoodTemperingViaTarget(),
         schedule=FixedSchedule(states=(0.5, 1.0)),
         acquisition_target=AcquisitionTarget.NEXT,
     )
     result = run(problem, alg, jax.random.key(3))
-    # 8 initial + 2 acquisition rounds * q=1 = 10.
     assert result.X.shape == (10, 2)
-    # per_round_metrics[0] is the initial-design row (no acquisition).
     assert result.per_round_metrics[0]["round"] == 0
     assert result.per_round_metrics[0]["target_tempering_state"] is None
-    # Acquisition rounds 1, 2 follow.
     assert result.per_round_metrics[1]["target_tempering_state"] == 1.0
-    assert result.per_round_metrics[2]["target_tempering_state"] == 1.0  # clamped
+    assert result.per_round_metrics[2]["target_tempering_state"] == 1.0
