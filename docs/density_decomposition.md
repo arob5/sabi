@@ -120,6 +120,15 @@ Dropped fields, relative to today: `prior`, `target_single`,
 `target_distribution` field on `Problem` (set by [#61](https://github.com/arob5/sabi/pull/61))
 remains; only its internal shape changes.
 
+When `_unnormalized_log_prob` raises `NotImplementedError` (user
+inverse problems with no analytical density), the MCMC-relevant
+random log-density boundary moves to
+`EmulatedDistribution._random_unnormalized_log_prob`, which composes
+the decomposition (`link(y) + shift(x)`) through the emulator
+predictive. ProbPipe MCMC sees the same shape it does today. See
+[#59 v0.4 §7](https://github.com/arob5/sabi/blob/docs/issue-55-link-functions-design/docs/link_functions.md#7-probpipe-boundary--log-density-at-the-mcmc-seam)
+for the full boundary discussion.
+
 `support` becomes a first-class field on `TargetDistribution`. Today
 it's derived from `prior.support`; with the prior moved off, the
 support is its own thing. `Constraint` is the right type because
@@ -458,10 +467,10 @@ PR #59 v0.3 introduces a single parametric `DensityForm` carrying
 | `pushforward(Map, Distribution)` multi-dispatch op | Untouched | Used inside `DensityDecomposition.pushforward`. The per-x-`Map` construction (`Affine(intercept=shift(x)) @ link`) is identical. |
 | `DensityForm.__call__(x, y)` and `DensityForm.pushforward(x, y_dist)` | Hosted on `DensityDecomposition` instead | Mechanical move. |
 | `DensityForm.constraint` field | Becomes `DensityDecomposition.constraint` | Field rehost. |
-| `TemperingScheme` → `BridgingScheme` rename + bridges as `Map` compositions | Compatible | Bridges compose `Map`s on a `DensityDecomposition`'s `link` / `shift` instead of on a `DensityForm`'s. The composition logic is unchanged. |
-| `LikelihoodBridgeViaTargetRescale` raises on non-exp link | Untouched | Same constraint — link must be `Identity` (representing the exp link in log-space) for the `Y_train = β·Y_raw` optimization to be valid. The check moves from `DensityForm.link` to `DensityDecomposition.link`. |
+| `TemperingScheme` → `BridgingScheme` rename + bridges as `Map` compositions | Compatible | Bridges return a new `DensityDecomposition` by composing `Map`s on the base's `link` / `shift`; `target_single` and `output_shape` pass through unchanged. The bridge entry point is `intermediate_decomposition(base, β)` (renamed from #59 v0.3's `intermediate_form`). See [#59 v0.4 §8.3](https://github.com/arob5/sabi/blob/docs/issue-55-link-functions-design/docs/link_functions.md#83-likelihoodbridgeviaform-link-agnostic-bridging-via-map-composition). |
+| `LikelihoodBridgeViaTargetRescale` raises on non-exp link | Untouched | Same constraint — link must be `Identity` (representing the exp link in log-space) for the `Y_train = β·Y_raw` optimization to be valid. The check is `isinstance(base.link, Identity)`, raising `NotImplementedError` with a pointer to `LikelihoodBridgeViaForm` for any other link. See [#59 v0.4 §8.5](https://github.com/arob5/sabi/blob/docs/issue-55-link-functions-design/docs/link_functions.md#85-likelihoodbridgeviatargetrescale--exp-link-only-optimisation). |
 | `pushforward_marginal` dispatch site (currently in `_pushforward.py`) | Reads `link`/`shift` off the `DensityDecomposition` instead of off the `DensityForm` | Field rehost. |
-| Phasing (1: design doc, 2: `Link`/`Map` infrastructure, 3: `DensityForm` rename + link field, 4: surrogate layered access, 5: bridging rename, 6-7: Softplus/Square links, 8: tutorial, 9: link audit) | Recommend re-sequencing: this proposal's implementation should land **between** #59's phase 2 and phase 3 — the `Map` infra lands first, then this PR (which renames and extends `DensityForm`), then #59 phases 4+ proceed against the `DensityDecomposition`-based codebase. | Coordinated re-sequencing required. |
+| Phasing (#59 v0.4 §9): 1 design doc, 2 Map + pushforward infra, 3 concrete Map subclasses (largely subsumed by phase 2), 4 acquisition layered access, 5 bridging rename, 6 softplus link end-to-end, 7 square link end-to-end, 8 bridging tutorial, 9 link-aware acquisition audit | Recommended landing order: #59 phase 2 → this PR's implementation → #59 phases 3+. Phase 3 in #59 v0.4 reduces to "concrete `Map` subclasses for non-default links," since the rename + extension to `DensityDecomposition` happens in this PR. | Coordinated re-sequencing already reflected in #59 v0.4. |
 
 ### 4.2 Recommended landing order
 
