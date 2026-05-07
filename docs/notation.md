@@ -46,24 +46,21 @@ reserve `θ` for prose where it aids intuition.
 
 ## "Target" terms — glossary
 
-The word *target* shows up in five distinct roles in sabi. They all
-do useful semantic work, but the names won't expose the distinction
-unless you read this table:
+The word *target* shows up in several roles in sabi. After the
+``DensityDecomposition`` split (issue #65), the math identity and
+the algorithmic emulation choice live on different objects:
 
 | term | type | role |
 |---|---|---|
-| `TargetDistribution` | `Distribution` (subclass of ProbPipe `NumericRecordDistribution`) | The math object the user wants to approximate: an unnormalized log-density `phi(x, f(x); prior)`. Lives at `sabi.target_distribution`. |
-| `Problem.target_distribution` | `TargetDistribution` field | The benchmark's `TargetDistribution`. The mathematical content of a `Problem`. |
-| `target_map` (was `target_function`) | `Callable[[X], Y]` | The function `f : x ↦ y` the emulator approximates (log-likelihood, log-posterior, forward model — depends on the `LogDensityForm`). Stored as `target_single` (single-point); the batched view `target_map` is derived via `jax.vmap`. |
-| `target_single` | `Callable[[x], y]` | Single-point view of `target_map`: maps shape `input_shape` to shape `output_shape`. The primitive contract for hand-written targets. |
-| `IntermediateTarget` | `TargetDistribution` subclass | A tempered version of the base `TargetDistribution` at one schedule state. Carries `state`, `output_transform`, and a back-reference to the base `target_map`. Produced by `TemperingScheme.intermediate_target(base, state)`. |
-| `AcquisitionTarget` | `Enum` | Which schedule state the acquisition's `SurrogateDistribution` is built at: `CURRENT` (round's state), `NEXT` (one-step look-ahead), `TERMINAL` (final state). Independent of the round's "current" state. |
-| `target_tempering_state` | opaque PyTree | The state value resolved by `AcquisitionTarget` — what the acquisition's SP actually sees. Recorded on `AcquisitionState` for ablation reproducibility. |
-| `expected_target` | function `(SurrogateDistribution) -> Distribution` | Deterministic posterior estimator: plug the surrogate's predictive mean of `target_map` into the log-density form. The "target" here is the target map under the surrogate's predictive. |
-
-The two math objects `target_distribution` (a Distribution) and
-`target_map` (a Callable) are the load-bearing names — keep them
-distinct in your head and the rest of the table follows.
+| `TargetDistribution` | `Distribution` (subclass of ProbPipe `NumericRecordDistribution`) | The math identity of the target: ``(name, input_shape, support)`` plus optionally an analytical ``_unnormalized_log_prob`` for benchmarks. Lives at `sabi.target_distribution`. Carries no ``target_single`` / form / prior fields. |
+| `Problem.target_distribution` | `TargetDistribution` field | The benchmark's `TargetDistribution` — the math content of a `Problem`. |
+| `DensityDecomposition` | dataclass at `sabi.density_decomposition` | The algorithmic emulation choice: ``(target_single, output_shape, link, shift, constraint)``. Composes the emulator's output into log-density via ``link(y) + shift(x)``. Many decompositions can pair with one ``TargetDistribution``. Lives on ``Algorithm.density_decomposition``. |
+| `target_map` | `Callable[[X], Y]` | The batched function `f : X ↦ Y` the emulator approximates. Now a ``DensityDecomposition`` field (derived via `jax.vmap` from ``target_single``). |
+| `target_single` | `Callable[[x], y]` | Single-point view of `target_map`: shape ``input_shape -> output_shape``. Field on ``DensityDecomposition``. |
+| `IntermediateTarget` | `TargetDistribution` subclass | A `TargetDistribution` produced by a `TemperingScheme` at one schedule state. Carries ``state`` and ``output_transform``. Math identity only — the per-state effective decomposition lives separately, produced by ``TemperingScheme.intermediate_decomposition(base_decomposition, state)``. |
+| `AcquisitionTarget` | `Enum` | Which schedule state the acquisition's `SurrogateDistribution` is built at: `CURRENT` / `NEXT` / `TERMINAL`. |
+| `target_tempering_state` | opaque PyTree | The state value resolved by `AcquisitionTarget`. Recorded in the per-round metric row for ablation reproducibility. |
+| `expected_target` | function `(SurrogateDistribution) -> Distribution` | Deterministic posterior estimator: plug the surrogate's predictive mean into the decomposition. |
 
 ## "Emulator" vs. "surrogate"
 
@@ -87,32 +84,36 @@ sabi:
 
 Mnemonic: emulator → function (`f`); surrogate → distribution (`π`).
 
-## Role of `prior`
+## Per-role distribution fields (post-#65 layout)
 
-The `prior` field on a `TargetDistribution` is **required**. It plays
-two roles independent of whether the prior also forms part of the
-target distribution:
+The single ``prior`` field that the old ``TargetDistribution``
+carried played four distinct roles. After the
+``DensityDecomposition`` split, each role lands on its own field:
 
-1. **Defines the support of the parameter space.** `support` is not
-   a separate field — it's a property delegating to `prior.support`.
-   The prior may have unbounded support (a `Normal` over R^d) when
-   bounded support isn't desired.
-2. **Acts as the design distribution** for initial design, candidate
-   sets, and prior-sampling acquisitions.
+| Role | New home |
+|------|----------|
+| Modeling-prior add-on (Bayesian density assembly) | ``DensityDecomposition.shift`` (typically ``LogProb(modeling_prior)``) |
+| Initial design distribution | ``Algorithm.initial_design_distribution`` |
+| Candidate-set sampler (pointwise optimizers) | ``CandidateSetOptimizer.candidate_distribution`` |
+| BFGS seed sampler (continuous optimizer) | ``ContinuousMultiStartOptimizer.seed_distribution`` |
+| Parameter-space support definer | ``TargetDistribution.support`` (math) + ``Algorithm.x_support`` (algorithmic search region; defaults equal) |
 
-Whether the prior also enters the unnormalized target is the problem
-builder's choice via `log_density_form`: `LogLikPlusPrior` builds it
-in (`target = log_lik + log_prior`); `Identity` doesn't. In Bayesian
-settings the algorithmic `prior` may be a *truncated* version of the
-modeling prior — e.g., a Gaussian Bayesian prior paired with a
-uniform-box algorithmic prior used purely to bound sampling.
+Each is a plain ``Distribution`` (or ``Constraint`` for
+``support`` / ``x_support``). Sampling everywhere routes through
+``probpipe.sample(dist, key=..., sample_shape=...)`` directly —
+``BatchSampler`` / ``PriorSampler`` are gone (deleted alongside
+``sabi.sampling``). For per-dim arrays (e.g. an ``Uniform`` box),
+wrap with ``sabi._probpipe_compat.independent_uniform`` to
+re-interpret batch dims as event dims (a temporary shim until
+ProbPipe ships an ``Independent`` wrapper).
 
-The `prior` is a multivariate-event Distribution: `prior.event_shape
-== input_shape`, `prior.batch_shape == ()`. For per-dim distributions
-(e.g., array-valued `Uniform`), wrap with
-`sabi._probpipe_compat.independent_uniform` to re-interpret batch
-dims as event dims (a temporary shim until ProbPipe ships an
-`Independent`-style wrapper).
+Default-fill behavior (resolved at ``run()`` entry):
+
+- ``x_support`` falls back to ``problem.target_distribution.support``.
+- ``initial_design_distribution`` falls back to ``Uniform(x_support)``
+  when ``x_support`` is a bounded interval; otherwise ``run()`` raises
+  with a pointer to both fields.
+- ``density_decomposition`` is required; ``run()`` raises if ``None``.
 
 ## Tempering / bridging vocabulary
 
@@ -121,9 +122,9 @@ indexed by an opaque state PyTree. The vocabulary:
 
 | term | meaning |
 |---|---|
-| `TemperingScheme` | The abstraction: maps `(base, state)` to an `IntermediateTarget`. Subclasses: `NoTempering`, `LikelihoodTemperingViaForm`, `LikelihoodTemperingViaTarget`. |
+| `TemperingScheme` | The abstraction. Each scheme implements `intermediate_target(base, state) -> IntermediateTarget` (math identity at one state) and `intermediate_decomposition(base_decomposition, state) -> DensityDecomposition` (per-state effective decomposition via Map composition). Subclasses: `NoTempering`, `LikelihoodTemperingViaForm`, `LikelihoodTemperingViaTarget`. |
 | `TemperingSchedule` | The state generator: `at(round_idx) -> (state, is_terminal)`. Subclasses: `UntemperedSchedule`, `FixedSchedule`. |
-| `IntermediateTarget` | Per-state `TargetDistribution`. Carries `state`, `output_transform`, `base_target_map`. |
+| `IntermediateTarget` | Per-state `TargetDistribution`. Carries `state` and `output_transform`. Math identity only — the per-state link / shift live on the per-state effective `DensityDecomposition`. |
 | `tempering_state` | The opaque PyTree produced by the schedule and consumed by the scheme. Type is strategy-specific (scalar `beta` for likelihood tempering, subset index for data tempering, …). |
 | `AcquisitionTarget` | Enum that picks *which* state the acquisition's `SurrogateDistribution` is built at — independent of the round's current state. |
 | `output_transform` | Value object on `IntermediateTarget` describing how to derive `Y_train` for `f_state` from cached raw evaluations `Y_raw`. Single-axis for the target axis of tempering; identity when only the form varies. |
@@ -154,25 +155,32 @@ like `unnormalized_log_prob`).
 |--|--|--|
 | `Emulator` | `__call__(X) -> Distribution` | inherited `predict_*` from `GaussianRandomFunction`, etc. |
 | `PointwiseScoredAcquisition` | `score(X, state) -> (n,)` | `_score_single(x, state) -> scalar` |
-| `LogDensityForm` | `__call__(X, Y, *, prior) -> (n,)` | `_call_single(x, y, *, prior) -> scalar` |
-| `TargetDistribution` | `target_map(X) -> (n,) + output_shape` | `target_single(x) -> output_shape` (passed at construction) |
+| `DensityDecomposition` | `__call__(X, Y) -> (n,)`, `target_map(X) -> (n,) + output_shape` | `target_single(x) -> output_shape`, `density_at(x) -> ()` |
 
 Subclasses override the single-point hook; the batched method is
 provided by the base class via `jax.vmap` (or directly when a
 batched implementation is more efficient — see e.g. `Identity`'s
 batched `__call__` overriding the vmap path).
 
-## `LogDensityForm` shape contract
+## `DensityDecomposition` shape contract
 
-`LogDensityForm.__call__(X, Y, *, prior)` is batched:
+``DensityDecomposition.__call__(x, y) = link(y) + shift(x)`` is the
+deterministic log-density at ``(x, y)``. Both single-point
+(``x.shape == input_shape``, ``y.shape == output_shape``) and batched
+(``x.shape == (n,) + input_shape``, ``y.shape == (n,) + output_shape``)
+inputs are supported via the underlying ``Map`` broadcasting. The
+batched form returns shape ``(n,)`` (one scalar per row).
 
-- `X.shape == (n,) + input_shape`
-- `Y.shape == (n,) + output_shape`
-- Returns `(n,)` — one scalar log-density per row of `X`.
+``density_at(x) = self(x, target_single(x))`` is the convenience for
+the typical "evaluate the decomposition at the analytical target's
+output." For batched ``X`` use ``self(X, target_map(X))`` directly —
+``density_at`` is single-point.
 
-Subclasses implement `_call_single(x, y, *, prior) -> scalar` (single
-point: `x.shape == input_shape`, `y.shape == output_shape`). Default
-`__call__` does `jax.vmap(self._call_single, in_axes=(0, 0, None))(X, Y)`.
+Pushforward: ``pushforward(x, y_dist)`` constructs the per-``x`` map
+``Affine(slope=1.0, intercept=shift(x)) @ link`` and dispatches
+through ``sabi.maps.pushforward``. Closed-form for
+``(Affine, Normal | MultivariateNormal)``; MC fallback for non-affine
+links via ``Compose`` recursion.
 
 ## Symbol-vs-verbose convention
 
@@ -207,18 +215,21 @@ instance is **not** OK (it shadows `p = output_shape[0]`); use
 - **Batch args:** uppercase `X`, `Y`. Used in `Emulator.fit(X, Y)`, `Emulator.predict(X)`, the public `LogDensityForm.__call__(X, Y, prior)`, and anywhere a function is called on a collection.
 - **JAX PRNG keys:** `key`, `key_init`, `key_loop`, `key_acq`, etc. Never `k_init` or bare `k`.
 - **Dimensions:** prefer `problem.target_distribution.input_shape` / `problem.target_distribution.output_shape`. Use `d` / `p` only in math contexts where the scalar dim is unambiguous.
-- **Tempering:** `tempering_state` for the opaque state PyTree from `TemperingSchedule`. The per-state `LogDensityForm` is exposed via `IntermediateTarget.log_density_form`.
+- **Tempering:** `tempering_state` for the opaque state PyTree from `TemperingSchedule`. The per-state effective `DensityDecomposition` is produced by `TemperingScheme.intermediate_decomposition(base_decomposition, state)`.
 
 ## Examples
 
 2-D Gaussian benchmark (`input_shape=(2,)`, `output_shape=()`, `d=2`, `p=1`):
 
 ```python
-def f(x: Array) -> Array:    # x.shape == (2,), returns scalar
-    return -0.5 * x @ Sigma_inv @ x
+from probpipe import sample as pp_sample
 
-X = PriorSampler().sample(problem, key, n=16)  # X.shape == (16, 2)
-Y = problem.target_distribution.target_map(X)  # Y.shape == (16,) — already batched
+problem = gaussian_2d()
+decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+algorithm = Algorithm(density_decomposition=decomposition, ...)
+
+X = pp_sample(algorithm.initial_design_distribution, key=key, sample_shape=(16,))  # (16, 2)
+Y = decomposition.target_map(X)  # (16,) — already batched
 ```
 
 Forward-model benchmark with 5 observables (`input_shape=(3,)`, `output_shape=(5,)`):

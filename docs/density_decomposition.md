@@ -1,7 +1,7 @@
 # `TargetDistribution` / `DensityDecomposition` split
 
-**Status:** draft v0.1 — pre-implementation
-**Issue:** TBD (filed alongside this PR)
+**Status:** implemented (issue #65)
+**Issue:** [#65](https://github.com/arob5/sabi/issues/65)
 **Last updated:** 2026-05-07
 
 > Two coupled refactors of `TargetDistribution` and the algorithm-side
