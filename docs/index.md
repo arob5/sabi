@@ -14,6 +14,7 @@ into [ProbPipe](https://github.com/arob5/prob-pipe).
   {doc}`design <design>`, {doc}`notation <notation>`,
   {doc}`emulators <emulators>`, {doc}`tempering <tempering>`,
   {doc}`link functions <link_functions>`,
+  {doc}`density decomposition <density_decomposition>`,
   {doc}`scheduled metrics <scheduled_metrics>`.
 - **API reference** — auto-generated from the `sabi.*` source tree; rendered
   docstrings include the math.
@@ -42,6 +43,7 @@ notation
 emulators
 tempering
 link_functions
+density_decomposition
 scheduled_metrics
 v1_plan
 probpipe_random_measure_proposal
