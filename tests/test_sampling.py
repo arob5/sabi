@@ -1,7 +1,7 @@
 """Tests for the BatchSampler abstraction.
 
 `PriorSampler` is the only concrete sampler in v1.4.1; coverage focuses on:
-- Output shape matches `(n,) + problem.input_shape`.
+- Output shape matches `(n,) + problem.target_distribution.input_shape`.
 - Samples lie in the problem's support.
 - Independent keys produce different draws; same key reproduces the draw.
 - Missing-prior construction raises (since `prior` is required on
@@ -22,10 +22,11 @@ from sabi.sampling import PriorSampler
 
 def test_prior_sampler_shape_and_support():
     problem = gaussian_2d()
+    target = problem.target_distribution
     sampler = PriorSampler()
     X = sampler.sample(problem, jax.random.key(0), n=32)
-    assert X.shape == (32,) + problem.input_shape
-    assert jnp.all(jnp.asarray(problem.support.check(X)))
+    assert X.shape == (32,) + target.input_shape
+    assert jnp.all(jnp.asarray(target.support.check(X)))
 
 
 def test_prior_sampler_seed_determinism_and_independence():

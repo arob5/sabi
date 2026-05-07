@@ -55,14 +55,16 @@ Problem:
 ```
 
 `Problem` has convenience `@property` accessors that delegate to its
-inner `target_distribution` (`input_shape`, `output_shape`,
-`target_map`, `target_single`, `log_density_form`, `prior`,
-`support`) so existing callers read the same fields they always have.
+inner `target_distribution`. There are no convenience forwarders on
+`Problem` — consumers reach `problem.target_distribution.input_shape`,
+`problem.target_distribution.prior`, and so on, so the layer being
+touched is explicit at every callsite.
 
 **Initial-design / acquisition-space resolution.** `prior` is required
-on `TargetDistribution`, so `problem.prior` is always available. The
-loop's `Algorithm.initial_sampler` defaults to `PriorSampler`, which
-draws i.i.d. from `problem.prior`. Sobol / LHS samplers will land
+on `TargetDistribution`, so `problem.target_distribution.prior` is
+always available. The loop's `Algorithm.initial_sampler` defaults to
+`PriorSampler`, which draws i.i.d. from
+`problem.target_distribution.prior`. Sobol / LHS samplers will land
 alongside the first benchmark that needs them. There is no
 `sampling_bounds` fallback path — bounded support is expressed by
 constructing the prior with bounded support (e.g., a `Uniform`-based
@@ -105,7 +107,7 @@ Acquisitions decouple **scoring** (the function to maximize) from **optimization
 
 `PointwiseOptimizer` ships three implementations in `acquisitions/optim.py`:
 
-- `CandidateSetOptimizer` — random candidates from `problem.prior` → top-q. Cheap; gradient-free; default.
+- `CandidateSetOptimizer` — random candidates from `problem.target_distribution.prior` → top-q. Cheap; gradient-free; default.
 - `ContinuousMultiStartOptimizer` — score-filter top-`n_starts` BFGS init points → optimistix BFGS in unconstrained reparameterization space → top-q. Sigmoid bijector for `interval(low, high)` supports; other supports raise.
 - `GreedyMultiPointOptimizer` — for `q > 1`. Picks one point at a time via an inner optimizer; hallucinates a pending observation via a pluggable `FantasyImputer` (`KrigingBeliever`, `ConstantLiar`); refits the surrogate; iterates. Pluggable imputer makes the strategy interchangeable.
 
@@ -245,7 +247,7 @@ prior samples, uniform-in-bounds. Lives in `sabi/sampling.py`. Used by
   (`CandidateSetOptimizer.candidate_sampler`,
   `ContinuousMultiStartOptimizer.seed_sampler`).
 
-v1.4.1 ships `PriorSampler` (i.i.d. samples from `problem.prior`); Sobol /
+v1.4.1 ships `PriorSampler` (i.i.d. samples from `problem.target_distribution.prior`); Sobol /
 LHS land alongside the first benchmark that needs them.
 
 ### 4.9 `Algorithm` — composition
@@ -413,7 +415,7 @@ Per round (loop sketch):
    will replace the full refit.
 6. `SurrogateDistribution` for acquisition = `(emulator_for_acq,
    target_intermediate.log_density_form, ...)`. Acquisition picks
-   `x_new`, loop appends `y_new_raw = problem.target_map(x_new)`
+   `x_new`, loop appends `y_new_raw = problem.target_distribution.target_map(x_new)`
    to `Y_raw`.
 7. Round-end emulator + SP at the *current* state for metrics:
    `Y_train = current_intermediate.output_transform(current_state, X, Y_raw)`;

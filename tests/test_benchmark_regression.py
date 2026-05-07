@@ -211,7 +211,7 @@ def test_benchmark_regression_mmd2_below_cap(benchmark_name: str) -> None:
     spec = _SPECS[benchmark_name]
     problem = spec.factory()
     algorithm = _algorithm(
-        input_shape=problem.input_shape,
+        input_shape=problem.target_distribution.input_shape,
         n_initial=spec.n_initial,
         n_rounds=spec.n_rounds,
     )

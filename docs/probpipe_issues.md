@@ -75,7 +75,7 @@ record + 1.0
 
 This forces every sabi call site to wrap with `jnp.asarray(record)` (or use `jnp.add` instead of `+`) before doing arithmetic, which leaks the wrapper layer into otherwise-clean math.
 
-**Why it matters for sabi.** The cleanest implementation of `LogLikPlusPrior` would be `return y + pp_ops.log_prob(problem.prior, x)`. Today we have to write `return y + jnp.asarray(pp_ops.log_prob(problem.prior, x))`. Same issue surfaces in any user code that combines op outputs with raw arrays via Python operators.
+**Why it matters for sabi.** The cleanest implementation of `LogLikPlusPrior` would be `return y + pp_ops.log_prob(prior, x)`. Today we have to write `return y + jnp.asarray(pp_ops.log_prob(prior, x))`. Same issue surfaces in any user code that combines op outputs with raw arrays via Python operators.
 
 **What we'd want.** `NumericRecord` should act as a JAX array under Python arithmetic when it carries a single numeric leaf — implement `__add__` / `__radd__` / `__sub__` / `__mul__` / `__truediv__` / `__neg__` / `__pow__` / `__matmul__` (and right-hand variants) by delegating to the underlying array. Multi-field records can either delegate field-wise or raise. The single-leaf case is the common one and the one biting sabi today.
 

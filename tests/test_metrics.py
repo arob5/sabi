@@ -35,8 +35,9 @@ def _ctx_for(estimate, problem) -> MetricContext:
     `MMD`; pass placeholders.
     """
     n = 1
-    X = jnp.zeros((n,) + problem.input_shape)
-    Y = jnp.zeros((n,) + problem.output_shape)
+    target = problem.target_distribution
+    X = jnp.zeros((n,) + target.input_shape)
+    Y = jnp.zeros((n,) + target.output_shape)
     return MetricContext(
         estimate=estimate,
         surrogate_distribution=None,  # type: ignore[arg-type]

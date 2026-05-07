@@ -156,6 +156,28 @@ top-level alias (`Distribution`, `Constraint`, `RandomFunction`,
 (`probpipe.core._distribution_base` is a fact of life today; future
 refactors will move things and we update with them).
 
+### "Posterior" terminology
+
+sabi's algorithms work with general unnormalized target densities, not
+exclusively Bayesian posteriors. Avoid the word "posterior" in API names,
+public docstrings, and comments unless the surface is *specifically* a
+Bayesian inverse-problem example or tutorial. Prefer "target", "target
+distribution", or "(unnormalized) log-density".
+
+Two intentional carve-outs:
+
+1. GP machinery in `src/sabi/emulators/gpjax/` uses "posterior" in its
+   technical sense (`p(f | y)`, the GP's predictive posterior) and
+   stays — that's standard GP terminology, not inverse-problem framing.
+2. Bayesian-inverse-problem benchmarks and example notebooks may use
+   "posterior" where it accurately describes what the user is computing
+   (e.g., the per-benchmark prose docstrings under
+   `src/sabi/problems/`).
+
+Concretely: write `target_distribution.unnormalized_log_prob(x)`, not
+`problem.log_posterior(x)`; write "reference solution" or "reference
+target distribution", not "reference posterior", in API-facing prose.
+
 ### Dataclasses for value objects
 
 Component classes that are configuration bundles (`Algorithm`,

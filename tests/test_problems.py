@@ -18,10 +18,11 @@ from sabi.problems.gaussian import gaussian
 
 def test_gaussian_2d_has_expected_shapes_and_types():
     problem = gaussian_2d()
-    assert problem.input_shape == (2,)
-    assert problem.output_shape == ()
-    assert isinstance(problem.prior, Distribution)
-    assert isinstance(problem.support, Constraint)
+    target = problem.target_distribution
+    assert target.input_shape == (2,)
+    assert target.output_shape == ()
+    assert isinstance(target.prior, Distribution)
+    assert isinstance(target.support, Constraint)
     assert isinstance(problem.reference_distribution, MultivariateNormal)
 
 
@@ -30,7 +31,7 @@ def test_gaussian_2d_log_prob_integrates_to_one():
     xs = jnp.linspace(-6.0, 6.0, 300)
     ys = jnp.linspace(-6.0, 6.0, 300)
     grid = jnp.stack(jnp.meshgrid(xs, ys, indexing="ij"), axis=-1).reshape(-1, 2)
-    log_probs = problem.target_map(grid)
+    log_probs = problem.target_distribution.target_map(grid)
     dx = float((xs[1] - xs[0]) * (ys[1] - ys[0]))
     total = float(jnp.sum(jnp.exp(log_probs))) * dx
     assert total == pytest.approx(1.0, abs=1e-3)
@@ -56,7 +57,7 @@ def test_gaussian_reference_distribution_samples_match_custom_moments():
 def test_gaussian_d_default_recovers_2d_shape():
     """`gaussian()` defaults to d=2; isotropic identity covariance."""
     p = gaussian()
-    assert p.input_shape == (2,)
+    assert p.target_distribution.input_shape == (2,)
     assert isinstance(p.reference_distribution, MultivariateNormal)
 
 
@@ -64,11 +65,12 @@ def test_gaussian_higher_d_shapes_and_log_prob():
     """`gaussian(d=5)` exposes a 5-D Problem; log-density agrees with the
     underlying MultivariateNormal for the same x."""
     p = gaussian(d=5)
-    assert p.input_shape == (5,)
+    target = p.target_distribution
+    assert target.input_shape == (5,)
     x = jnp.zeros(5)
     # At x=0 with mean=0, cov=I_5, log p = -0.5 * 5 * log(2π).
     expected = -0.5 * 5.0 * float(jnp.log(2 * jnp.pi))
-    assert float(p.log_posterior(x)) == pytest.approx(expected, abs=1e-6)
+    assert float(target._unnormalized_log_prob(x)) == pytest.approx(expected, abs=1e-6)
 
 
 def test_gaussian_rejects_d_less_than_1():
@@ -115,10 +117,11 @@ def test_gaussian_2d_benchmark_preserves_correlated_default():
 
 def test_banana_has_expected_shapes_and_types():
     problem = banana()
-    assert problem.input_shape == (2,)
-    assert problem.output_shape == ()
-    assert isinstance(problem.prior, Distribution)
-    assert isinstance(problem.support, Constraint)
+    target = problem.target_distribution
+    assert target.input_shape == (2,)
+    assert target.output_shape == ()
+    assert isinstance(target.prior, Distribution)
+    assert isinstance(target.support, Constraint)
     assert isinstance(problem.reference_distribution, NumericEmpiricalDistribution)
     assert isinstance(problem.reference_distribution, SupportsSampling)
 
@@ -128,7 +131,7 @@ def test_banana_log_prob_integrates_to_one():
     xs = jnp.linspace(-4.0, 4.0, 300)
     ys = jnp.linspace(-10.0, 4.0, 300)
     grid = jnp.stack(jnp.meshgrid(xs, ys, indexing="ij"), axis=-1).reshape(-1, 2)
-    log_probs = problem.target_map(grid)
+    log_probs = problem.target_distribution.target_map(grid)
     dx = float((xs[1] - xs[0]) * (ys[1] - ys[0]))
     total = float(jnp.sum(jnp.exp(log_probs))) * dx
     assert total == pytest.approx(1.0, abs=5e-3)
@@ -138,19 +141,22 @@ def test_banana_d_default_recovers_2d():
     """`banana()` with no args must equal `banana(d=2)` — back-compat."""
     p_default = banana()
     p_explicit = banana(d=2)
-    assert p_default.input_shape == p_explicit.input_shape == (2,)
+    td_default = p_default.target_distribution
+    td_explicit = p_explicit.target_distribution
+    assert td_default.input_shape == td_explicit.input_shape == (2,)
     # The log-density at the same point must agree (both use Identity form).
     x = jnp.asarray([0.3, -1.7])
-    assert float(p_default.log_posterior(x)) == pytest.approx(
-        float(p_explicit.log_posterior(x)), abs=1e-12
+    assert float(td_default._unnormalized_log_prob(x)) == pytest.approx(
+        float(td_explicit._unnormalized_log_prob(x)), abs=1e-12
     )
 
 
 def test_banana_higher_d_shapes():
     """`banana(d=10)` exposes a 10-D Problem."""
     problem = banana(d=10)
-    assert problem.input_shape == (10,)
-    assert problem.output_shape == ()
+    target = problem.target_distribution
+    assert target.input_shape == (10,)
+    assert target.output_shape == ()
     assert isinstance(problem.reference_distribution, NumericEmpiricalDistribution)
 
 
@@ -160,9 +166,10 @@ def test_banana_higher_d_log_prob_factored_marginals():
     in x_3."""
     a, b, c = 1.0, 4.0, 1.5
     problem = banana(d=4, a=a, b=b, c=c)
+    target = problem.target_distribution
     base = jnp.asarray([0.5, -1.0, 0.0, 0.0])
     perturbed = jnp.asarray([0.5, -1.0, 0.7, -0.4])
-    diff = float(problem.log_posterior(perturbed) - problem.log_posterior(base))
+    diff = float(target._unnormalized_log_prob(perturbed) - target._unnormalized_log_prob(base))
     expected = -0.5 / (c * c) * float(0.7 ** 2 + 0.4 ** 2)
     assert diff == pytest.approx(expected, abs=1e-10)
 
@@ -258,7 +265,7 @@ def test_benchmark_problem_isinstance_of_problem():
         name="banana_2d",
     )
     assert isinstance(bp, Problem)
-    assert bp.input_shape == base.input_shape
+    assert bp.target_distribution.input_shape == base.target_distribution.input_shape
     assert bp.artifact_version == "v1"
 
 

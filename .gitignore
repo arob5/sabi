@@ -23,3 +23,8 @@ docs/api/
 # Scratch files (commit message buffers etc.)
 .git_msg.tmp
 *.tmp
+
+# Claude Code runtime state — committed content under .claude/
+# (skills, hooks) is added explicitly; everything else is local.
+.claude/worktrees/
+.claude/*.lock

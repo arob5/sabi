@@ -37,8 +37,8 @@ class FantasyImputer(ABC):
 
     @abstractmethod
     def impute(self, x_pending: Array, state: AcquisitionState) -> Array:
-        """Return shape `(q_pending,) + state.problem.output_shape` —
-        hallucinated `y` values for the pending batch points.
+        """Return shape `(q_pending,) + state.problem.target_distribution.output_shape`
+        — hallucinated `y` values for the pending batch points.
         """
 
 
@@ -121,5 +121,5 @@ class ConstantLiar(FantasyImputer):
                 )
         else:
             v = jnp.asarray(self.value)
-        out_shape = state.problem.output_shape
+        out_shape = state.problem.target_distribution.output_shape
         return jnp.full((n_pending,) + tuple(out_shape), v)

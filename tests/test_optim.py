@@ -96,7 +96,7 @@ def test_candidate_set_optimizer_returns_top_q():
     state = _state()
     acq = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=64))
     batch = acq.optimizer.optimize(acq, state, q=3, key=jax.random.key(7))
-    assert batch.shape == (3,) + state.problem.input_shape
+    assert batch.shape == (3,) + state.problem.target_distribution.input_shape
 
 
 def test_continuous_multistart_finds_known_concave_argmax():
@@ -127,7 +127,8 @@ def test_continuous_multistart_constrained_to_support():
     )
     acq = _ConcaveScore(target=target, optimizer=optimizer)
     batch = optimizer.optimize(acq, state, q=1, key=jax.random.key(3))
-    lower, upper = state.problem.support.low, state.problem.support.high
+    support = state.problem.target_distribution.support
+    lower, upper = support.low, support.high
     assert jnp.all(batch >= lower - 1e-3)
     assert jnp.all(batch <= upper + 1e-3)
 
@@ -138,7 +139,7 @@ def test_greedy_multi_point_returns_distinct_points():
     optimizer = GreedyMultiPointOptimizer(inner=inner, imputer=KrigingBeliever())
     acq = ExpectedImprovement(optimizer=optimizer)
     batch = optimizer.optimize(acq, state, q=3, key=jax.random.key(11))
-    assert batch.shape == (3,) + state.problem.input_shape
+    assert batch.shape == (3,) + state.problem.target_distribution.input_shape
     # No two picks coincide.
     pairs = [(0, 1), (0, 2), (1, 2)]
     for i, j in pairs:
@@ -154,7 +155,7 @@ def test_greedy_multi_point_with_constant_liar_min():
     )
     acq = ExpectedImprovement(optimizer=optimizer)
     batch = optimizer.optimize(acq, state, q=2, key=jax.random.key(13))
-    assert batch.shape == (2,) + state.problem.input_shape
+    assert batch.shape == (2,) + state.problem.target_distribution.input_shape
     assert not jnp.allclose(batch[0], batch[1], atol=1e-6)
 
 

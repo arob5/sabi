@@ -72,12 +72,13 @@ class MetricContext:
             a `WeightedEmpiricalRandomMeasure` (no-emulator baseline).
             Metrics that need to inspect the emulator narrow to
             `EmulatedDistribution` via `isinstance`.
-        problem: the inference problem (provides `prior`,
-            `reference_distribution`, `support`, `input_shape`,
-            etc.).
-        X: design inputs, shape `(n,) + problem.input_shape`.
+        problem: the inference problem; reach through
+            `problem.target_distribution` for `prior`, `support`,
+            `input_shape`, etc.
+        X: design inputs, shape
+            `(n,) + problem.target_distribution.input_shape`.
         Y_raw: raw target evaluations, shape
-            `(n,) + problem.output_shape`.
+            `(n,) + problem.target_distribution.output_shape`.
         Y_train: emulator-training targets at
             `tempering_state` — what the surrogate's emulator was
             actually fit on. Equals `Y_raw` when no target-axis

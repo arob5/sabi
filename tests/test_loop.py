@@ -46,7 +46,7 @@ def test_loop_runs_on_gaussian_2d_with_prior_sampling_acq():
     alg = _algorithm(PriorSampling(), n_rounds=5)
     result = run(problem, alg, jax.random.key(0))
     # 16 initial + 4 acquisition rounds * q=1 = 20.
-    assert result.X.shape == (16 + 4,) + problem.input_shape
+    assert result.X.shape == (16 + 4,) + problem.target_distribution.input_shape
     # One row per round, including round 0 (initial design) → 5 rows.
     assert len(result.per_round_metrics) == 5
     assert all(m["tempering_state"] is None for m in result.per_round_metrics)
@@ -62,7 +62,7 @@ def test_loop_runs_on_banana_with_ei_acq():
         n_rounds=5,
     )
     result = run(problem, alg, jax.random.key(1))
-    assert result.X.shape == (16 + 4,) + problem.input_shape
+    assert result.X.shape == (16 + 4,) + problem.target_distribution.input_shape
     assert "mmd2" in result.final_metrics
 
 

@@ -1,10 +1,10 @@
 """Sampling-based acquisitions.
 
 `PriorSampling` draws the next batch directly from a `BatchSampler`
-(default `PriorSampler`, which samples from `problem.prior`). It does
-not have a score; it is not a `PointwiseScoredAcquisition`. Useful as
-a baseline and as one component of a future `MixtureSampling`
-acquisition.
+(default `PriorSampler`, which samples from
+``problem.target_distribution.prior``). It does not have a score; it
+is not a `PointwiseScoredAcquisition`. Useful as a baseline and as one
+component of a future `MixtureSampling` acquisition.
 
 `PosteriorThompsonSampling` and `MixtureSampling` are tracked as
 follow-ups.
@@ -24,9 +24,10 @@ from sabi.sampling import BatchSampler, PriorSampler
 class PriorSampling(Acquisition):
     """Draw `q` samples from a `BatchSampler` (default ``PriorSampler``).
 
-    With the default sampler this returns ``X ~ problem.prior^q`` of shape
-    ``(q,) + problem.input_shape``. Swap ``sampler`` to use Sobol, LHS,
-    or any other `BatchSampler` strategy.
+    With the default sampler this returns
+    ``X ~ problem.target_distribution.prior^q`` of shape
+    ``(q,) + problem.target_distribution.input_shape``. Swap ``sampler``
+    to use Sobol, LHS, or any other `BatchSampler` strategy.
     """
 
     sampler: BatchSampler = field(default_factory=PriorSampler)

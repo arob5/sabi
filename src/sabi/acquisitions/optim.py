@@ -65,7 +65,7 @@ class PointwiseOptimizer(ABC):
         q: int,
         key: Array,
     ) -> Array:
-        """Return ``(q,) + state.problem.input_shape``."""
+        """Return ``(q,) + state.problem.target_distribution.input_shape``."""
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,8 @@ class CandidateSetOptimizer(PointwiseOptimizer):
     Args:
         n_candidates: number of candidates scored each call.
         candidate_sampler: `BatchSampler` for the candidate set. Default
-            is `PriorSampler` (samples from ``problem.prior``).
+            is `PriorSampler` (samples from
+            ``problem.target_distribution.prior``).
     """
 
     n_candidates: int = 1024
@@ -136,7 +137,8 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
         bfgs_max_steps: max steps per BFGS solve.
         bfgs_rtol / bfgs_atol: convergence tolerances.
         seed_sampler: `BatchSampler` for the seeding candidate set.
-            Default is `PriorSampler` (samples from ``problem.prior``).
+            Default is `PriorSampler` (samples from
+            ``problem.target_distribution.prior``).
     """
 
     n_starts: int = 16
@@ -158,7 +160,7 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
                 f"n_seeding_candidates ({self.n_seeding_candidates}) must be "
                 f">= n_starts ({self.n_starts})."
             )
-        bijector = _make_bijector(state.problem.support)
+        bijector = _make_bijector(state.problem.target_distribution.support)
 
         # 1-2: seed selection
         key_seed, _ = jax.random.split(key)

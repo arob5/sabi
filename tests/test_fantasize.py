@@ -27,7 +27,7 @@ def test_kriging_believer_returns_predictive_mean():
     y = imputer.impute(x_pending, state)
     expected = jnp.asarray(mean(state.surrogate_distribution.emulator(x_pending)))
     assert jnp.allclose(y, expected, atol=1e-5)
-    assert y.shape == (2,) + state.problem.output_shape
+    assert y.shape == (2,) + state.problem.target_distribution.output_shape
 
 
 def test_constant_liar_min_max_mean_yield_constants():
@@ -41,7 +41,7 @@ def test_constant_liar_min_max_mean_yield_constants():
     ]:
         imputer = ConstantLiar(value=value)
         y = imputer.impute(x_pending, state)
-        assert y.shape == (3,) + state.problem.output_shape
+        assert y.shape == (3,) + state.problem.target_distribution.output_shape
         assert jnp.all(y == expected_constant)
 
 

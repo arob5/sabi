@@ -206,7 +206,7 @@ instance is **not** OK (it shadows `p = output_shape[0]`); use
 - **Single-point args:** lowercase `x`, `y`. Used in private hooks like `_call_single(x, y, prior)` and anywhere a function is called on a single parameter setting.
 - **Batch args:** uppercase `X`, `Y`. Used in `Emulator.fit(X, Y)`, `Emulator.predict(X)`, the public `LogDensityForm.__call__(X, Y, prior)`, and anywhere a function is called on a collection.
 - **JAX PRNG keys:** `key`, `key_init`, `key_loop`, `key_acq`, etc. Never `k_init` or bare `k`.
-- **Dimensions:** prefer `problem.input_shape` / `problem.output_shape`. Use `d` / `p` only in math contexts where the scalar dim is unambiguous.
+- **Dimensions:** prefer `problem.target_distribution.input_shape` / `problem.target_distribution.output_shape`. Use `d` / `p` only in math contexts where the scalar dim is unambiguous.
 - **Tempering:** `tempering_state` for the opaque state PyTree from `TemperingSchedule`. The per-state `LogDensityForm` is exposed via `IntermediateTarget.log_density_form`.
 
 ## Examples
@@ -218,7 +218,7 @@ def f(x: Array) -> Array:    # x.shape == (2,), returns scalar
     return -0.5 * x @ Sigma_inv @ x
 
 X = PriorSampler().sample(problem, key, n=16)  # X.shape == (16, 2)
-Y = problem.target_map(X)                      # Y.shape == (16,) — already batched
+Y = problem.target_distribution.target_map(X)  # Y.shape == (16,) — already batched
 ```
 
 Forward-model benchmark with 5 observables (`input_shape=(3,)`, `output_shape=(5,)`):

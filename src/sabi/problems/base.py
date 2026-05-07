@@ -1,12 +1,16 @@
-"""`Problem` — a benchmark inference problem bundle.
+"""`Problem` — a named target distribution with an optional reference solution.
 
-The mathematical content of a problem (target function + form + prior +
-support) lives in `target_distribution: TargetDistribution`. The
-`Problem` layer adds benchmark-suite metadata: a name, an optional
-reference posterior, and any reproducibility info. Convenience
-``@property`` accessors mirror the inner target distribution so existing
-callers (acquisitions, metrics, the loop) read the same fields they
-always have.
+A `Problem` is the *identity* layer: what defines the inference problem
+mathematically, plus a human-readable name and (optionally) a reference
+solution used by reference-based metrics. The mathematical content
+itself — target function, form, design prior, support, batched vs.
+per-point views — lives on ``target_distribution: TargetDistribution``.
+
+Algorithmic-pipeline choices (which form, which design prior, vmapped
+vs. per-point views of the target) are reachable via
+``problem.target_distribution.X``. That extra hop is the point: it keeps
+``Problem`` honest about what's a problem-defining fact versus a
+consumer-side configuration.
 
 This split — math vs. benchmark identity — was the right framing
 because:
@@ -16,42 +20,40 @@ because:
   `unnormalized_log_prob`, etc.). No `Problem` wrapping required.
 - `TemperingScheme` operates on `TargetDistribution` to produce
   intermediate targets, with no awareness of `Problem`-level metadata.
-- A future `BenchmarkProblem` (issue #2) can subclass / extend `Problem`
-  with validated reference artifacts without touching the math layer.
+- `BenchmarkProblem` extends `Problem` with validated reference
+  artifacts (locked-in name, ``artifact_version``) without touching
+  the math layer.
 
 Shape conventions follow ProbPipe's `ArrayRandomFunction` (see
-`docs/notation.md`): a single input has shape `input_shape`, a single
-output has shape `output_shape`, and design sets `X` / `Y` prepend a
-batch dimension. ``target_map`` is the **batched** view;
-``target_single`` is the per-point view. See
+`docs/notation.md`): a single input has shape ``input_shape``, a single
+output has shape ``output_shape``, and design sets ``X`` / ``Y``
+prepend a batch dimension. Reach through
+``problem.target_distribution`` for the batched (``target_map``) or
+per-point (``target_single``) view. See
 `sabi.target_distribution.TargetDistribution`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from jax import Array
 from probpipe.core._distribution_base import Distribution
-from probpipe.core.constraints import Constraint
 
-from sabi.problems.forms import LogDensityForm
 from sabi.target_distribution import TargetDistribution
 
 
 @dataclass(frozen=True)
 class Problem:
-    """A benchmark inference problem.
+    """A named target distribution with an optional reference solution.
 
     Attributes:
         target_distribution: the mathematical target — a
             `TargetDistribution` carrying the target function, form,
-            prior, and support.
-        reference_distribution: optional ground-truth posterior used by
-            reference-based metrics (analytic when one fits naturally,
-            otherwise an `EmpiricalDistribution` over precomputed
-            samples).
+            design prior, and support.
+        reference_distribution: optional ground-truth target distribution
+            used by reference-based metrics (analytic when one fits
+            naturally, otherwise an `EmpiricalDistribution` over
+            precomputed samples).
         name: human-readable benchmark name (e.g. ``"gaussian"``,
             ``"banana"``). Used for cache keys and metadata.
     """
@@ -60,53 +62,10 @@ class Problem:
     reference_distribution: Distribution | None = None
     name: str = ""
 
-    # ------------------------------------------------------------------------
-    # Convenience accessors mirroring the inner target_distribution
-    # ------------------------------------------------------------------------
-
-    @property
-    def input_shape(self) -> tuple[int, ...]:
-        return self.target_distribution.input_shape
-
-    @property
-    def output_shape(self) -> tuple[int, ...]:
-        return self.target_distribution.output_shape
-
-    @property
-    def target_map(self) -> Callable[[Array], Array]:
-        return self.target_distribution.target_map
-
-    @property
-    def target_single(self) -> Callable[[Array], Array]:
-        return self.target_distribution.target_single
-
-    @property
-    def log_density_form(self) -> LogDensityForm:
-        return self.target_distribution.log_density_form
-
-    @property
-    def prior(self) -> Distribution:
-        return self.target_distribution.prior
-
-    @property
-    def support(self) -> Constraint:
-        """Support of the parameter space (delegates to ``prior.support``)."""
-        return self.target_distribution.support
-
-    def log_posterior(self, x: Array) -> Array:
-        """Single-point unnormalized log-posterior at ``x`` (shape ``input_shape``).
-
-        Convenience for tests / debugging — not used in the hot loop.
-        Equivalent to ``target_distribution.unnormalized_log_prob(x)``
-        via the ProbPipe op.
-        """
-        y = self.target_single(x)
-        return self.log_density_form(x, y, prior=self.prior)
-
 
 @dataclass(frozen=True)
 class BenchmarkProblem(Problem):
-    """A `Problem` with a locked-in, validated reference posterior.
+    """A `Problem` with a locked-in, validated reference solution.
 
     Each named `BenchmarkProblem` corresponds to a single fixed
     configuration of a problem family (parameters baked into the
@@ -124,12 +83,13 @@ class BenchmarkProblem(Problem):
 
     Attributes:
         artifact_version: opaque tag (e.g. ``"v1"``) bumped when the
-            posterior or its reference artifact genuinely changes. The
-            canonical operation when a benchmark needs to evolve is to
-            *introduce a new name* (posteriordb-style). The version
-            field exists for the rare case where a fix to a reference
-            generation pipeline is rolled into the same name and tests
-            need a way to declare which artifact they trust.
+            target distribution or its reference artifact genuinely
+            changes. The canonical operation when a benchmark needs to
+            evolve is to *introduce a new name* (posteriordb-style).
+            The version field exists for the rare case where a fix to
+            a reference generation pipeline is rolled into the same
+            name and tests need a way to declare which artifact they
+            trust.
     """
 
     artifact_version: str = "v1"
@@ -147,3 +107,25 @@ class BenchmarkProblem(Problem):
                 "is the benchmark's identity."
             )
 
+    @classmethod
+    def from_problem(
+        cls,
+        problem: Problem,
+        *,
+        name: str,
+        artifact_version: str = "v1",
+    ) -> BenchmarkProblem:
+        """Promote a flexible `Problem` to a validated `BenchmarkProblem`.
+
+        Copies ``target_distribution`` and ``reference_distribution``
+        from the source `Problem`, attaches the locked-in ``name`` and
+        ``artifact_version``. The source's own ``name`` is intentionally
+        ignored — flexible factories may leave it empty, and the
+        benchmark identity is set here.
+        """
+        return cls(
+            target_distribution=problem.target_distribution,
+            reference_distribution=problem.reference_distribution,
+            name=name,
+            artifact_version=artifact_version,
+        )

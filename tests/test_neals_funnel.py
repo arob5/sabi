@@ -22,10 +22,11 @@ def test_neals_funnel_shapes_and_types():
     """Construct neals_funnel; reference loads from cache. Verify the
     core problem-level invariants."""
     problem = neals_funnel(d=2)
-    assert problem.input_shape == (3,)
-    assert problem.output_shape == ()
-    assert isinstance(problem.prior, Distribution)
-    assert isinstance(problem.support, Constraint)
+    target = problem.target_distribution
+    assert target.input_shape == (3,)
+    assert target.output_shape == ()
+    assert isinstance(target.prior, Distribution)
+    assert isinstance(target.support, Constraint)
     assert isinstance(problem.reference_distribution, NumericEmpiricalDistribution)
     assert isinstance(problem.reference_distribution, SupportsSampling)
 
@@ -33,7 +34,7 @@ def test_neals_funnel_shapes_and_types():
 def test_neals_funnel_target_log_density_known_values():
     """Spot-check the joint log-density at a few exact points."""
     problem = neals_funnel(d=2, sigma_v=3.0)
-    log_p_single = problem.target_single
+    log_p_single = problem.target_distribution.target_single
 
     # At (v=0, x=0): log_p_v = -0.5*log(2π·9), log_p_x|v = 2 * (-0.5*log(2π·1)) = -log(2π)
     # Total = -0.5*log(2π·9) - log(2π) = -0.5 log(2π·9) - log(2π)
@@ -80,11 +81,12 @@ def test_neals_funnel_reference_funnel_geometry():
     assert high_v_x1_var > 5 * low_v_x1_var
 
 
-def test_neals_funnel_log_posterior_method():
-    """`Problem.log_posterior` (which composes target_single + Identity form)
-    matches `target_single` directly for this benchmark."""
-    problem = neals_funnel(d=2)
+def test_neals_funnel_unnormalized_log_prob_matches_target_single():
+    """`TargetDistribution.unnormalized_log_prob` (which composes
+    target_single + Identity form on a single point) matches
+    ``target_single`` directly for this benchmark."""
+    target = neals_funnel(d=2).target_distribution
     x = jnp.asarray([0.5, 1.0, -1.0])
-    assert float(problem.log_posterior(x)) == pytest.approx(
-        float(problem.target_single(x)), abs=1e-6
+    assert float(target._unnormalized_log_prob(x)) == pytest.approx(
+        float(target.target_single(x)), abs=1e-6
     )

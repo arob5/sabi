@@ -1,7 +1,7 @@
 """Validated `BenchmarkProblem` factories — the curated benchmark suite.
 
 Each factory in this module returns a `BenchmarkProblem` with locked-in
-parameters and a trusted reference posterior. These are the entries the
+parameters and a trusted reference solution. These are the entries the
 regression test suite runs against; metric values from runs on these
 benchmarks are comparable across commits.
 
@@ -9,14 +9,15 @@ Adding a new validated benchmark:
 
 1. Build a flexible `Problem` factory under `sabi/problems/` (e.g.
    `banana(d=…, a=…, b=…)`).
-2. Pick a canonical parameter set; the resulting posterior is what the
-   benchmark name refers to forever.
-3. Wrap it here in a no-arg factory that returns a `BenchmarkProblem`.
+2. Pick a canonical parameter set; the resulting target distribution is
+   what the benchmark name refers to forever.
+3. Wrap it here in a no-arg factory that returns a `BenchmarkProblem`,
+   typically via ``BenchmarkProblem.from_problem(flexible, name=...)``.
    Bumping a benchmark's `artifact_version` is reserved for fixes to
-   the reference generation pipeline; changing the posterior itself
-   should introduce a new name (posteriordb invariant).
+   the reference generation pipeline; changing the target distribution
+   itself should introduce a new name (posteriordb invariant).
 
-Form variants (e.g., emulating a forward model vs. the log-posterior
+Form variants (e.g., emulating a forward model vs. the log-density
 directly) are tracked as a follow-up — see issue #11.
 """
 
@@ -35,13 +36,7 @@ def banana_2d() -> BenchmarkProblem:
     samples, ~4σ default bounds, log-density emulation (`Identity` form).
     Used by visualization tutorials and as a sanity-check benchmark.
     """
-    problem = banana(d=2, a=1.0, b=4.0)
-    return BenchmarkProblem(
-        target_distribution=problem.target_distribution,
-        reference_distribution=problem.reference_distribution,
-        name="banana_2d",
-        artifact_version="v1",
-    )
+    return BenchmarkProblem.from_problem(banana(d=2, a=1.0, b=4.0), name="banana_2d")
 
 
 def banana_10d() -> BenchmarkProblem:
@@ -51,12 +46,8 @@ def banana_10d() -> BenchmarkProblem:
     dimensions on top. Tests scaling of the loop in moderate dimension
     while keeping the analytic reference distribution exact.
     """
-    problem = banana(d=10, a=1.0, b=4.0, c=1.0)
-    return BenchmarkProblem(
-        target_distribution=problem.target_distribution,
-        reference_distribution=problem.reference_distribution,
-        name="banana_10d",
-        artifact_version="v1",
+    return BenchmarkProblem.from_problem(
+        banana(d=10, a=1.0, b=4.0, c=1.0), name="banana_10d"
     )
 
 
@@ -66,12 +57,9 @@ def gaussian_2d() -> BenchmarkProblem:
     Zero mean, unit marginal variances, off-diagonal correlation 0.5.
     Reference is the analytic ProbPipe `MultivariateNormal` itself.
     """
-    problem = gaussian(d=2, mean=(0.0, 0.0), cov=((1.0, 0.5), (0.5, 1.0)))
-    return BenchmarkProblem(
-        target_distribution=problem.target_distribution,
-        reference_distribution=problem.reference_distribution,
+    return BenchmarkProblem.from_problem(
+        gaussian(d=2, mean=(0.0, 0.0), cov=((1.0, 0.5), (0.5, 1.0))),
         name="gaussian_2d",
-        artifact_version="v1",
     )
 
 
@@ -79,17 +67,11 @@ def gaussian_10d() -> BenchmarkProblem:
     """Validated 10-D Gaussian benchmark (mean=0, cov=I_10).
 
     Isotropic moderate-d Gaussian — a sanity benchmark whose analytic
-    posterior is trivially samplable. Useful for emulator-fidelity
-    ablations where the curse of dimension matters but the geometry
-    doesn't.
+    target distribution is trivially samplable. Useful for
+    emulator-fidelity ablations where the curse of dimension matters
+    but the geometry doesn't.
     """
-    problem = gaussian(d=10)
-    return BenchmarkProblem(
-        target_distribution=problem.target_distribution,
-        reference_distribution=problem.reference_distribution,
-        name="gaussian_10d",
-        artifact_version="v1",
-    )
+    return BenchmarkProblem.from_problem(gaussian(d=10), name="gaussian_10d")
 
 
 def neals_funnel_3d() -> BenchmarkProblem:
@@ -102,19 +84,16 @@ def neals_funnel_3d() -> BenchmarkProblem:
     max_divergence_rate=0.10). Those sampler-side knobs are part of the
     benchmark's identity and are pinned here.
     """
-    problem = neals_funnel(
-        d=2,
-        sigma_v=3.0,
-        v_bound=9.0,
-        x_bound=30.0,
-        num_results=2000,
-        num_warmup=2000,
-        num_chains=4,
-        random_seed=0,
-    )
-    return BenchmarkProblem(
-        target_distribution=problem.target_distribution,
-        reference_distribution=problem.reference_distribution,
+    return BenchmarkProblem.from_problem(
+        neals_funnel(
+            d=2,
+            sigma_v=3.0,
+            v_bound=9.0,
+            x_bound=30.0,
+            num_results=2000,
+            num_warmup=2000,
+            num_chains=4,
+            random_seed=0,
+        ),
         name="neals_funnel_3d",
-        artifact_version="v1",
     )
