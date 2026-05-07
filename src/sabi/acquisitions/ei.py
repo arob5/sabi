@@ -68,7 +68,7 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
     best_from: str = "data"
 
     def _score_single(self, x: Array, state: AcquisitionState) -> Array:
-        """Single-point EI at `x` (shape `state.problem.input_shape`).
+        """Single-point EI at `x` (shape `state.problem.target_distribution.input_shape`).
         Returns scalar."""
         surrogate_distribution = state.surrogate_distribution
         if not isinstance(surrogate_distribution, EmulatedDistribution):

@@ -13,11 +13,12 @@ other sampling strategy at the same field they would swap a prior
 sampler — no changes to the loop or the optimizers.
 
 Currently ships one concrete sampler: `PriorSampler`, which draws
-i.i.d. samples from `problem.prior`. Sobol and LHS land alongside the
-first benchmark that needs deterministic / low-discrepancy sequences.
+i.i.d. samples from ``problem.target_distribution.prior``. Sobol and
+LHS land alongside the first benchmark that needs deterministic /
+low-discrepancy sequences.
 
 Output shape follows `docs/notation.md`:
-``X.shape == (n,) + problem.input_shape``.
+``X.shape == (n,) + problem.target_distribution.input_shape``.
 """
 
 from __future__ import annotations
@@ -35,26 +36,28 @@ from sabi.problems.base import Problem
 class BatchSampler(ABC):
     """Strategy for drawing `n` parameter-space points.
 
-    Implementers return shape ``(n,) + problem.input_shape``. The sampler
-    sees the full `Problem` so subclasses can read whichever fields they
-    need (`prior` for prior-based sampling, `prior.support` for
-    low-discrepancy sequences, `input_shape` for shape, etc.).
+    Implementers return shape
+    ``(n,) + problem.target_distribution.input_shape``. The sampler
+    sees the full `Problem` so subclasses can read whichever fields
+    they need (`prior` for prior-based sampling, `prior.support` for
+    low-discrepancy sequences, `input_shape` for shape, etc.) via
+    ``problem.target_distribution``.
     """
 
     @abstractmethod
     def sample(self, problem: Problem, key: Array, n: int) -> Array:
-        """Return `(n,) + problem.input_shape` samples."""
+        """Return `(n,) + problem.target_distribution.input_shape` samples."""
 
 
 @dataclass(frozen=True)
 class PriorSampler(BatchSampler):
-    """Draw `n` i.i.d. samples from ``problem.prior``.
+    """Draw `n` i.i.d. samples from ``problem.target_distribution.prior``.
 
-    The default sampler everywhere a `BatchSampler` is needed.
-    `problem.prior` is always set (the `TargetDistribution` requires
-    it), so this sampler always works.
+    The default sampler everywhere a `BatchSampler` is needed. The
+    underlying `TargetDistribution` requires a non-None ``prior``, so
+    this sampler always works.
     """
 
     def sample(self, problem: Problem, key: Array, n: int) -> Array:
-        drawn = pp_sample(problem.prior, key=key, sample_shape=(n,))
+        drawn = pp_sample(problem.target_distribution.prior, key=key, sample_shape=(n,))
         return jnp.asarray(drawn)

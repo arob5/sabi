@@ -42,15 +42,16 @@ def make_acquisition_state(
 
     if problem is None:
         problem = gaussian_2d()
+    target = problem.target_distribution
     X = PriorSampler().sample(problem, jax.random.key(seed), n)
-    Y = problem.target_map(X)
-    emulator = TinyGPEmulator(input_shape=problem.input_shape).fit(X, Y)
+    Y = target.target_map(X)
+    emulator = TinyGPEmulator(input_shape=target.input_shape).fit(X, Y)
     surrogate_distribution = EmulatedDistribution(
         emulator=emulator,
-        log_density_form=problem.log_density_form,
-        support=problem.support,
-        input_shape=problem.input_shape,
-        prior=problem.prior,
+        log_density_form=target.log_density_form,
+        support=target.support,
+        input_shape=target.input_shape,
+        prior=target.prior,
     )
     return AcquisitionState(
         problem=problem,

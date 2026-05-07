@@ -199,7 +199,8 @@ def test_terminal_state_default_raise_path_for_nonconverging_subclass():
 def test_problem_target_distribution_round_trips_via_no_tempering():
     """Constructing an intermediate via NoTempering on a Problem's
     target_distribution should produce a distribution whose log-density
-    matches `Problem.log_posterior` at the same input."""
+    matches the underlying ``target_distribution._unnormalized_log_prob``
+    at the same input."""
     target = TargetDistribution(
         target_single=lambda x: -0.5 * jnp.sum(x * x),
         name="quad_problem_target",
@@ -214,5 +215,5 @@ def test_problem_target_distribution_round_trips_via_no_tempering():
     )
     x = jnp.asarray([0.4, -0.2])
     assert float(intermediate._unnormalized_log_prob(x)) == pytest.approx(
-        float(problem.log_posterior(x)), abs=1e-6
+        float(problem.target_distribution._unnormalized_log_prob(x)), abs=1e-6
     )

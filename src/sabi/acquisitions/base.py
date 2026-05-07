@@ -125,8 +125,8 @@ class AcquisitionState:
     Two `Y` arrays are exposed:
 
     - ``Y_raw``: the un-transformed evaluations of
-      ``problem.target_map``. Always present, regardless of any
-      tempering scheme.
+      ``problem.target_distribution.target_map``. Always present,
+      regardless of any tempering scheme.
     - ``Y_train``: the values the round's emulator was actually trained
       on. Under no tempering this equals ``Y_raw``. Under tempering
       schemes (e.g., `LikelihoodTemperingViaTarget`) this may be a
@@ -146,15 +146,18 @@ class AcquisitionState:
     ``surrogate_distribution`` rather than introspect the scalar state.
 
     Attributes:
-        problem: the inference problem (provides `prior`, `support`,
-            `input_shape`, etc.).
-        surrogate_distribution: round's surrogate-posterior random measure
-            built at the acquisition's target tempering state (see
+        problem: the inference problem; reach through
+            `problem.target_distribution` for `prior`, `support`,
+            `input_shape`, etc.
+        surrogate_distribution: round's surrogate random measure built
+            at the acquisition's target tempering state (see
             `AcquisitionTarget`). Always set;
             ``surrogate_distribution.emulator`` may be ``None`` for the
             weighted-empirical baseline.
-        X: design inputs, shape `(n,) + problem.input_shape`.
-        Y_raw: raw target evaluations, shape `(n,) + problem.output_shape`.
+        X: design inputs, shape
+            `(n,) + problem.target_distribution.input_shape`.
+        Y_raw: raw target evaluations, shape
+            `(n,) + problem.target_distribution.output_shape`.
         Y_train: emulator-training targets at the acquisition's target
             tempering state, same shape as Y_raw. Consistent with the
             SP's emulator. Equal to Y_raw when no target-side tempering
@@ -178,7 +181,7 @@ class Acquisition(ABC):
         q: int,
         key: Array,
     ) -> Array:
-        """Return `(q,) + problem.input_shape` parameter locations to evaluate next."""
+        """Return `(q,) + problem.target_distribution.input_shape` parameter locations to evaluate next."""
 
 
 class PointwiseScoredAcquisition(Acquisition, ABC):
@@ -186,7 +189,7 @@ class PointwiseScoredAcquisition(Acquisition, ABC):
 
     **Scoring contract.** Subclasses implement `_score_single(x, state)`,
     which returns a scalar where **higher is more desirable to evaluate
-    next**. `x` has shape `state.problem.input_shape` (a single point).
+    next**. `x` has shape `state.problem.target_distribution.input_shape` (a single point).
     The default `score(X, state)` implementation `jax.vmap`s
     `_score_single` over the leading axis of `X`; override `score`
     directly when a true batched implementation is more efficient (e.g.,
@@ -217,7 +220,7 @@ class PointwiseScoredAcquisition(Acquisition, ABC):
     optimizer: PointwiseOptimizer
 
     def _score_single(self, x: Array, state: AcquisitionState) -> Array:
-        """Score at a single point of shape `state.problem.input_shape`.
+        """Score at a single point of shape `state.problem.target_distribution.input_shape`.
         Returns scalar. Higher is more desirable.
 
         Subclasses override this to get a vmapped `score` for free, OR

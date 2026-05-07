@@ -243,7 +243,7 @@ def test_default_acquisition_target_preserves_untempered_metrics():
         q=1,
     )  # acquisition_target defaults to CURRENT
     result = run(problem, alg, jax.random.key(0))
-    assert result.X.shape == (10,) + problem.input_shape
+    assert result.X.shape == (10,) + problem.target_distribution.input_shape
 
 
 # -------------------------------------------------------------------------

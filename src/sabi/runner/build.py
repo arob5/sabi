@@ -202,7 +202,7 @@ def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
     where downstream components need it (e.g., the emulator factory)."""
     return Algorithm(
         emulator_factory=_build_emulator_factory(
-            cfg.emulator, input_shape=problem.input_shape
+            cfg.emulator, input_shape=problem.target_distribution.input_shape
         ),
         acquisition=_build_acquisition(cfg.acquisition),
         surrogate_distribution_factory=_build_surrogate_distribution_factory(

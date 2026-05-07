@@ -317,7 +317,7 @@ def _run_initial_round(
     both the loop's `emulator_state` and `tempering_states[0]`.
     """
     X = algorithm.initial_sampler.sample(problem, key_init, algorithm.n_initial)
-    Y_raw = problem.target_map(X)
+    Y_raw = target.target_map(X)
 
     state_0, _ = algorithm.schedule.at(0)
     target_0 = algorithm.tempering_scheme.intermediate_target(target, state_0)
@@ -539,7 +539,7 @@ def _run_acquisition(
         Y_train=Y_train_for_acq,
     )
     x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key)
-    y_new_raw = problem.target_map(x_new)
+    y_new_raw = problem.target_distribution.target_map(x_new)
     return x_new, y_new_raw
 
 
@@ -858,14 +858,15 @@ def _build_surrogate_distribution(
     problem: Problem,
 ) -> SurrogateDistribution:
     """Adapter: extract the math primitives from `Problem` and call the factory."""
+    target = problem.target_distribution
     return factory(
         emulator=emulator,
         X=X,
         Y=Y,
         log_density_form=log_density_form,
-        support=problem.support,
-        input_shape=problem.input_shape,
-        prior=problem.prior,
+        support=target.support,
+        input_shape=target.input_shape,
+        prior=target.prior,
         problem_name=problem.name,
     )
 

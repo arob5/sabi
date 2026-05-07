@@ -35,8 +35,8 @@ def test_build_problem_returns_problem():
     problem = build_problem(_cfg().problem)
     assert isinstance(problem, Problem)
     assert problem.name == "gaussian"
-    assert problem.input_shape == (2,)
-    assert problem.output_shape == ()
+    assert problem.target_distribution.input_shape == (2,)
+    assert problem.target_distribution.output_shape == ()
 
 
 def test_build_algorithm_wires_components():

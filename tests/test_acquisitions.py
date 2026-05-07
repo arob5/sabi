@@ -20,11 +20,12 @@ from tests.conftest import make_acquisition_state
 
 def test_prior_sampling_acquisition_shape_and_bounds():
     problem = gaussian_2d()
+    target = problem.target_distribution
     state = make_acquisition_state(problem=problem)
     batch = PriorSampling().select_batch(state, q=4, key=jax.random.key(7))
-    assert batch.shape == (4,) + problem.input_shape
+    assert batch.shape == (4,) + target.input_shape
     # support is interval(low, high) per element; check membership
-    assert jnp.all(jnp.asarray(problem.support.check(batch)))
+    assert jnp.all(jnp.asarray(target.support.check(batch)))
 
 
 def test_ei_acquisition_shape():
@@ -33,7 +34,7 @@ def test_ei_acquisition_shape():
     batch = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=512)).select_batch(
         state, q=3, key=jax.random.key(11)
     )
-    assert batch.shape == (3,) + problem.input_shape
+    assert batch.shape == (3,) + problem.target_distribution.input_shape
 
 
 def test_ei_picks_points_with_higher_emulator_mean_than_random():
@@ -58,6 +59,7 @@ def test_ei_picks_points_with_higher_emulator_mean_than_random():
 
 def test_ei_average_best_beats_random_average_best_across_seeds():
     problem = gaussian_2d()
+    target_map = problem.target_distribution.target_map
     state = make_acquisition_state(problem=problem, n=60)
 
     ei_bests = []
@@ -67,8 +69,8 @@ def test_ei_average_best_beats_random_average_best_across_seeds():
             state, q=8, key=jax.random.key(100 + seed)
         )
         rand_batch = PriorSampling().select_batch(state, q=8, key=jax.random.key(200 + seed))
-        ei_bests.append(float(jnp.max(problem.target_map(ei_batch))))
-        rand_bests.append(float(jnp.max(problem.target_map(rand_batch))))
+        ei_bests.append(float(jnp.max(target_map(ei_batch))))
+        rand_bests.append(float(jnp.max(target_map(rand_batch))))
     assert sum(ei_bests) / len(ei_bests) > sum(rand_bests) / len(rand_bests)
 
 
@@ -107,16 +109,17 @@ def test_ei_collapses_to_zero_at_zero_variance():
     [src/sabi/acquisitions/ei.py:14]. Uses a stub emulator since the
     real GP's jitter floor keeps σ orders of magnitude above 1e-30."""
     problem = gaussian_2d()
+    target = problem.target_distribution
     # Train Y_train so `best = max(Y_train)` is a finite scalar.
     X = PriorSampler().sample(problem, jax.random.key(0), 4)
-    Y = problem.target_map(X)
-    emulator = _ConstantEmulator(loc=0.0, scale=0.0, input_shape=problem.input_shape)
+    Y = target.target_map(X)
+    emulator = _ConstantEmulator(loc=0.0, scale=0.0, input_shape=target.input_shape)
     surrogate_distribution = EmulatedDistribution(
         emulator=emulator,
-        log_density_form=problem.log_density_form,
-        support=problem.support,
-        input_shape=problem.input_shape,
-        prior=problem.prior,
+        log_density_form=target.log_density_form,
+        support=target.support,
+        input_shape=target.input_shape,
+        prior=target.prior,
     )
     state = AcquisitionState(
         problem=problem,
@@ -125,7 +128,7 @@ def test_ei_collapses_to_zero_at_zero_variance():
         Y_raw=Y,
         Y_train=Y,
     )
-    x = jnp.zeros(problem.input_shape)
+    x = jnp.zeros(target.input_shape)
     score = float(ExpectedImprovement()._score_single(x, state))
     assert score == pytest.approx(0.0, abs=1e-12)
 
@@ -136,13 +139,14 @@ def test_ei_raises_on_degenerate_surrogate_distribution():
     (the no-emulator baseline) should raise from the isinstance narrow
     in `_score_single`, with a message naming `EmulatedDistribution`."""
     problem = gaussian_2d()
+    target = problem.target_distribution
     X = PriorSampler().sample(problem, jax.random.key(0), 8)
-    Y = problem.target_map(X)
+    Y = target.target_map(X)
     surrogate_distribution = WeightedEmpiricalRandomMeasure(
         X=X,
         log_weights=Y,
-        support=problem.support,
-        input_shape=problem.input_shape,
+        support=target.support,
+        input_shape=target.input_shape,
     )
     state = AcquisitionState(
         problem=problem,
