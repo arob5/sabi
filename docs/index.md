@@ -13,6 +13,7 @@ into [ProbPipe](https://github.com/arob5/prob-pipe).
 - **Concepts** — the design notes that have shaped the library:
   {doc}`design <design>`, {doc}`notation <notation>`,
   {doc}`emulators <emulators>`, {doc}`tempering <tempering>`,
+  {doc}`link functions <link_functions>`,
   {doc}`scheduled metrics <scheduled_metrics>`.
 - **API reference** — auto-generated from the `sabi.*` source tree; rendered
   docstrings include the math.
@@ -40,6 +41,7 @@ design
 notation
 emulators
 tempering
+link_functions
 scheduled_metrics
 v1_plan
 probpipe_random_measure_proposal
