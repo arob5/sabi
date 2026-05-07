@@ -8,12 +8,13 @@ Sibling of `EmulatedDistribution` under `SurrogateDistribution` (per
 ``docs/design.md §4.5``): both extend the abstract base
 `SurrogateDistribution`, neither inherits from the other. The design
 points carry the posterior structure directly — there is no underlying
-emulator and no carried log-density form (the form's role ends at
+emulator and no carried decomposition (the decomposition's role ends at
 construction, when `log_weights` is computed from `(X, Y)`).
 
 In sabi this serves as the no-emulator baseline for the loop. The loop's
-factory applies a `LogDensityForm` to `(X, Y)` to compute `log_weights`,
-then hands the resulting `(X, log_weights)` to this class.
+factory applies a :class:`sabi.density_decomposition.DensityDecomposition`
+to `(X, Y)` to compute `log_weights`, then hands the resulting
+`(X, log_weights)` to this class.
 
 Tracked for promotion to ProbPipe — see `docs/probpipe_issues.md`:
 "`WeightedEmpiricalRandomMeasure` as a ProbPipe primitive".
@@ -52,7 +53,7 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
         X: design points, shape `(n,) + input_shape`.
         log_weights: shape `(n,)` — unnormalized log-weights at each
             design point. Typically the deterministic log-posterior at
-            `X[i]` under the loop's current `LogDensityForm`.
+            `X[i]` under the loop's current `DensityDecomposition`.
         support: `Constraint` over the inner samples (parameter space).
         input_shape: shape of one parameter-space point.
         name: optional ProbPipe distribution name.
@@ -91,7 +92,7 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
         self._support = support
         self._input_shape = tuple(input_shape)
         # Direct super-init: the abstract `SurrogateDistribution` takes
-        # only `name`. No bogus `emulator=None, log_density_form=None`
+        # only `name`. No bogus `emulator=None, decomposition=None`
         # kwargs (those didn't belong on the base in the first place).
         super().__init__(name=name or type(self).__name__)
 

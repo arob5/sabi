@@ -11,7 +11,7 @@ empirical — there's nothing random to estimate.
 Currently shipped:
 
 - `expected_target(surrogate_distribution)` — plug the surrogate's
-  predictive mean into the log-density form. The expectation of the
+  predictive mean into the decomposition. The expectation of the
   target map under the surrogate distribution. Biased in the
   emulator-pushforward case (the plug-in is not the same as the
   unbiased expected posterior `mean(rm)`).
@@ -38,13 +38,13 @@ from probpipe.core._distribution_base import Distribution
 from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
+from sabi.density_decomposition import DensityDecomposition
+from sabi.emulators.base import Emulator
 from sabi.surrogate.surrogate_distribution import (
     EmulatedDistribution,
     SurrogateDistribution,
 )
 from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
-from sabi.problems.forms import LogDensityForm
-from sabi.emulators.base import Emulator
 
 
 def expected_target(
@@ -55,7 +55,7 @@ def expected_target(
     name: str | None = None,
 ) -> Distribution:
     """Return the deterministic posterior obtained by plugging the
-    surrogate's predictive mean into the log-density form.
+    surrogate's predictive mean into the decomposition.
 
     Type dispatch on the runtime type of ``surrogate_distribution``:
 
@@ -64,8 +64,8 @@ def expected_target(
       / ``sampler_kwargs`` are ignored.
     - :class:`EmulatedDistribution`: returns an
       ``_ExpectedTargetDistribution`` whose ``_unnormalized_log_prob``
-      is the form composed with the emulator's predictive mean.
-      Sampling delegates to ProbPipe ``condition_on`` (auto-dispatched
+      is the decomposition composed with the emulator's predictive
+      mean. Sampling delegates to ProbPipe ``condition_on`` (auto-dispatched
       MCMC). ``sampler`` selects a specific method (e.g.
       ``"tfp_nuts"``); ``sampler_kwargs`` forwards arguments like
       ``num_results``, ``num_warmup``.
@@ -75,8 +75,7 @@ def expected_target(
     if isinstance(surrogate_distribution, EmulatedDistribution):
         return _ExpectedTargetDistribution(
             emulator=surrogate_distribution.emulator,
-            log_density_form=surrogate_distribution.log_density_form,
-            prior=surrogate_distribution.prior,
+            decomposition=surrogate_distribution.decomposition,
             input_shape=surrogate_distribution.inner_event_shape,
             support=surrogate_distribution.inner_support,
             sampler=sampler,
@@ -91,13 +90,13 @@ def expected_target(
 
 class _ExpectedTargetDistribution(NumericRecordDistribution):
     """The deterministic posterior obtained by plugging the emulator's
-    predictive mean into the log-density form.
+    predictive mean into the decomposition.
 
-    `_unnormalized_log_prob(x) = log_density_form(x, emulator_mean(x), prior=prior)`.
+    ``_unnormalized_log_prob(x) = decomposition(x, emulator_mean(x))``.
 
-    Sampling delegates to ProbPipe `condition_on(self)`; the registry
-    auto-selects an MCMC method (typically `tfp_nuts`) since this
-    distribution satisfies `SupportsUnnormalizedLogProb`.
+    Sampling delegates to ProbPipe ``condition_on(self)``; the registry
+    auto-selects an MCMC method (typically ``tfp_nuts``) since this
+    distribution satisfies ``SupportsUnnormalizedLogProb``.
     """
 
     _sampling_cost: ClassVar[str] = "high"
@@ -106,8 +105,7 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
     def __init__(
         self,
         emulator: Emulator,
-        log_density_form: LogDensityForm,
-        prior: Distribution | None,
+        decomposition: DensityDecomposition,
         *,
         input_shape: tuple[int, ...],
         support: Constraint,
@@ -116,8 +114,7 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         name: str | None = None,
     ):
         self._emulator = emulator
-        self._form = log_density_form
-        self._prior = prior
+        self._decomposition = decomposition
         self._input_shape = tuple(input_shape)
         self._support_value = support
         self._sampler = sampler
@@ -150,8 +147,7 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
                 )
             pred = self._emulator(x[None])
             pred_mean = jnp.asarray(mean(pred))
-            # Form's per-point hook; avoids vmap overhead on a single x.
-            return self._form._call_single(x, pred_mean[0], prior=self._prior)
+            return self._decomposition(x, pred_mean[0])
         if x.ndim == ndim_single + 1:
             if x.shape[1:] != self._input_shape:
                 raise ValueError(
@@ -160,7 +156,9 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
                 )
             pred = self._emulator(x)
             pred_mean = jnp.asarray(mean(pred))
-            return self._form(x, pred_mean, prior=self._prior)
+            # decomposition.__call__ broadcasts via Map semantics; vmap
+            # to be explicit over the leading n axis.
+            return jax.vmap(self._decomposition)(x, pred_mean)
         raise ValueError(
             f"_unnormalized_log_prob: expected ndim {ndim_single} (single "
             f"point) or {ndim_single + 1} (batched), got ndim={x.ndim} "
@@ -184,9 +182,6 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         kwargs = dict(self._sampler_kwargs)
         if self._sampler is not None:
             kwargs["method"] = self._sampler
-        # condition_on accepts a `random_seed` int; derive deterministically
-        # from the JAX key so callers see reproducible draws. The
-        # ``.item()`` is what blocks tracing — see method docstring.
         kwargs.setdefault(
             "random_seed",
             int(jax.random.randint(key, (), 0, 2**31 - 1).item()),

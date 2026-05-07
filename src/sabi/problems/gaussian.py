@@ -7,16 +7,9 @@ Target is :math:`\mathcal{N}(\mu, \Sigma)` on :math:`\mathbb{R}^d`:
     \log p(x) = -\tfrac{1}{2} (x - \mu)^\top \Sigma^{-1} (x - \mu)
                 - \tfrac{1}{2} \log\!\big((2\pi)^d |\Sigma|\big).
 
-``target_map`` routes through the ProbPipe ``MultivariateNormal``'s
-``log_prob``, so the analytic posterior IS the ``reference_distribution``
-(the same ProbPipe object) — exercising the abstractions end-to-end.
-
-Shapes: ``input_shape=(d,)``, ``output_shape=()``. See
-``docs/notation.md`` for sabi's shape conventions.
-
-The ``prior`` field doubles as the design distribution for initial-design
-/ random acquisition: ``Uniform`` over a symmetric box
-:math:`[\mu - r, \mu + r]^d` for ``bounds_radius`` :math:`r`.
+Shapes: ``input_shape=(d,)``. The factory returns a `Problem` with an
+analytical ``_unnormalized_log_prob`` on the ``target_distribution``;
+the algorithm-side decomposition is constructed by the user.
 """
 
 from __future__ import annotations
@@ -30,7 +23,6 @@ from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
-from sabi.problems.forms import Identity
 from sabi.target_distribution import TargetDistribution
 
 
@@ -48,13 +40,12 @@ def gaussian(
         cov: posterior covariance (`d × d`, must be PD); defaults to
             :math:`I_d`.
         bounds_radius: symmetric per-dim half-width
-            (:math:`|x_i - \\mu_i| \\le r`) for the design distribution
-            and the support metadata.
+            (:math:`|x_i - \\mu_i| \\le r`) for the target support.
 
     Returns:
-        `Problem` with ``input_shape=(d,)``, ``Identity`` log-density
-        form, and the analytic `MultivariateNormal` itself as the
-        reference distribution.
+        `Problem` with ``input_shape=(d,)``, an analytical
+        ``_unnormalized_log_prob``, and the analytic
+        `MultivariateNormal` itself as the reference distribution.
     """
     if d < 1:
         raise ValueError(f"d must be ≥ 1, got {d}.")
@@ -83,17 +74,15 @@ def gaussian(
 
     lower = mu - bounds_radius
     upper = mu + bounds_radius
-    prior = independent_uniform(
-        low=lower, high=upper, name=f"gaussian_d{d}_design_{id(mu)}"
-    )
+    support = independent_uniform(
+        low=lower, high=upper, name=f"gaussian_d{d}_support_{id(mu)}"
+    ).support
 
     target = TargetDistribution(
-        target_single=target_single,
         name=f"gaussian_d{d}_target_{id(mu)}",
         input_shape=(d,),
-        output_shape=(),
-        log_density_form=Identity(),
-        prior=prior,
+        support=support,
+        unnormalized_log_prob=target_single,
     )
     return Problem(
         target_distribution=target,

@@ -2,34 +2,34 @@ r"""Pointwise optimizers for `PointwiseScoredAcquisition`.
 
 Three concrete optimizers ship today:
 
-- ``CandidateSetOptimizer`` — random candidates from the design
-  distribution, scored via ``acq.score(X, state)``, top-q returned.
-  Cheap and the default.
-- ``ContinuousMultiStartOptimizer`` — random candidates, score-filter
-  to top-`n_starts`, BFGS each in unconstrained reparameterization
-  space (TFP bijector dispatched on the support `Constraint`), return
-  top-q distinct local maxima. Gradient-based; substantially more
-  accurate on smooth scores when the emulator is well-conditioned.
-- ``GreedyMultiPointOptimizer`` — for `q > 1` with in-batch diversity.
-  Wraps an inner optimizer (any of the above with `q=1`); after each
-  pick, hallucinates an observation at the pending point via a
-  pluggable ``FantasyImputer`` and refits the emulator before the
-  next pick.
+- ``CandidateSetOptimizer`` — random candidates from
+  ``state.algorithm.initial_design_distribution`` (or the optimizer's
+  ``candidate_distribution`` override), scored via
+  ``acq.score(X, state)``, top-q returned. Cheap and the default.
+- ``ContinuousMultiStartOptimizer`` — random seeds, score-filter to
+  top-`n_starts`, BFGS each in unconstrained reparameterization space
+  (TFP bijector dispatched on ``state.x_support``), return top-q
+  distinct local maxima. Gradient-based.
+- ``GreedyMultiPointOptimizer`` — for ``q > 1`` with in-batch
+  diversity via fantasy imputation.
+
+Per-role distribution fields after the ``DensityDecomposition`` split
+(issue #65):
+
+- ``CandidateSetOptimizer.candidate_distribution`` — ``Distribution``
+  whose samples seed the candidate set. Defaults to
+  ``state.algorithm.initial_design_distribution`` when ``None``.
+- ``ContinuousMultiStartOptimizer.seed_distribution`` — ``Distribution``
+  whose samples seed BFGS. Same default.
 
 For non-trivial supports (anything other than ``interval(low, high)``),
 ``ContinuousMultiStartOptimizer`` raises with a pointer to the
-``Constraint`` → bijector gap in ``docs/probpipe_issues.md``. All
-shipped benchmarks have box supports.
-
-Multi-start currently uses a Python loop over BFGS solves
-(``# TODO(vmap-multistart)``). JAX-vmap of ``optimistix.minimise``
-should work in principle and is the natural future optimization.
+``Constraint`` → bijector gap in ``docs/probpipe_issues.md``.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
@@ -37,12 +37,13 @@ import jax
 import jax.numpy as jnp
 import optimistix as optx
 from jax import Array
+from probpipe import sample as pp_sample
+from probpipe.core._distribution_base import Distribution
 from probpipe.core.constraints import Constraint, _Interval
 from tensorflow_probability.substrates.jax.bijectors import Bijector, Sigmoid
 
 from sabi.acquisitions.base import AcquisitionState
 from sabi.acquisitions.fantasize import FantasyImputer, KrigingBeliever
-from sabi.sampling import BatchSampler, PriorSampler
 from sabi.surrogate.surrogate_distribution import EmulatedDistribution
 
 if TYPE_CHECKING:
@@ -68,6 +69,28 @@ class PointwiseOptimizer(ABC):
         """Return ``(q,) + state.problem.target_distribution.input_shape``."""
 
 
+def _resolve_optimizer_distribution(
+    explicit: Distribution | None,
+    state: AcquisitionState,
+    *,
+    field_name: str,
+    optimizer_class: str,
+) -> Distribution:
+    """Resolve a per-optimizer distribution field, falling back to the algorithm's default."""
+    if explicit is not None:
+        return explicit
+    dist = state.algorithm.initial_design_distribution
+    if dist is None:
+        raise ValueError(
+            f"{optimizer_class}: `{field_name}` is None and "
+            "`state.algorithm.initial_design_distribution` is not set. "
+            f"Pass `{optimizer_class}({field_name}=...)` explicitly, "
+            "or set `Algorithm.initial_design_distribution` "
+            "(or `x_support`)."
+        )
+    return dist
+
+
 # ---------------------------------------------------------------------------
 # Candidate-set: random candidates → top-q. The default optimizer.
 # ---------------------------------------------------------------------------
@@ -75,23 +98,20 @@ class PointwiseOptimizer(ABC):
 
 @dataclass(frozen=True)
 class CandidateSetOptimizer(PointwiseOptimizer):
-    r"""Random candidates from a `BatchSampler`, score each, return top-q.
+    r"""Random candidates from ``candidate_distribution``, score each, return top-q.
 
     Cheap; gradient-free. Quality is governed by ``n_candidates`` and
-    the sampler's coverage of the high-score regions. Concretely: draw
-    :math:`X \sim \text{sampler}^{n_{\text{candidates}}}`, evaluate
-    :math:`s = \text{acq.score}(X, \text{state})`, return the rows of
-    :math:`X` corresponding to the top-q entries of :math:`s`.
+    the candidate distribution's coverage of the high-score regions.
 
     Args:
         n_candidates: number of candidates scored each call.
-        candidate_sampler: `BatchSampler` for the candidate set. Default
-            is `PriorSampler` (samples from
-            ``problem.target_distribution.prior``).
+        candidate_distribution: ``Distribution`` for the candidate set.
+            Defaults to ``state.algorithm.initial_design_distribution``
+            at run time when ``None``.
     """
 
     n_candidates: int = 1024
-    candidate_sampler: BatchSampler = field(default_factory=PriorSampler)
+    candidate_distribution: Distribution | None = None
 
     def optimize(self, acq, state, q, key):
         if q > self.n_candidates:
@@ -101,8 +121,14 @@ class CandidateSetOptimizer(PointwiseOptimizer):
                 f"`n_candidates` (or decrease `q`)."
             )
         key_cand, _ = jax.random.split(key)
-        candidates = self.candidate_sampler.sample(
-            state.problem, key_cand, self.n_candidates
+        dist = _resolve_optimizer_distribution(
+            self.candidate_distribution,
+            state,
+            field_name="candidate_distribution",
+            optimizer_class=type(self).__name__,
+        )
+        candidates = jnp.asarray(
+            pp_sample(dist, key=key_cand, sample_shape=(self.n_candidates,))
         )
         scores = acq.score(candidates, state)
         top_idx = jnp.argsort(-scores)[:q]
@@ -118,27 +144,16 @@ class CandidateSetOptimizer(PointwiseOptimizer):
 class ContinuousMultiStartOptimizer(PointwiseOptimizer):
     r"""Multi-start BFGS in unconstrained reparameterization space.
 
-    Pipeline:
-
-    1. Sample ``n_seeding_candidates`` from ``seed_sampler``.
-    2. Score each via ``acq.score``; take top-``n_starts`` as BFGS init points.
-    3. Reparameterize each start to unconstrained space via the bijector
-       :math:`b: \mathbb{R}^d \to \text{support}` (sigmoid for
-       ``interval(low, high)`` supports).
-    4. Run optimistix BFGS minimizing :math:`-\text{acq.score}(b(u))` per
-       seed (Python loop; vmap is a future optimization).
-    5. Map optimized :math:`u^*` back to support space, re-score, return
-       top-q.
-
     Args:
         n_starts: number of BFGS seeds.
         n_seeding_candidates: candidates drawn before score-filtering to
             seeds. Must be :math:`\ge` ``n_starts``.
         bfgs_max_steps: max steps per BFGS solve.
         bfgs_rtol / bfgs_atol: convergence tolerances.
-        seed_sampler: `BatchSampler` for the seeding candidate set.
-            Default is `PriorSampler` (samples from
-            ``problem.target_distribution.prior``).
+        seed_distribution: ``Distribution`` for the seeding candidate
+            set. Defaults to
+            ``state.algorithm.initial_design_distribution`` at run time
+            when ``None``.
     """
 
     n_starts: int = 16
@@ -146,7 +161,7 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
     bfgs_max_steps: int = 50
     bfgs_rtol: float = 1e-5
     bfgs_atol: float = 1e-5
-    seed_sampler: BatchSampler = field(default_factory=PriorSampler)
+    seed_distribution: Distribution | None = None
 
     def optimize(self, acq, state, q, key):
         if q > self.n_starts:
@@ -160,12 +175,18 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
                 f"n_seeding_candidates ({self.n_seeding_candidates}) must be "
                 f">= n_starts ({self.n_starts})."
             )
-        bijector = _make_bijector(state.problem.target_distribution.support)
+        bijector = _make_bijector(state.x_support)
 
         # 1-2: seed selection
         key_seed, _ = jax.random.split(key)
-        seed_candidates = self.seed_sampler.sample(
-            state.problem, key_seed, self.n_seeding_candidates
+        dist = _resolve_optimizer_distribution(
+            self.seed_distribution,
+            state,
+            field_name="seed_distribution",
+            optimizer_class=type(self).__name__,
+        )
+        seed_candidates = jnp.asarray(
+            pp_sample(dist, key=key_seed, sample_shape=(self.n_seeding_candidates,))
         )
         seed_scores = acq.score(seed_candidates, state)
         top_seed_idx = jnp.argsort(-seed_scores)[: self.n_starts]
@@ -177,26 +198,11 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
         # 4: BFGS each start, minimizing -score in unconstrained space.
         def neg_score_unconstrained(u: Array, _args=None) -> Array:
             x = bijector.forward(u)
-            # Single-point evaluation routed through the public batched
-            # API; works whether the acquisition implements
-            # `_score_single` or overrides `score` directly.
             return -acq.score(x[None], state)[0]
 
         solver = optx.BFGS(rtol=self.bfgs_rtol, atol=self.bfgs_atol)
-        # TODO(vmap-multistart): replace this Python loop with
-        # `jax.vmap(optimistix.minimise, ...)` once we've validated it
-        # works with our solver settings.
         u_opt_list: list[Array] = []
         for u_init in u_starts:
-            # ``throw=False`` makes optimistix report convergence
-            # failures via ``sol.result`` rather than raising — so
-            # this ``except`` only triggers on genuine numeric blow-
-            # ups inside the solver / score function. Narrow to the
-            # known failure modes (Cholesky / linear-solve breakdown
-            # under ill-conditioned Hessians; NaN propagation under
-            # x64) so an unrelated bug — e.g. a future shape
-            # mismatch in the score function — surfaces as a real
-            # error rather than being silently swallowed.
             try:
                 sol = optx.minimise(
                     neg_score_unconstrained,
@@ -230,22 +236,6 @@ class ContinuousMultiStartOptimizer(PointwiseOptimizer):
 class GreedyMultiPointOptimizer(PointwiseOptimizer):
     r"""For ``q > 1``: iteratively pick one point at a time, hallucinating
     observations at each pick to drive in-batch diversity on the next.
-
-    At step :math:`i = 1, \dots, q`:
-
-    1. :math:`x_i = \text{inner.optimize}(\text{acq, } S_{i-1}, q=1)`,
-       where :math:`S_0` is the input state and :math:`S_{i}` is the
-       state with the previous picks added as fantasies.
-    2. :math:`y_{1:i} = \text{imputer.impute}(x_{1:i}, S_0)` —
-       imputation always uses the **original** state's data so the
-       imputer sees real observations.
-    3. :math:`S_i` = ``replace(S_0, X=X_0 ∪ x_{1:i}, Y=Y_0 ∪ y_{1:i},
-       emulator=S_0.emulator.fit(X_i, Y_i))``.
-
-    Args:
-        inner: per-point optimizer (e.g., ``CandidateSetOptimizer()``).
-        imputer: how to hallucinate ``y`` at pending points; default
-            ``KrigingBeliever``.
     """
 
     inner: PointwiseOptimizer
@@ -261,20 +251,10 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
             x_i = self.inner.optimize(acq, cur_state, 1, keys[i])[0]
             x_picks.append(x_i)
             if i < q - 1:
-                # Hallucinate y at all pending picks (use the *original*
-                # state so imputers see real Y_train values, not
-                # previous hallucinations).
                 x_pending = jnp.stack(x_picks)
                 y_pending = self.imputer.impute(x_pending, state)
                 new_X = jnp.concatenate([state.X, x_pending], axis=0)
-                # Imputer hallucinates training-scale values; extend
-                # Y_train. Y_raw is left as the original (we don't
-                # have raw evaluations at the hallucinated points; the
-                # emulator only consumes Y_train anyway).
                 new_Y_train = jnp.concatenate([state.Y_train, y_pending], axis=0)
-                # Refit the emulator on the augmented training design.
-                # Build a fresh `EmulatedDistribution` so downstream
-                # score calls see the new emulator.
                 current = state.surrogate_distribution
                 if not isinstance(current, EmulatedDistribution):
                     raise ValueError(
@@ -285,10 +265,9 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                 new_emulator = current.emulator.fit(new_X, new_Y_train)
                 new_surrogate_distribution = EmulatedDistribution(
                     emulator=new_emulator,
-                    log_density_form=current.log_density_form,
+                    decomposition=current.decomposition,
                     support=current.inner_support,
                     input_shape=current.inner_event_shape,
-                    prior=current.prior,
                     name=current.name,
                 )
                 cur_state = replace(
@@ -306,16 +285,7 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
 
 
 def _make_bijector(constraint: Constraint) -> Bijector:
-    """Return a TFP `Bijector` mapping unconstrained ℝ ↔ `constraint`'s support.
-
-    Currently supports only ``interval(low, high)`` constraints; the
-    dispatch here delegates to TFP's :class:`Sigmoid(low, high)`. For
-    other constraint types, raises ``NotImplementedError`` with a
-    pointer to the ``Constraint`` → bijector ProbPipe gap in
-    ``docs/probpipe_issues.md`` (the gap is the inverse Constraint →
-    Bijector mapping ProbPipe doesn't yet ship; the bijector itself
-    comes from TFP).
-    """
+    """Return a TFP `Bijector` mapping unconstrained ℝ ↔ `constraint`'s support."""
     if isinstance(constraint, _Interval):
         return Sigmoid(
             low=jnp.asarray(constraint.low),

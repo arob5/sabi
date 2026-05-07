@@ -15,9 +15,7 @@ Behavior:
 - Otherwise: run `generate_via_nuts(...)`, validate ArviZ diagnostics
   against thresholds, save artifact, return.
 
-The artifact root defaults to `<repo_root>/reference_posteriors/`. Tier-A
-artifacts are small (<1 MB) and committed to the repo. Tier-B (large /
-expensive) artifacts will use git-lfs in a future phase.
+The artifact root defaults to `<repo_root>/reference_posteriors/`.
 """
 
 from __future__ import annotations
@@ -28,10 +26,9 @@ from typing import Any
 
 from jax import Array
 from probpipe._weights import Weights
-from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
+from probpipe.core.constraints import Constraint
 
-from sabi.problems.forms import LogDensityForm
 from sabi.reference.io import (
     now_iso,
     read_metadata_json,
@@ -46,13 +43,10 @@ from sabi.reference.nuts import MCMCDiagnostics, generate_via_nuts
 _DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "reference_posteriors"
 
 
-# Quality thresholds enforced during regeneration. Tunable; current values
-# are conservative defaults. Loosen via `quality_thresholds=...` if needed
-# (e.g., for stretch benchmarks like Neal's funnel where some tail-ESS
-# values can be marginal).
+# Quality thresholds enforced during regeneration.
 DEFAULT_MAX_RHAT = 1.05
 DEFAULT_MIN_ESS = 400.0
-DEFAULT_MAX_DIVERGENCE_RATE = 0.01  # fraction of post-warmup samples
+DEFAULT_MAX_DIVERGENCE_RATE = 0.01
 
 
 def _artifact_path(
@@ -61,7 +55,7 @@ def _artifact_path(
     cache_key: str,
     sampler_tag: str,
 ) -> tuple[Path, Path]:
-    """Return (parquet_path, json_path) for a given key. Subdirectory per problem."""
+    """Return (parquet_path, json_path) for a given key."""
     base = cache_dir / problem_name / f"{cache_key}_{sampler_tag}"
     return base.with_suffix(".parquet"), base.with_suffix(".json")
 
@@ -74,9 +68,8 @@ def load_or_generate_reference_samples(
     *,
     problem_name: str,
     cache_key: str,
-    target_map: Callable[[Array], Array],
-    log_density_form: LogDensityForm,
-    prior: Distribution,
+    target_log_prob: Callable[[Array], Array],
+    support: Constraint,
     input_shape: tuple[int, ...],
     problem_params: dict[str, Any] | None = None,
     num_results: int = 1000,
@@ -91,28 +84,25 @@ def load_or_generate_reference_samples(
     """Load reference samples from cache or generate them via NUTS.
 
     Args:
-        problem_name: subdirectory under `cache_dir` (e.g., "neals_funnel").
-        cache_key: human-readable identifier of the problem variant
-            (e.g., "d2_sv3.0"). Different cache_keys → different artifacts.
-        target_map, log_density_form, prior, input_shape:
-            forwarded to `generate_via_nuts`. Support is derived from
-            ``prior.support``.
-        problem_params: optional dict embedded verbatim in metadata
-            (e.g., `{"d": 2, "sigma_v": 3.0}`).
+        problem_name: subdirectory under ``cache_dir``.
+        cache_key: human-readable identifier of the problem variant.
+        target_log_prob: single-point analytical log-density callable
+            ``input_shape -> ()``. Wrapped in a ``TargetDistribution``
+            for ``condition_on(target)``.
+        support: ``Constraint`` over the parameter space.
+        input_shape: shape of one parameter-space point.
+        problem_params: optional dict embedded verbatim in metadata.
         num_results, num_warmup, num_chains, random_seed: NUTS
-            configuration. Must match across saves and loads (sampler tag
-            is hashed into the filename).
-        cache_dir: artifact root; defaults to repo's `reference_posteriors/`.
+            configuration. Must match across saves and loads.
+        cache_dir: artifact root.
         regenerate: if True, force NUTS regeneration even when a cached
             artifact exists.
-        quality_thresholds: override `{max_rhat, min_ess, max_divergence_rate}`.
+        quality_thresholds: override
+            ``{max_rhat, min_ess, max_divergence_rate}``.
 
     Returns:
-        `NumericEmpiricalDistribution` over the cached / generated samples.
-
-    Raises:
-        ValueError: if regeneration produced samples that fail the quality
-            thresholds.
+        ``NumericEmpiricalDistribution`` over the cached / generated
+        samples.
     """
     cache_dir = cache_dir or _DEFAULT_CACHE_DIR
     sampler_tag = _sampler_tag(num_results, num_warmup, num_chains, random_seed)
@@ -124,15 +114,13 @@ def load_or_generate_reference_samples(
         samples = read_samples_parquet(parquet_path)
         return NumericEmpiricalDistribution(
             samples=samples,
-            weights=Weights(n=samples.shape[0]),  # uniform weights
+            weights=Weights(n=samples.shape[0]),
             name=name or f"{problem_name}_reference",
         )
 
-    # Regenerate via NUTS.
     samples, diagnostics = generate_via_nuts(
-        target_map=target_map,
-        log_density_form=log_density_form,
-        prior=prior,
+        target_log_prob=target_log_prob,
+        support=support,
         input_shape=input_shape,
         num_results=num_results,
         num_warmup=num_warmup,

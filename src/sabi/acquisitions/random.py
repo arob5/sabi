@@ -1,10 +1,10 @@
 """Sampling-based acquisitions.
 
-`PriorSampling` draws the next batch directly from a `BatchSampler`
-(default `PriorSampler`, which samples from
-``problem.target_distribution.prior``). It does not have a score; it
-is not a `PointwiseScoredAcquisition`. Useful as a baseline and as one
-component of a future `MixtureSampling` acquisition.
+`DistributionSampling` draws the next batch directly from a ``Distribution``
+chosen per call by ``distribution_from_state`` (default: the
+algorithm's ``initial_design_distribution``). It does not have a score;
+it is not a `PointwiseScoredAcquisition`. Useful as a baseline and as
+one component of a future `MixtureSampling` acquisition.
 
 `PosteriorThompsonSampling` and `MixtureSampling` are tracked as
 follow-ups.
@@ -12,25 +12,49 @@ follow-ups.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import jax.numpy as jnp
 from jax import Array
+from probpipe import sample as pp_sample
+from probpipe.core._distribution_base import Distribution
 
 from sabi.acquisitions.base import Acquisition, AcquisitionState
-from sabi.sampling import BatchSampler, PriorSampler
+
+
+def _initial_design_from_state(state: AcquisitionState) -> Distribution:
+    """Default ``distribution_from_state``: read the algorithm's initial design."""
+    dist = state.algorithm.initial_design_distribution
+    if dist is None:
+        raise ValueError(
+            "DistributionSampling: state.algorithm.initial_design_distribution "
+            "is None. Pass an explicit `distribution_from_state=...` callable "
+            "or set `Algorithm.initial_design_distribution` (or `x_support`)."
+        )
+    return dist
 
 
 @dataclass(frozen=True)
-class PriorSampling(Acquisition):
-    """Draw `q` samples from a `BatchSampler` (default ``PriorSampler``).
+class DistributionSampling(Acquisition):
+    """Sample ``q`` points from a ``Distribution`` resolved per call.
 
-    With the default sampler this returns
-    ``X ~ problem.target_distribution.prior^q`` of shape
-    ``(q,) + problem.target_distribution.input_shape``. Swap ``sampler``
-    to use Sobol, LHS, or any other `BatchSampler` strategy.
+    ``distribution_from_state`` is called per round and returns the
+    ``Distribution`` to sample from — typically the algorithm's
+    ``initial_design_distribution``, the current surrogate, or a
+    mixture. For complex strategies (clustering, Stein thinning, ...)
+    implement ``Acquisition`` directly.
+
+    Args:
+        distribution_from_state: callable mapping ``AcquisitionState`` to
+            the ``Distribution`` to sample from. Default reads
+            ``state.algorithm.initial_design_distribution``.
     """
 
-    sampler: BatchSampler = field(default_factory=PriorSampler)
+    distribution_from_state: Callable[[AcquisitionState], Distribution] = field(
+        default=_initial_design_from_state,
+    )
 
     def select_batch(self, state: AcquisitionState, q: int, key: Array) -> Array:
-        return self.sampler.sample(state.problem, key, q)
+        dist = self.distribution_from_state(state)
+        return jnp.asarray(pp_sample(dist, key=key, sample_shape=(q,)))

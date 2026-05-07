@@ -77,7 +77,7 @@ class ExpectedImprovement(PointwiseScoredAcquisition):
                 f"`EmulatedDistribution`; got "
                 f"{type(surrogate_distribution).__name__} (the no-emulator "
                 f"baseline). Switch to a real emulator or use a "
-                f"sampling-style acquisition like PriorSampling."
+                f"sampling-style acquisition like DistributionSampling."
             )
         # emulator.__call__ expects a leading batch axis.
         pred = surrogate_distribution.emulator(x[None])
