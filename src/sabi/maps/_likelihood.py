@@ -11,7 +11,7 @@ Both fall to the MC pushforward fallback (no closed-form registration).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import jax.numpy as jnp
 from jax import Array
@@ -37,6 +37,9 @@ class GaussianLogLik(Map):
 
         \log\mathcal{N}(o \mid z, C) = -\tfrac{1}{2}(o - z)^\top C^{-1}
         (o - z) - \tfrac{1}{2}\log\lvert 2\pi C\rvert.
+
+    ``cov`` must be symmetric positive-definite; the formula assumes
+    a real, positive log-determinant.
     """
 
     obs: Array
@@ -56,13 +59,11 @@ class GaussianLogLik(Map):
 
     def __call__(self, z: Array) -> Array:
         diff = self.obs - z
-        sign, logdet = jnp.linalg.slogdet(self.cov)
-        # sign is +1 for SPD covariance; carrying it as a multiplicative
-        # factor preserves correct behavior if a non-SPD `cov` slips through.
+        _, logdet = jnp.linalg.slogdet(self.cov)
         d = self.obs.shape[0]
         solve = jnp.linalg.solve(self.cov, diff)
         quad = jnp.einsum("...i,...i->...", diff, solve)
-        return -0.5 * quad - 0.5 * (sign * logdet + d * jnp.log(2.0 * jnp.pi))
+        return -0.5 * quad - 0.5 * (logdet + d * jnp.log(2.0 * jnp.pi))
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ class LogProb(Map):
     ``dist == modeling_prior``.
     """
 
-    dist: Distribution = field()
+    dist: Distribution
     event_shape_out: tuple[int, ...] = ()
 
     @property
@@ -82,4 +83,4 @@ class LogProb(Map):
         return tuple(self.dist.event_shape)
 
     def __call__(self, z: Array) -> Array:
-        return jnp.asarray(log_prob(self.dist, z))
+        return log_prob(self.dist, z)

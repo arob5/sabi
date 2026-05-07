@@ -14,8 +14,6 @@ becomes a re-export and eventually retires. Same migration shape as
 
 from __future__ import annotations
 
-from typing import Any
-
 import jax.numpy as jnp
 from jax import Array
 from probpipe.core._empirical import NumericEmpiricalDistribution
@@ -28,7 +26,7 @@ class Dirac(NumericEmpiricalDistribution):
     by :func:`sabi.maps.pushforward` for ``(Constant(c), *) → Dirac(c)``.
     """
 
-    def __init__(self, c: Array | Any, *, name: str = "dirac") -> None:
+    def __init__(self, c: Array, *, name: str = "dirac") -> None:
         c_arr = jnp.asarray(c)
         # Single-atom empirical: leading axis of size 1.
         super().__init__(samples=c_arr[None, ...], name=name)

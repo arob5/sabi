@@ -68,6 +68,18 @@ class Affine(Map):
     Shape ``() → ()``. ``slope`` and ``intercept`` are scalars (or
     arrays that broadcast against the input). Closed-form pushforward
     through Gaussians: see ``docs/link_functions.md`` §5.1.
+
+    The ``event_shape_*`` fields are scalar so that scalar-Map
+    composition (``Affine`` as one link in a ``Compose`` chain on
+    scalar emulator outputs) typechecks without bookkeeping. The
+    closed-form pushforward handlers in ``_pushforward.py`` also
+    accept vector ``intercept`` against an MVN — the shape contract
+    is enforced for ``Compose``, while pushforward broadcasting is
+    permissive at the registered-handler level. A vector-``Affine``
+    variant for first-class vector composition is left to the
+    link-function refactor (#65), which integrates ``Map`` with
+    ``DensityDecomposition`` and makes the layered shape semantics
+    fully explicit.
     """
 
     slope: Array = field(default_factory=lambda: jnp.asarray(1.0))

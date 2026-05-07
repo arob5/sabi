@@ -39,8 +39,14 @@ match. New closed-form entries land via:
 .. code-block:: python
 
     @pushforward.register(SomeMap, SomeDist)
-    def _pf_some(map: SomeMap, dist: SomeDist) -> Distribution:
+    def _pf_some(map_: SomeMap, dist: SomeDist) -> Distribution:
         ...
+
+The MC fallback's sample budget is fixed at ``n_broadcast_samples=64``,
+matching the precedent in
+:func:`sabi.surrogate._pushforward._batch_form`. Exposing it on the
+``_mc_pushforward`` boundary so downstream callers can dial it is left
+for the link-function / surrogate integration that follows this PR.
 """
 
 from __future__ import annotations
@@ -131,12 +137,12 @@ pushforward = _PushforwardDispatch()
 
 
 @pushforward.register(Identity, Distribution)
-def _pf_identity(map_: Identity, dist: Distribution) -> Distribution:
+def _pf_identity(map_: Identity, dist: Distribution) -> Distribution:  # noqa: ARG001
     return dist
 
 
 @pushforward.register(Constant, Distribution)
-def _pf_constant(map_: Constant, dist: Distribution) -> Distribution:
+def _pf_constant(map_: Constant, dist: Distribution) -> Distribution:  # noqa: ARG001
     return Dirac(map_.c)
 
 
@@ -145,7 +151,7 @@ def _pf_affine_normal(map_: Affine, dist: Normal) -> Normal:
     return Normal(
         loc=map_.slope * dist.loc + map_.intercept,
         scale=jnp.abs(map_.slope) * dist.scale,
-        name=dist.name + "_affine",
+        name=dist.name,
     )
 
 
@@ -154,7 +160,7 @@ def _pf_affine_mvn(map_: Affine, dist: MultivariateNormal) -> MultivariateNormal
     return MultivariateNormal(
         loc=map_.slope * dist.loc + map_.intercept,
         scale_tril=jnp.abs(map_.slope) * dist.scale_tril,
-        name=dist.name + "_affine",
+        name=dist.name,
     )
 
 
@@ -164,20 +170,20 @@ def _pf_affine_empirical(
 ) -> NumericEmpiricalDistribution:
     """Elementwise affine on stored samples; weights and event_shape unchanged."""
     return NumericEmpiricalDistribution(
-        samples=map_.slope * dist._samples + map_.intercept,
-        weights=dist._w,
-        name=dist.name + "_affine",
+        samples=map_.slope * dist.samples + map_.intercept,
+        log_weights=dist.log_weights,
+        name=dist.name,
     )
 
 
 @pushforward.register(Exp, Normal)
-def _pf_exp_normal(map_: Exp, dist: Normal) -> LogNormal:
-    return LogNormal(loc=dist.loc, scale=dist.scale, name=dist.name + "_exp")
+def _pf_exp_normal(map_: Exp, dist: Normal) -> LogNormal:  # noqa: ARG001
+    return LogNormal(loc=dist.loc, scale=dist.scale, name=dist.name)
 
 
 @pushforward.register(Log, LogNormal)
-def _pf_log_lognormal(map_: Log, dist: LogNormal) -> Normal:
-    return Normal(loc=dist.loc, scale=dist.scale, name=dist.name + "_log")
+def _pf_log_lognormal(map_: Log, dist: LogNormal) -> Normal:  # noqa: ARG001
+    return Normal(loc=dist.loc, scale=dist.scale, name=dist.name)
 
 
 @pushforward.register(Compose, Distribution)
