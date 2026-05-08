@@ -178,6 +178,37 @@ Concretely: write `target_distribution.unnormalized_log_prob(x)`, not
 `problem.log_posterior(x)`; write "reference solution" or "reference
 target distribution", not "reference posterior", in API-facing prose.
 
+### File layout: public API at top, helpers at bottom
+
+Inside a module, the **public API** sits at the top and **private
+helpers** at the bottom. Specifically:
+
+1. Module docstring.
+2. Imports.
+3. Module-level constants and value-type dataclasses that the public
+   API exposes (e.g., ``RoundState``).
+4. Public functions and classes — the API surface a caller would read
+   to understand what the module does.
+5. Private helpers, in calling order from the public functions
+   downward. Underscore-prefixed (``_helper``) by convention.
+
+The point is that a reader scanning a module top-to-bottom encounters
+*what the module does* before *how it does it*. Helpers should be
+findable by scrolling down from the call site, not by hunting up past
+the docstring.
+
+The same principle applies inside a single function: prefer a
+top-level pseudocode-style body (each phase a named call) over inlining
+helper logic. Where a helper is so small it would be noise as its own
+function, an inline comment naming the phase is acceptable; but the
+default is "name and extract."
+
+Example: ``src/sabi/algorithms/loop.py`` — module docstring → imports
+→ ``RoundState`` (value type) → ``run()`` (public entry) → lifecycle
+helpers (``_run_initial_round``, ``_run_final_eval``) → round
+orchestration helpers in calling order → inner machinery → resolver
+helpers at the bottom.
+
 ### Dataclasses for value objects
 
 Component classes that are configuration bundles (`Algorithm`,

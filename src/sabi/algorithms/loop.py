@@ -11,11 +11,13 @@ Composition (per round): initial design via
 for the loop sketch and ``docs/notation.md`` for shape / symbol
 conventions.
 
-File layout: `RoundState` (per-round value type) → `_resolve_run_inputs`
-(default-fill helper) → `run()` (public entry) → round-lifecycle
-helpers (`_run_initial_round`, `_run_final_eval`) → per-round
-orchestration helpers in calling order → inner machinery (metric eval,
-SP construction, update planning).
+File layout (per ``docs/contributing.md`` "File layout convention"):
+public API at the top (`RoundState` value type → `run()`), private
+helpers at the bottom in calling order — round-lifecycle helpers
+(`_run_initial_round`, `_run_final_eval`), per-round orchestration
+helpers (in calling order), inner machinery (metric eval, SP
+construction, update planning), and finally the algorithm-input
+default-fill resolver (`_resolve_run_inputs`).
 """
 
 from __future__ import annotations
@@ -29,7 +31,8 @@ import jax.numpy as jnp
 from jax import Array
 from probpipe import sample as pp_sample
 from probpipe.core._distribution_base import Distribution
-from probpipe.core.constraints import Constraint, _Interval
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
+from probpipe.core.constraints import _Interval
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.acquisitions.base import (
@@ -54,16 +57,14 @@ from sabi.metrics.scheduling import (
     normalize_metrics,
     validate_metric_keys,
 )
-from probpipe.core._numeric_record_distribution import NumericRecordDistribution
-
-from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
+from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.tempering.base import IntermediateTarget, InvarianceFlags
 from sabi.tempering.output_transform import OutputTransform
 
 
 # ---------------------------------------------------------------------------
-# Per-round value type.
+# Per-round value type (public-ish — referenced by loop helpers).
 # ---------------------------------------------------------------------------
 
 
@@ -110,70 +111,6 @@ class RoundState:
 
 
 # ---------------------------------------------------------------------------
-# Resolver for `Algorithm`'s nullable fields.
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _ResolvedAlgorithm:
-    """Algorithm with all nullable fields resolved to concrete values."""
-
-    decomposition: DensityDecomposition
-    initial_design_distribution: Distribution
-    x_support: Constraint
-
-
-def _resolve_run_inputs(algorithm: Algorithm, target: NumericRecordDistribution) -> _ResolvedAlgorithm:
-    """Fill `Algorithm`'s nullable fields from the target's defaults.
-
-    Per ``docs/density_decomposition.md`` §3.3:
-
-    - ``x_support`` falls back to ``target.support``.
-    - ``initial_design_distribution`` falls back to
-      ``Uniform(x_support)`` if ``x_support`` is a bounded interval;
-      otherwise raises with a pointer to both fields.
-    - ``density_decomposition`` raises if ``None``.
-    """
-    if algorithm.density_decomposition is None:
-        raise ValueError(
-            "Algorithm.density_decomposition is required. Construct one "
-            "via `DensityDecomposition.identity_from_target(...)` for "
-            "log-density emulation, or "
-            "`DensityDecomposition.likelihood_with_prior(...)` for "
-            "log-likelihood + prior emulation."
-        )
-    x_support = (
-        algorithm.x_support if algorithm.x_support is not None else target.support
-    )
-    if algorithm.initial_design_distribution is not None:
-        initial_design_distribution = algorithm.initial_design_distribution
-    elif isinstance(x_support, _Interval):
-        low = jnp.asarray(x_support.low)
-        high = jnp.asarray(x_support.high)
-        if low.ndim == 0:
-            # Promote a scalar interval to a length-1 box for the
-            # 1-D parameter case. The shim expects array bounds.
-            low = low[None]
-            high = high[None]
-        initial_design_distribution = independent_uniform(
-            low=low, high=high, name="default_initial_design"
-        )
-    else:
-        raise ValueError(
-            "Algorithm.initial_design_distribution is None and the "
-            "default fallback (`Uniform(x_support)`) is not available "
-            f"for x_support of type {type(x_support).__name__}. Pass "
-            "`Algorithm(initial_design_distribution=...)` explicitly, "
-            "or set `Algorithm.x_support` to a bounded interval."
-        )
-    return _ResolvedAlgorithm(
-        decomposition=algorithm.density_decomposition,
-        initial_design_distribution=initial_design_distribution,
-        x_support=x_support,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Public entry point.
 # ---------------------------------------------------------------------------
 
@@ -216,17 +153,11 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
     validate_metric_keys(scheduled, algorithm.n_rounds)
 
     target = problem.target_distribution
-    resolved = _resolve_run_inputs(algorithm, target)
-    base_decomposition = resolved.decomposition
-    # Refill the algorithm with the resolved values so any downstream
-    # consumer (acquisition / optimizer) reads the concrete fields
-    # rather than seeing ``None``.
-    algorithm = replace(
-        algorithm,
-        density_decomposition=resolved.decomposition,
-        initial_design_distribution=resolved.initial_design_distribution,
-        x_support=resolved.x_support,
-    )
+    # Fill `Algorithm`'s nullable fields from the target's defaults.
+    # After this, every `algorithm.{density_decomposition,
+    # initial_design_distribution, x_support}` access is concrete.
+    algorithm = _resolve_run_inputs(algorithm, target)
+    base_decomposition = algorithm.density_decomposition
 
     key_init, key_loop, key_eval = jax.random.split(key, 3)
 
@@ -245,8 +176,6 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
         scheduled=scheduled,
         target=target,
         base_decomposition=base_decomposition,
-        initial_design_distribution=resolved.initial_design_distribution,
-        x_support=resolved.x_support,
         key_init=key_init,
         key_metric=key_metric_0,
     )
@@ -272,7 +201,6 @@ def run(problem: Problem, algorithm: Algorithm, key: Array) -> RunResult:
             problem=problem,
             algorithm=algorithm,
             base_decomposition=base_decomposition,
-            x_support=resolved.x_support,
             emulator_for_acq=emulator_for_acq,
             X=X,
             Y_raw=Y_raw,
@@ -349,23 +277,26 @@ def _run_initial_round(
     scheduled: Sequence[ScheduledMetric],
     target: NumericRecordDistribution,
     base_decomposition: DensityDecomposition,
-    initial_design_distribution: Distribution,
-    x_support: Constraint,  # noqa: ARG001 — kept for symmetry / future use
     key_init: Array,
     key_metric: Array,
 ) -> tuple[Array, Array, Array, Emulator, Any, dict[str, Any]]:
     """Round 0: initial design, target eval, emulator fit, round-0 metrics row.
 
     Initial design is drawn directly via
-    ``probpipe.sample(initial_design_distribution, ...)``. The round
-    operates at ``schedule.at(0)``'s state; ``Y_train`` is derived from
-    ``Y_raw`` via that state's ``output_transform`` (identity under no
-    tempering).
+    ``probpipe.sample(algorithm.initial_design_distribution, ...)``
+    (the algorithm's nullable fields are already resolved by the time
+    this helper runs). The round operates at ``schedule.at(0)``'s
+    state; ``Y_train`` is derived from ``Y_raw`` via that state's
+    ``output_transform`` (identity under no tempering).
 
     Returns ``(X, Y_raw, Y_train, emulator, emulator_state, round_0_metrics)``.
     """
     X = jnp.asarray(
-        pp_sample(initial_design_distribution, key=key_init, sample_shape=(algorithm.n_initial,))
+        pp_sample(
+            algorithm.initial_design_distribution,
+            key=key_init,
+            sample_shape=(algorithm.n_initial,),
+        )
     )
     Y_raw = base_decomposition.target_map(X)
 
@@ -534,7 +465,6 @@ def _run_acquisition(
     problem: Problem,
     algorithm: Algorithm,
     base_decomposition: DensityDecomposition,
-    x_support: Constraint,
     emulator_for_acq: Emulator,
     X: Array,
     Y_raw: Array,
@@ -558,7 +488,7 @@ def _run_acquisition(
         X=X,
         Y_raw=Y_raw,
         Y_train=Y_train_for_acq,
-        x_support=x_support,
+        x_support=algorithm.x_support,
     )
     x_new = algorithm.acquisition.select_batch(acq_state, algorithm.q, key)
     y_new_raw = base_decomposition.target_map(x_new)
@@ -880,3 +810,66 @@ def _merge_no_overwrite(
             f"`ScheduledMetric.name_suffix` or rename keys to disambiguate."
         )
     dst.update(src)
+
+
+# ---------------------------------------------------------------------------
+# Algorithm-input default-fill resolver.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_run_inputs(
+    algorithm: Algorithm,
+    target: NumericRecordDistribution,
+) -> Algorithm:
+    """Fill `Algorithm`'s nullable fields from the target's defaults.
+
+    Returns a refilled :class:`Algorithm` (via ``dataclasses.replace``)
+    so the caller can drop in the result and have every nullable field
+    read as a concrete value downstream — no separate "resolved view"
+    object, no extra ``replace`` at the call site.
+
+    Per ``docs/density_decomposition.md`` §3.3:
+
+    - ``x_support`` falls back to ``target.support``.
+    - ``initial_design_distribution`` falls back to
+      ``Uniform(x_support)`` if ``x_support`` is a bounded interval;
+      otherwise raises with a pointer to both fields.
+    - ``density_decomposition`` raises if ``None``.
+    """
+    if algorithm.density_decomposition is None:
+        raise ValueError(
+            "Algorithm.density_decomposition is required. Construct one "
+            "via `LogProbTarget(problem.target_distribution)` for "
+            "log-density emulation, or a `LogProbTermTarget` / "
+            "`GaussianForwardModelTarget` subclass for other emulator "
+            "strategies."
+        )
+    x_support = (
+        algorithm.x_support if algorithm.x_support is not None else target.support
+    )
+    if algorithm.initial_design_distribution is not None:
+        initial_design_distribution = algorithm.initial_design_distribution
+    elif isinstance(x_support, _Interval):
+        low = jnp.asarray(x_support.low)
+        high = jnp.asarray(x_support.high)
+        if low.ndim == 0:
+            # Promote a scalar interval to a length-1 box for the
+            # 1-D parameter case. The shim expects array bounds.
+            low = low[None]
+            high = high[None]
+        initial_design_distribution = independent_uniform(
+            low=low, high=high, name="default_initial_design"
+        )
+    else:
+        raise ValueError(
+            "Algorithm.initial_design_distribution is None and the "
+            "default fallback (`Uniform(x_support)`) is not available "
+            f"for x_support of type {type(x_support).__name__}. Pass "
+            "`Algorithm(initial_design_distribution=...)` explicitly, "
+            "or set `Algorithm.x_support` to a bounded interval."
+        )
+    return replace(
+        algorithm,
+        initial_design_distribution=initial_design_distribution,
+        x_support=x_support,
+    )
