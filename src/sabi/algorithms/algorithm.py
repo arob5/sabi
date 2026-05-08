@@ -60,11 +60,12 @@ class Algorithm:
         acquisition: the ``Acquisition`` that picks the next batch each
             round.
         density_decomposition: required ``DensityDecomposition`` —
-            ``(target_single, output_shape, link, shift)``. The loop
-            calls ``decomposition.target_map(X)`` for design
-            evaluations and threads the decomposition through the
-            surrogate-distribution factory. Typed ``Optional`` for
-            future-proofing; ``run`` raises if ``None``.
+            the algorithmic emulation choice. The loop calls
+            ``decomposition.target_map(X)`` for design evaluations
+            and threads the decomposition through the
+            surrogate-distribution factory. Typed ``... | None`` so
+            an unresolved ``Algorithm`` can survive construction;
+            ``run`` raises if it is still ``None`` after resolution.
         initial_design_distribution: ``Distribution`` over the parameter
             space, sampled (via ``probpipe.sample``) for the initial
             design and as the default for random acquisitions /

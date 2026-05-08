@@ -248,16 +248,18 @@ The hierarchy is:
   `link = GaussianLogLik(obs, cov)`, `shift = LogProb(prior)`.
   Subclasses define `target_map` (the forward model `f`).
 
-Each benchmark module (`problems/banana.py`, etc.) ships one
-`TargetDistribution` subclass with the analytical density and one
-or more `DensityDecomposition` subclasses for the canonical emulator
-strategies (e.g., `BananaTarget` and `BananaLogProbDecomposition`).
-Users adding new strategies subclass `DensityDecomposition`
-directly. The yaml runner config selects which subclass to
-instantiate via a `density_decomposition: { kind: <name> }` block;
-the registry plumbing currently supports `kind: identity_from_target`
-(constructs `LogProbTarget(problem.target_distribution)`) and
-extends as more shapes ship.
+Each benchmark module (`problems/banana.py`, etc.) ships a
+`NumericRecordDistribution` subclass with the analytical density
+(e.g., `BananaTarget`). The canonical emulator strategy —
+"emulate the full unnormalized log-density" — is constructed by
+wrapping that target with `LogProbTarget(problem.target_distribution)`
+rather than with a per-benchmark decomposition class. Users adding
+new strategies subclass `DensityDecomposition` directly. The yaml
+runner config selects which subclass to instantiate via a
+`density_decomposition: { kind: <name> }` block; the registry
+plumbing currently supports `kind: identity_from_target` (constructs
+`LogProbTarget(problem.target_distribution)`) and extends as more
+shapes ship.
 
 The previous draft proposed four classmethod helpers
 (`identity_from_target`, `likelihood_with_prior`, `forward_model`,
@@ -308,11 +310,17 @@ def is_consistent_with(
     """
 ```
 
-Run as a regression test on every benchmark factory's
-`(TargetDistribution, default_decomposition)` pair in
-`tests/test_benchmarks.py`. Strict-default by design — benchmark
-factories must produce pairs whose analytical evaluations match
-exactly.
+``is_consistent_with`` is exercised directly in
+`tests/test_density_decomposition.py` (strict and loose modes against
+custom decomposition pairs). The per-benchmark sweep — running
+``is_consistent_with`` against every benchmark factory's analytical
+target — is deferred to a follow-up: every benchmark currently uses
+the canonical `LogProbTarget(problem.target_distribution)` pairing
+(checked by construction, since `LogProbTarget` delegates to the
+target's analytical density), so the regression sweep adds value
+only once benchmarks ship custom `DensityDecomposition` subclasses.
+Strict-default by design — benchmark factories must produce pairs
+whose analytical evaluations match exactly.
 
 ### 3.3 `Algorithm` additions
 

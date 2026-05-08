@@ -10,9 +10,9 @@ Public surface:
 - :func:`banana` — factory returning a ``Problem``.
 - :class:`BananaTarget` — :class:`NumericRecordDistribution` subclass
   with the analytical ``_unnormalized_log_prob`` (vectorized).
-- :class:`BananaLogProbDecomposition` —
-  :class:`LogProbTermTarget` subclass that emulates the full
-  unnormalized log-density.
+
+Callers that want to emulate the full unnormalized log-density should
+wrap the target with :class:`sabi.density_decomposition.LogProbTarget`.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
 from sabi._probpipe_compat import independent_uniform
-from sabi.density_decomposition import LogProbTermTarget
 from sabi.problems.base import Problem
 
 
@@ -104,50 +103,6 @@ class BananaTarget(NumericRecordDistribution):
         return self._support
 
     def _unnormalized_log_prob(self, x: Array) -> Array:
-        return _banana_log_density(
-            x, a=self._a, b=self._b, c=self._c, d=self._d, log_norm=self._log_norm
-        )
-
-
-# ---------------------------------------------------------------------------
-# DensityDecomposition subclass — emulator emits the full log-density
-# ---------------------------------------------------------------------------
-
-
-class BananaLogProbDecomposition(LogProbTermTarget):
-    """Decomposition for the banana benchmark — full log-density emulation.
-
-    ``link = Identity``, ``shift = None``: the emulator's
-    ``target_map(x)`` is the full unnormalized log-density.
-    """
-
-    def __init__(
-        self,
-        *,
-        d: int,
-        a: float,
-        b: float,
-        c: float,
-        support: Constraint,
-        name: str | None = None,
-    ):
-        self._a, self._b, self._c, self._d = a, b, c, d
-        log2pi = jnp.log(2.0 * jnp.pi)
-        self._log_norm = (
-            -0.5 * d * log2pi
-            - jnp.log(a)
-            + 0.5 * jnp.log(b)
-            - (d - 2) * jnp.log(c)
-        )
-        super().__init__(
-            name=name or f"banana_d{d}_decomp", support=support, prior=None
-        )
-
-    @property
-    def event_shape(self) -> tuple[int, ...]:
-        return (self._d,)
-
-    def target_map(self, x: Array) -> Array:
         return _banana_log_density(
             x, a=self._a, b=self._b, c=self._c, d=self._d, log_norm=self._log_norm
         )

@@ -7,8 +7,9 @@ Public surface:
 - :func:`neals_funnel` — factory returning a ``Problem``.
 - :class:`NealsFunnelTarget` —
   :class:`NumericRecordDistribution` subclass.
-- :class:`NealsFunnelLogProbDecomposition` —
-  :class:`LogProbTermTarget` subclass.
+
+Callers that want to emulate the full unnormalized log-density should
+wrap the target with :class:`sabi.density_decomposition.LogProbTarget`.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
 from sabi._probpipe_compat import independent_uniform
-from sabi.density_decomposition import LogProbTermTarget
 from sabi.problems.base import Problem
 from sabi.reference.cache import load_or_generate_reference_samples
 
@@ -62,32 +62,6 @@ class NealsFunnelTarget(NumericRecordDistribution):
         return self._support
 
     def _unnormalized_log_prob(self, theta: Array) -> Array:
-        return _funnel_log_density(theta, d=self._d, sigma_v=self._sigma_v)
-
-
-class NealsFunnelLogProbDecomposition(LogProbTermTarget):
-    """Decomposition for Neal's funnel — full log-density emulation."""
-
-    def __init__(
-        self,
-        *,
-        d: int,
-        sigma_v: float,
-        support: Constraint,
-        name: str | None = None,
-    ):
-        self._d, self._sigma_v = d, sigma_v
-        super().__init__(
-            name=name or f"neals_funnel_d{d}_decomp",
-            support=support,
-            prior=None,
-        )
-
-    @property
-    def event_shape(self) -> tuple[int, ...]:
-        return (self._d + 1,)
-
-    def target_map(self, theta: Array) -> Array:
         return _funnel_log_density(theta, d=self._d, sigma_v=self._sigma_v)
 
 

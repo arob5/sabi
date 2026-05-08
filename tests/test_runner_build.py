@@ -22,7 +22,7 @@ def _cfg(with_metric=True):
             "bounds_radius": 5.0,
         },
         "emulator": {"name": "gp"},
-        "acquisition": {"name": "prior_sampling"},
+        "acquisition": {"name": "distribution_sampling"},
         "density_decomposition": {"kind": "identity_from_target"},
         "algorithm": {"n_initial": 4, "n_rounds": 2, "q": 1},
         "seed": 0,

@@ -8,9 +8,9 @@ Public surface:
 - :class:`GaussianTarget` — :class:`NumericRecordDistribution` subclass
   with the analytical ``_unnormalized_log_prob`` (delegates to a
   ProbPipe ``MultivariateNormal``).
-- :class:`GaussianLogProbDecomposition` —
-  :class:`LogProbTermTarget` subclass that emulates the full
-  unnormalized log-density.
+
+Callers that want to emulate the full unnormalized log-density should
+wrap the target with :class:`sabi.density_decomposition.LogProbTarget`.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from probpipe.core.constraints import Constraint
 from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi._probpipe_compat import independent_uniform
-from sabi.density_decomposition import LogProbTermTarget
 from sabi.problems.base import Problem
 
 
@@ -62,31 +61,6 @@ class GaussianTarget(NumericRecordDistribution):
         return self._support
 
     def _unnormalized_log_prob(self, x: Array) -> Array:
-        return _gaussian_log_density(x, mvn=self._mvn)
-
-
-class GaussianLogProbDecomposition(LogProbTermTarget):
-    """Decomposition for the Gaussian benchmark — full log-density emulation."""
-
-    def __init__(
-        self,
-        *,
-        d: int,
-        mvn: MultivariateNormal,
-        support: Constraint,
-        name: str | None = None,
-    ):
-        self._d = d
-        self._mvn = mvn
-        super().__init__(
-            name=name or f"gaussian_d{d}_decomp", support=support, prior=None
-        )
-
-    @property
-    def event_shape(self) -> tuple[int, ...]:
-        return (self._d,)
-
-    def target_map(self, x: Array) -> Array:
         return _gaussian_log_density(x, mvn=self._mvn)
 
 

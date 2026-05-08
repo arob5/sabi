@@ -160,11 +160,7 @@ def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
 
 def _build_acquisition(cfg: DictConfig) -> Acquisition:
     name = cfg.name
-    if name in ("distribution_sampling", "prior_sampling"):
-        # Accept the legacy `prior_sampling` config key for back-compat with
-        # existing run.yaml; semantics are unchanged (default
-        # `distribution_from_state` reads `algorithm.initial_design_distribution`,
-        # which the runner populates from the problem's support box).
+    if name == "distribution_sampling":
         return DistributionSampling()
     if name == "ei":
         return ExpectedImprovement(

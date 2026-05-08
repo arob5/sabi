@@ -52,12 +52,11 @@ the algorithmic emulation choice live on different objects:
 
 | term | type | role |
 |---|---|---|
-| `TargetDistribution` | `Distribution` (subclass of ProbPipe `NumericRecordDistribution`) | The math identity of the target: ``(name, input_shape, support)`` plus optionally an analytical ``_unnormalized_log_prob`` for benchmarks. Lives at `sabi.target_distribution`. Carries no ``target_single`` / form / prior fields. |
-| `Problem.target_distribution` | `TargetDistribution` field | The benchmark's `TargetDistribution` — the math content of a `Problem`. |
-| `DensityDecomposition` | dataclass at `sabi.density_decomposition` | The algorithmic emulation choice: ``(target_single, output_shape, link, shift, constraint)``. Composes the emulator's output into log-density via ``link(y) + shift(x)``. Many decompositions can pair with one ``TargetDistribution``. Lives on ``Algorithm.density_decomposition``. |
-| `target_map` | `Callable[[X], Y]` | The batched function `f : X ↦ Y` the emulator approximates. Now a ``DensityDecomposition`` field (derived via `jax.vmap` from ``target_single``). |
-| `target_single` | `Callable[[x], y]` | Single-point view of `target_map`: shape ``input_shape -> output_shape``. Field on ``DensityDecomposition``. |
-| `IntermediateTarget` | `TargetDistribution` subclass | A `TargetDistribution` produced by a `TemperingScheme` at one schedule state. Carries ``state`` and ``output_transform``. Math identity only — the per-state effective decomposition lives separately, produced by ``TemperingScheme.intermediate_decomposition(base_decomposition, state)``. |
+| target distribution | ProbPipe `NumericRecordDistribution` | The math identity of the target: ``(name, event_shape, support)`` plus optionally an analytical ``_unnormalized_log_prob`` for benchmarks. Sabi does not subclass it — benchmark targets (``BananaTarget``, ``GaussianTarget``, ``NealsFunnelTarget``) subclass `NumericRecordDistribution` directly. |
+| `Problem.target_distribution` | `NumericRecordDistribution` field | The benchmark's target — the math content of a `Problem`. |
+| `DensityDecomposition` | abstract `NumericRecordDistribution` subclass at `sabi.density_decomposition` | The algorithmic emulation choice. Composes the emulator's output into log-density via ``link(target_map(x)) + shift(x)``. Many decompositions can pair with one target distribution. Lives on ``Algorithm.density_decomposition``. Concrete subclasses: `LogProbTermTarget`, `LogProbTarget`, `GaussianForwardModelTarget`. |
+| `target_map` | `Map` | The batched function the emulator approximates: `f : X ↦ Y`. Abstract method on ``DensityDecomposition``; subclasses implement. |
+| `IntermediateTarget` | frozen dataclass | Bookkeeping payload produced by a `TemperingScheme` at one schedule state. Carries ``state`` and ``output_transform``. Lives at `sabi.tempering`. The per-state effective decomposition lives separately, produced by ``TemperingScheme.intermediate_decomposition(base_decomposition, state)``. |
 | `AcquisitionTarget` | `Enum` | Which schedule state the acquisition's `SurrogateDistribution` is built at: `CURRENT` / `NEXT` / `TERMINAL`. |
 | `target_tempering_state` | opaque PyTree | The state value resolved by `AcquisitionTarget`. Recorded in the per-round metric row for ablation reproducibility. |
 | `expected_target` | function `(SurrogateDistribution) -> Distribution` | Deterministic posterior estimator: plug the surrogate's predictive mean into the decomposition. |
