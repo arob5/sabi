@@ -21,7 +21,7 @@ from sabi._probpipe_compat import independent_uniform
 from sabi.acquisitions.base import AcquisitionTarget, resolve_state
 from sabi.acquisitions.random import DistributionSampling
 from sabi.algorithms import Algorithm, run
-from sabi.density_decomposition import DensityDecomposition
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.emulators import TinyGPEmulator
 from sabi.maps import Identity, LogProb
 from sabi.problems.base import Problem
@@ -137,7 +137,7 @@ def _acq_round_states(result) -> list[tuple]:
 def test_current_default_target_state_equals_current():
     """Untempered loop: target_tempering_state == tempering_state == None."""
     problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=DistributionSampling(),
@@ -164,7 +164,7 @@ def test_current_default_target_state_equals_current():
 def test_next_with_fixed_schedule_advances_one_step():
     """Round 1 acquisition: current=0.5, target=1.0. Round 2: current=1.0, target=1.0 (clamped)."""
     problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     # Identity-base decomposition: tempering needs an `initial`
     # distribution (the geometric-bridge case). Use the target's box
@@ -197,7 +197,7 @@ def test_next_with_fixed_schedule_advances_one_step():
 
 def test_terminal_target_state_is_terminal_for_every_round():
     problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     schedule = FixedSchedule(states=(0.1, 0.5, 1.0))
     box = problem.target_distribution.support
     initial = independent_uniform(low=jnp.asarray(box.low), high=jnp.asarray(box.high), name="init")
@@ -228,7 +228,7 @@ def test_terminal_target_state_is_terminal_for_every_round():
 
 def test_default_acquisition_target_preserves_untempered_metrics():
     problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
         acquisition=DistributionSampling(),
@@ -248,23 +248,32 @@ def test_default_acquisition_target_preserves_untempered_metrics():
 
 def test_via_target_with_next_lookahead_runs_to_completion():
     """`LikelihoodTemperingViaTarget` + `NEXT` look-ahead — refit path."""
+    from sabi.density_decomposition import LogProbTermTarget
+
     prior = independent_uniform(
         low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0), name="p"
     )
-    log_lik = lambda x: -0.5 * jnp.sum(x * x)
 
-    target = TargetDistribution(
+    class _QuadLogLikTarget(TargetDistribution):
+        # Math identity only (subclass with no analytical density);
+        # `LikelihoodTemperingViaTarget` doesn't read it during the loop.
+        pass
+
+    class _LogLikDecomp(LogProbTermTarget):
+        def target_map(self, x):
+            return -0.5 * jnp.sum(x * x, axis=-1)
+
+    target = _QuadLogLikTarget(
         name="quad_loglik_target",
         input_shape=(2,),
         support=prior.support,
     )
     problem = Problem(target_distribution=target, name="quad_loglik")
-    # Decomposition emulates log-likelihood: link=Identity, shift=LogProb(prior).
-    decomposition = DensityDecomposition(
-        target_single=log_lik,
-        output_shape=(),
-        link=Identity(),
-        shift=LogProb(prior),
+    decomposition = _LogLikDecomp(
+        name="quad_loglik_decomp",
+        input_shape=(2,),
+        support=prior.support,
+        prior=prior,
     )
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from typing import Protocol
 
-import jax
 from jax import Array
 from probpipe.core.constraints import Constraint
 
@@ -109,15 +108,15 @@ def weighted_empirical_factory(
     """No-emulator baseline factory: a `WeightedEmpiricalRandomMeasure`
     at the design points.
 
-    Applies ``decomposition`` pointwise to ``(X_i, Y_i)`` to get the
-    deterministic log-density (used as ``log_weights``) at each design
-    point. The ``emulator`` argument is ignored; the decomposition is
-    used only here to compute the weights and is NOT carried on the
-    resulting random measure.
+    Computes the per-design-point unnormalized log-density via
+    ``decomposition.link(Y) + decomposition.shift(X)`` (using the
+    cached evaluations ``Y = target_map(X)`` rather than re-evaluating).
+    The ``emulator`` argument is ignored; the decomposition's role
+    ends here.
     """
-    # decomposition.__call__ supports both single-point and batched input
-    # via the underlying Map broadcasting; vmap to be explicit.
-    log_weights = jax.vmap(decomposition)(X, Y)
+    log_weights = decomposition.link(Y)
+    if decomposition.shift is not None:
+        log_weights = log_weights + decomposition.shift(X)
     return WeightedEmpiricalRandomMeasure(
         X=X,
         log_weights=log_weights,

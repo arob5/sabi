@@ -1,15 +1,17 @@
 r"""`d`-dimensional Gaussian posterior — analytic reference.
 
-Target is :math:`\mathcal{N}(\mu, \Sigma)` on :math:`\mathbb{R}^d`:
+Target is :math:`\mathcal{N}(\mu, \Sigma)` on :math:`\mathbb{R}^d`.
 
-.. math::
+Public surface:
 
-    \log p(x) = -\tfrac{1}{2} (x - \mu)^\top \Sigma^{-1} (x - \mu)
-                - \tfrac{1}{2} \log\!\big((2\pi)^d |\Sigma|\big).
-
-Shapes: ``input_shape=(d,)``. The factory returns a `Problem` with an
-analytical ``_unnormalized_log_prob`` on the ``target_distribution``;
-the algorithm-side decomposition is constructed by the user.
+- :func:`gaussian` — factory returning a ``Problem`` whose
+  ``target_distribution`` is a :class:`GaussianTarget`.
+- :class:`GaussianTarget` — :class:`TargetDistribution` subclass with
+  the analytical ``_unnormalized_log_prob`` (delegated to a ProbPipe
+  ``MultivariateNormal``).
+- :class:`GaussianLogProbDecomposition` —
+  :class:`LogProbTermTarget` subclass that emulates the full
+  unnormalized log-density.
 """
 
 from __future__ import annotations
@@ -18,12 +20,79 @@ from collections.abc import Sequence
 
 import jax.numpy as jnp
 from jax import Array
-from probpipe import log_prob
+from probpipe import log_prob as pp_log_prob
+from probpipe.core.constraints import Constraint
 from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi._probpipe_compat import independent_uniform
+from sabi.density_decomposition import LogProbTermTarget
 from sabi.problems.base import Problem
 from sabi.target_distribution import TargetDistribution
+
+
+# ---------------------------------------------------------------------------
+# Private helper — single-event evaluation of the multivariate normal density.
+# ---------------------------------------------------------------------------
+
+
+def _gaussian_log_density(x: Array, *, mvn: MultivariateNormal) -> Array:
+    return jnp.asarray(pp_log_prob(mvn, x))
+
+
+# ---------------------------------------------------------------------------
+# Subclasses
+# ---------------------------------------------------------------------------
+
+
+class GaussianTarget(TargetDistribution):
+    """``TargetDistribution`` for the multivariate Gaussian benchmark."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        input_shape: tuple[int, ...],
+        support: Constraint,
+        mvn: MultivariateNormal,
+    ):
+        self._mvn = mvn
+        super().__init__(name=name, input_shape=input_shape, support=support)
+
+    @property
+    def mvn(self) -> MultivariateNormal:
+        return self._mvn
+
+    def _unnormalized_log_prob(self, x: Array) -> Array:
+        return _gaussian_log_density(x, mvn=self._mvn)
+
+
+class GaussianLogProbDecomposition(LogProbTermTarget):
+    """Decomposition for the Gaussian benchmark — full log-density emulation.
+
+    ``link = Identity``, ``shift = None``: ``target_map(x)`` is the
+    full unnormalized log-density.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        input_shape: tuple[int, ...],
+        support: Constraint,
+        mvn: MultivariateNormal,
+    ):
+        self._mvn = mvn
+        super().__init__(
+            name=name, input_shape=input_shape, support=support, prior=None
+        )
+
+    def target_map(self, x: Array) -> Array:
+        return _gaussian_log_density(x, mvn=self._mvn)
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
 
 
 def gaussian(
@@ -34,18 +103,9 @@ def gaussian(
 ) -> Problem:
     """Build a `d`-dimensional Gaussian benchmark.
 
-    Args:
-        d: parameter dimension. Must be ≥ 1.
-        mean: posterior mean; defaults to :math:`0 \\in \\mathbb{R}^d`.
-        cov: posterior covariance (`d × d`, must be PD); defaults to
-            :math:`I_d`.
-        bounds_radius: symmetric per-dim half-width
-            (:math:`|x_i - \\mu_i| \\le r`) for the target support.
-
-    Returns:
-        `Problem` with ``input_shape=(d,)``, an analytical
-        ``_unnormalized_log_prob``, and the analytic
-        `MultivariateNormal` itself as the reference distribution.
+    Returns a ``Problem`` whose ``target_distribution`` is a
+    :class:`GaussianTarget`. Reference is the analytic
+    ``MultivariateNormal``.
     """
     if d < 1:
         raise ValueError(f"d must be ≥ 1, got {d}.")
@@ -69,21 +129,19 @@ def gaussian(
 
     posterior = MultivariateNormal(loc=mu, cov=Sigma, name=f"gaussian_d{d}_{id(mu)}")
 
-    def target_single(x: Array) -> Array:
-        return jnp.asarray(log_prob(posterior, x))
-
     lower = mu - bounds_radius
     upper = mu + bounds_radius
     support = independent_uniform(
         low=lower, high=upper, name=f"gaussian_d{d}_support_{id(mu)}"
     ).support
 
-    target = TargetDistribution(
+    target = GaussianTarget(
         name=f"gaussian_d{d}_target_{id(mu)}",
         input_shape=(d,),
         support=support,
-        unnormalized_log_prob=target_single,
+        mvn=posterior,
     )
+
     return Problem(
         target_distribution=target,
         reference_distribution=posterior,

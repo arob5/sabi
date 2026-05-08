@@ -4,19 +4,15 @@ Both schemes encode the same intermediate density family but place the
 :math:`\beta` factor at different points in the algorithm (see
 ``docs/tempering.md`` for the full case analysis):
 
-- :class:`LikelihoodTemperingViaForm`: emulator target ``target_single``
-  is unchanged across rounds; the per-state effective decomposition
+- :class:`LikelihoodTemperingViaForm`: emulator target ``target_map`` is
+  unchanged across rounds; the per-state effective decomposition
   rescales ``link`` by :math:`\beta`. The emulator can be reused
   across all states with no refit (``is_invariant_target_map`` returns
-  True). Compatible with any base ``link`` / ``shift`` shape — the
-  tempered link is always ``Affine(slope=beta) @ base.link``.
-- :class:`LikelihoodTemperingViaTarget`: emulator target
-  ``target_single``  is rescaled by :math:`\beta` (via the
-  ``output_transform``); the decomposition is unchanged across rounds.
-  The emulator must be refit (or rescaled — see issue #4 for
-  cheap-update dispatch) per round. Restricted to ``link = Identity``
-  base decompositions (the case where the emulator's :math:`y` is
-  log-likelihood directly).
+  True). Compatible with any base ``link`` / ``shift`` shape.
+- :class:`LikelihoodTemperingViaTarget`: emulator target ``target_map``
+  is rescaled by :math:`\beta` (via the ``output_transform``); the
+  decomposition is unchanged across rounds. Restricted to
+  ``link = Identity`` base decompositions.
 
 The state PyTree is the inverse temperature :math:`\beta \in [0, 1]`
 (scalar). Pair with ``FixedSchedule(states=(0.1, 0.5, 1.0))`` or similar.
@@ -24,79 +20,144 @@ The state PyTree is the inverse temperature :math:`\beta \in [0, 1]`
 Geometric-bridge interaction
 ----------------------------
 
-When the base decomposition has ``shift = Constant(0)`` — i.e., the
-emulator emits the full log-density and there is no separate
-modeling-prior shift — the natural bridge is the *geometric* bridge
-:math:`\pi_\beta \propto \pi_0^{1-\beta} \cdot \pi_\mathrm{target}^\beta`,
-not likelihood tempering. The geometric bridge requires an external
-``initial`` distribution :math:`\pi_0` (the bridge's left endpoint),
-which the base decomposition does not carry.
+When the base decomposition's ``shift`` is ``None`` (the emulator emits
+the full log-density and there is no separate prior shift), the natural
+bridge is the *geometric* bridge
+:math:`\pi_\beta \propto \pi_0^{1-\beta} \cdot \pi_\mathrm{target}^\beta`.
+The geometric bridge requires an external ``initial`` distribution
+:math:`\pi_0` (the bridge's left endpoint).
 
-To preserve today's ``_IdentityTempered`` behavior under the new
-class layout — without preempting the bridging-rename refactor (#YY)
-that introduces a dedicated ``GeometricBridge`` —
-:class:`LikelihoodTemperingViaForm` accepts an optional ``initial:
-Distribution`` field and branches internally on the base shift shape.
-The branching will migrate cleanly to ``GeometricBridge`` when that
-class lands.
+To preserve today's geometric-bridge semantics under the new class
+layout — without preempting the bridging-rename refactor that will
+introduce a dedicated ``GeometricBridge`` —
+:class:`LikelihoodTemperingViaForm` accepts an optional
+``initial: Distribution`` field and branches internally on the base
+shift shape (``None`` -> geometric-bridge case).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import jax.numpy as jnp
 from jax import Array
 from probpipe.core._distribution_base import Distribution
+from probpipe.core.constraints import Constraint
 
-from sabi.density_decomposition import DensityDecomposition, ScalarConstant
-from sabi.maps import Affine, Constant, Identity, LogProb
+from sabi.density_decomposition import DensityDecomposition
+from sabi.maps import Affine, Identity, LogProb, Map
 from sabi.target_distribution import IntermediateTarget, TargetDistribution
 from sabi.tempering.base import TemperingScheme
 from sabi.tempering.output_transform import Identity as IdentityTransform
 from sabi.tempering.output_transform import Rescale as RescaleTransform
 
 
-def _is_zero_shift(shift) -> bool:
-    """True if ``shift`` is the geometric-bridge sentinel (a scalar zero).
+# ---------------------------------------------------------------------------
+# Private DensityDecomposition subclass returned by LikelihoodTemperingViaForm
+# ---------------------------------------------------------------------------
 
-    Detects either :class:`sabi.maps.Constant` or
-    :class:`sabi.density_decomposition.ScalarConstant` carrying a value
-    that's pointwise-zero. The latter is the default ``shift`` on a
-    fresh ``DensityDecomposition``.
+
+class _LikelihoodTemperedDecomposition(DensityDecomposition):
+    r"""Per-state decomposition under :class:`LikelihoodTemperingViaForm`.
+
+    Rescales the base ``link`` by :math:`\beta`. Shift handling
+    branches on ``base.shift``:
+
+    - **Likelihood-tempering case** (``base.shift`` is non-``None``):
+      shift unchanged. Encodes
+      :math:`\pi_\beta \propto \pi_0 \cdot L^\beta`.
+    - **Geometric-bridge case** (``base.shift`` is ``None``): requires
+      an ``initial`` distribution. New shift becomes
+      ``Affine(slope=(1-β)) @ LogProb(initial)``. Encodes
+      :math:`\pi_\beta \propto \pi_0^{1-\beta} \cdot \pi_\mathrm{target}^\beta`.
+
+    Used internally; users construct via
+    ``LikelihoodTemperingViaForm.intermediate_decomposition``.
     """
-    if not isinstance(shift, (Constant, ScalarConstant)):
-        return False
-    return bool(jnp.all(jnp.asarray(shift.c) == 0))
+
+    def __init__(
+        self,
+        base: DensityDecomposition,
+        beta: Array,
+        *,
+        initial: Distribution | None = None,
+    ):
+        self._base = base
+        self._beta = jnp.asarray(beta)
+        self._initial = initial
+        super().__init__(
+            name=f"{base.name}_tempered_beta{float(self._beta):.3f}",
+            input_shape=base.input_shape,
+            support=base.support,
+        )
+
+    def target_map(self, x: Array) -> Array:
+        return self._base.target_map(x)
+
+    @property
+    def link(self) -> Map:
+        return Affine(slope=self._beta, intercept=jnp.asarray(0.0)) @ self._base.link
+
+    @property
+    def shift(self) -> Map | None:
+        if self._base.shift is not None:
+            return self._base.shift
+        # Geometric-bridge case: requires an external initial.
+        if self._initial is None:
+            raise ValueError(
+                "LikelihoodTemperingViaForm: base decomposition has "
+                "`shift = None` (the geometric-bridge case), which "
+                "requires an external initial distribution. Pass "
+                "`LikelihoodTemperingViaForm(initial=...)` with the "
+                "bridge's left-endpoint distribution. (Will migrate to "
+                "a dedicated `GeometricBridge` class in the bridging-"
+                "rename refactor.)"
+            )
+        return Affine(
+            slope=jnp.asarray(1.0) - self._beta, intercept=jnp.asarray(0.0)
+        ) @ LogProb(self._initial)
+
+    @property
+    def output_shape(self) -> tuple[int, ...]:
+        return self._base.output_shape
+
+    @property
+    def output_constraint(self) -> Constraint:
+        return self._base.output_constraint
 
 
-@dataclass(frozen=True)
+# ---------------------------------------------------------------------------
+# Schemes
+# ---------------------------------------------------------------------------
+
+
 class LikelihoodTemperingViaForm(TemperingScheme):
     r"""Likelihood tempering with the emulator target unchanged.
 
     The per-state effective decomposition rescales the base ``link`` by
-    :math:`\beta` (via ``Affine(slope=beta) @ base.link``). The
-    emulator's ``target_single`` is unchanged across rounds, so
-    ``is_invariant_target_map`` returns True and the loop can reuse
-    the same fitted emulator across states.
+    :math:`\beta`. The emulator's ``target_map`` is unchanged across
+    rounds, so ``is_invariant_target_map`` returns True and the loop
+    can reuse the same fitted emulator across states.
 
     The shift handling depends on the base decomposition's shape:
 
-    - **Likelihood-tempering case** (``base.shift`` non-zero, typically
-      ``LogProb(modeling_prior)``): shift is unchanged. Encodes
-      :math:`\pi_\beta \propto \pi_0 \cdot L^\beta`.
-    - **Geometric-bridge case** (``base.shift`` is ``Constant(0)``):
-      requires the optional ``initial`` field. New shift becomes
-      ``Affine(slope=(1-beta)) @ LogProb(initial)``. Encodes
-      :math:`\pi_\beta \propto \pi_0^{1-\beta} \cdot \pi_\mathrm{target}^\beta`.
-      Mirrors today's ``_IdentityTempered``; will migrate to a dedicated
-      ``GeometricBridge`` when the bridging-rename refactor lands.
+    - **Likelihood-tempering case** (``base.shift`` non-``None``):
+      shift passes through unchanged.
+    - **Geometric-bridge case** (``base.shift`` is ``None``): requires
+      the optional ``initial`` field. New shift becomes
+      ``Affine(slope=(1-β)) @ LogProb(initial)``. Will migrate to a
+      dedicated ``GeometricBridge`` when the bridging-rename refactor
+      lands.
 
     The state PyTree is the scalar :math:`\beta \in [0, 1]`.
     """
 
-    initial: Distribution | None = None
+    def __init__(self, *, initial: Distribution | None = None):
+        self._initial = initial
+
+    @property
+    def initial(self) -> Distribution | None:
+        return self._initial
 
     def intermediate_target(
         self,
@@ -109,7 +170,6 @@ class LikelihoodTemperingViaForm(TemperingScheme):
             support=base.support,
             state=state,
             output_transform=IdentityTransform(),
-            unnormalized_log_prob=base._analytical_unnormalized_log_prob,
         )
 
     def intermediate_decomposition(
@@ -117,32 +177,8 @@ class LikelihoodTemperingViaForm(TemperingScheme):
         base: DensityDecomposition,
         state: Any,
     ) -> DensityDecomposition:
-        beta = jnp.asarray(state)
-        new_link = Affine(slope=beta, intercept=jnp.asarray(0.0)) @ base.link
-        if _is_zero_shift(base.shift):
-            # Geometric-bridge case: needs the external initial distribution.
-            if self.initial is None:
-                raise ValueError(
-                    "LikelihoodTemperingViaForm: base decomposition has "
-                    "`shift = Constant(0)` (the geometric-bridge case), "
-                    "which requires an external initial distribution. "
-                    "Pass `LikelihoodTemperingViaForm(initial=...)` with "
-                    "the bridge's left-endpoint distribution. (Will "
-                    "migrate to a dedicated `GeometricBridge` class in "
-                    "the bridging-rename refactor.)"
-                )
-            new_shift = Affine(
-                slope=jnp.asarray(1.0) - beta,
-                intercept=jnp.asarray(0.0),
-            ) @ LogProb(self.initial)
-        else:
-            new_shift = base.shift
-        return DensityDecomposition(
-            target_single=base.target_single,
-            output_shape=base.output_shape,
-            link=new_link,
-            shift=new_shift,
-            constraint=base.constraint,
+        return _LikelihoodTemperedDecomposition(
+            base, jnp.asarray(state), initial=self._initial
         )
 
     def is_invariant_target_map(self, state_a: Any, state_b: Any) -> bool:
@@ -157,17 +193,12 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
 
     The per-state effective decomposition is unchanged from the base;
     the emulator is fit on :math:`Y_t = \beta_t \cdot Y_\mathrm{raw}` per
-    round (or rescaled cheaply — issue #4). The
-    ``output_transform`` rescales ``Y_raw`` by :math:`\beta`.
+    round. The ``output_transform`` rescales ``Y_raw`` by :math:`\beta`.
 
-    Restricted to base decompositions with ``link = Identity()`` — the
+    Restricted to base decompositions with ``link = Identity`` — the
     case where the emulator's :math:`y` is the log-likelihood
-    directly. With non-``Identity`` links (e.g., ``GaussianLogLik``,
-    ``LogSoftplus``), scaling :math:`y` by :math:`\beta` does NOT
-    correspond to scaling the link's output by :math:`\beta`, so the
-    optimization is unsound. Raises at
-    ``intermediate_decomposition`` time when applied to non-``Identity``
-    links; use :class:`LikelihoodTemperingViaForm` for those cases.
+    directly. Raises at ``intermediate_decomposition`` time when
+    applied to non-``Identity`` links.
 
     The state PyTree is the scalar :math:`\beta \in [0, 1]`.
     """
@@ -183,7 +214,6 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
             support=base.support,
             state=state,
             output_transform=RescaleTransform(),
-            unnormalized_log_prob=base._analytical_unnormalized_log_prob,
         )
 
     def intermediate_decomposition(
@@ -206,9 +236,3 @@ class LikelihoodTemperingViaTarget(TemperingScheme):
 
     def is_invariant_form(self, state_a: Any, state_b: Any) -> bool:
         return True  # decomposition is invariant under state changes
-
-
-# Output transforms (Identity / Rescale) live in
-# `sabi.tempering.output_transform` as value-typed `OutputTransform`
-# subclasses; both schemes above import them via aliases at the top of
-# this module to avoid colliding with `sabi.maps.Identity`.

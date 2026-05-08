@@ -140,7 +140,6 @@ class NoTempering(TemperingScheme):
             support=base.support,
             state=state,
             output_transform=Identity(),
-            unnormalized_log_prob=base._analytical_unnormalized_log_prob,
         )
 
     def intermediate_decomposition(

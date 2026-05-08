@@ -17,7 +17,7 @@ from sabi.algorithms import (
     run,
     weighted_empirical_factory,
 )
-from sabi.density_decomposition import DensityDecomposition
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.metrics.mmd import MMD
 from sabi.problems.banana import banana
 from sabi.problems.benchmarks import gaussian_2d
@@ -31,7 +31,7 @@ def _algorithm(
     metrics=(MMD(n_estimate_samples=512, n_reference_samples=512),),
     surrogate_distribution_factory=emulator_pushforward_factory,
 ):
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     return Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.input_shape),
         acquisition=acquisition,

@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 from probpipe.core._empirical import NumericEmpiricalDistribution
+from probpipe.core.constraints import Constraint
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.reference import cache as cache_module
@@ -16,26 +17,52 @@ from sabi.reference.io import (
     write_metadata_json,
     write_samples_parquet,
 )
+from sabi.target_distribution import TargetDistribution
 
 
-def _scalar_normal_target(theta):
-    return -0.5 * jnp.sum(theta ** 2)
+# ---------------------------------------------------------------------------
+# Test target classes (subclasses with vectorized analytical density)
+# ---------------------------------------------------------------------------
 
 
-def _tiny_normal_target(theta):
-    return -0.5 * jnp.sum(theta ** 2)
+class _Standard2DNormalTarget(TargetDistribution):
+    """Standard 2-D normal log-density. Vectorized over the trailing
+    event axis."""
+
+    def _unnormalized_log_prob(self, theta):
+        return -0.5 * jnp.sum(theta * theta, axis=-1)
 
 
-def _box_support():
+class _Standard1DNormalTarget(TargetDistribution):
+    def _unnormalized_log_prob(self, theta):
+        return -0.5 * jnp.sum(theta * theta, axis=-1)
+
+
+def _box_support(d: int = 2) -> Constraint:
     return independent_uniform(
-        low=jnp.full(2, -5.0), high=jnp.full(2, 5.0), name="box"
+        low=jnp.full(d, -5.0), high=jnp.full(d, 5.0), name=f"box_{d}d"
     ).support
 
 
-def _tiny_box_support():
-    return independent_uniform(
-        low=jnp.full(1, -5.0), high=jnp.full(1, 5.0), name="tiny_box"
-    ).support
+def _make_2d_target() -> TargetDistribution:
+    return _Standard2DNormalTarget(
+        name="std_2d_normal",
+        input_shape=(2,),
+        support=_box_support(2),
+    )
+
+
+def _make_1d_target() -> TargetDistribution:
+    return _Standard1DNormalTarget(
+        name="std_1d_normal",
+        input_shape=(1,),
+        support=_box_support(1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# IO round-trips
+# ---------------------------------------------------------------------------
 
 
 def test_samples_parquet_roundtrip(tmp_path):
@@ -60,6 +87,19 @@ def test_metadata_json_roundtrip(tmp_path):
     assert loaded == md
 
 
+# ---------------------------------------------------------------------------
+# Cache load / regenerate
+# ---------------------------------------------------------------------------
+
+
+class _BadTarget(TargetDistribution):
+    """Target whose `_unnormalized_log_prob` raises — used in cache-hit
+    tests to confirm NUTS doesn't run."""
+
+    def _unnormalized_log_prob(self, theta):
+        raise AssertionError("NUTS must not run on a cache hit.")
+
+
 def test_cache_hit_skips_nuts(tmp_path):
     cache_dir = tmp_path / "refs"
     problem_dir = cache_dir / "fake_problem"
@@ -69,15 +109,14 @@ def test_cache_hit_skips_nuts(tmp_path):
     write_samples_parquet(samples, problem_dir / f"{fname}.parquet")
     write_metadata_json({"problem_name": "fake_problem"}, problem_dir / f"{fname}.json")
 
-    def bad_target(theta):
-        raise AssertionError("NUTS must not run on a cache hit.")
+    target = _BadTarget(
+        name="bad", input_shape=(2,), support=_box_support(2)
+    )
 
     ref = load_or_generate_reference_samples(
         problem_name="fake_problem",
         cache_key="k1",
-        target_log_prob=bad_target,
-        support=_box_support(),
-        input_shape=(2,),
+        target=target,
         num_results=10,
         num_warmup=5,
         num_chains=1,
@@ -101,31 +140,20 @@ def test_cache_keys_disambiguate_by_params(tmp_path):
     write_samples_parquet(samples_b, problem_dir / f"{fname_b}.parquet")
     write_metadata_json({"k": "B"}, problem_dir / f"{fname_b}.json")
 
-    def _bad(theta):
-        raise AssertionError("Should be a cache hit.")
+    target = _BadTarget(name="bad", input_shape=(2,), support=_box_support(2))
 
     ref_a = load_or_generate_reference_samples(
         problem_name="fake_problem",
         cache_key="kA",
-        target_log_prob=_bad,
-        support=_box_support(),
-        input_shape=(2,),
-        num_results=4,
-        num_warmup=2,
-        num_chains=1,
-        random_seed=0,
+        target=target,
+        num_results=4, num_warmup=2, num_chains=1, random_seed=0,
         cache_dir=cache_dir,
     )
     ref_b = load_or_generate_reference_samples(
         problem_name="fake_problem",
         cache_key="kB",
-        target_log_prob=_bad,
-        support=_box_support(),
-        input_shape=(2,),
-        num_results=4,
-        num_warmup=2,
-        num_chains=1,
-        random_seed=0,
+        target=target,
+        num_results=4, num_warmup=2, num_chains=1, random_seed=0,
         cache_dir=cache_dir,
     )
     assert jnp.allclose(jnp.asarray(ref_a.samples), samples_a)
@@ -139,13 +167,8 @@ def test_quality_threshold_failure_raises(tmp_path):
         load_or_generate_reference_samples(
             problem_name="bad_quality",
             cache_key="k",
-            target_log_prob=_scalar_normal_target,
-            support=_box_support(),
-            input_shape=(2,),
-            num_results=20,
-            num_warmup=10,
-            num_chains=1,
-            random_seed=0,
+            target=_make_2d_target(),
+            num_results=20, num_warmup=10, num_chains=1, random_seed=0,
             cache_dir=cache_dir,
             quality_thresholds={"min_ess": 1e9},
         )
@@ -160,13 +183,8 @@ def test_regenerate_forces_fresh_nuts_run(tmp_path, monkeypatch):
     common_kwargs = dict(
         problem_name="tiny_gaussian",
         cache_key="k",
-        target_log_prob=_tiny_normal_target,
-        support=_tiny_box_support(),
-        input_shape=(1,),
-        num_results=50,
-        num_warmup=50,
-        num_chains=1,
-        random_seed=0,
+        target=_make_1d_target(),
+        num_results=50, num_warmup=50, num_chains=1, random_seed=0,
         cache_dir=cache_dir,
         quality_thresholds={
             "max_rhat": 1e3,

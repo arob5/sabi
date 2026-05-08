@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 import pytest
+from probpipe import unnormalized_log_prob
 from probpipe.core._empirical import NumericEmpiricalDistribution
 from probpipe.core.constraints import Constraint
 from probpipe.core.protocols import SupportsSampling
 
-from sabi.density_decomposition import DensityDecomposition
+from sabi.density_decomposition import LogProbTarget
 from sabi.problems.neals_funnel import neals_funnel
 
 
@@ -29,11 +30,9 @@ def test_neals_funnel_shapes_and_types():
 def test_neals_funnel_target_log_density_known_values():
     """Spot-check the joint log-density at a few exact points."""
     problem = neals_funnel(d=2, sigma_v=3.0)
-    log_p_single = DensityDecomposition.identity_from_target(
-        problem.target_distribution
-    ).target_single
-
-    out00 = float(log_p_single(jnp.asarray([0.0, 0.0, 0.0])))
+    out00 = float(jnp.asarray(unnormalized_log_prob(
+        problem.target_distribution, jnp.asarray([0.0, 0.0, 0.0])
+    )))
     expected = (
         -0.5 * float(jnp.log(2 * jnp.pi * 9.0))
         + 2 * (-0.5 * float(jnp.log(2 * jnp.pi)) - 0.5 * 0.0)
@@ -67,12 +66,12 @@ def test_neals_funnel_reference_funnel_geometry():
 
 
 def test_neals_funnel_unnormalized_log_prob_matches_decomposition():
-    """``target._unnormalized_log_prob`` agrees with the identity
-    decomposition's ``density_at`` (since target carries the analytical
-    density and ``identity_from_target`` wraps it)."""
+    """The wrapped target's analytical density agrees with the
+    ``LogProbTarget`` decomposition's at the same x — both go through
+    the ProbPipe op and yield the same value."""
     target = neals_funnel(d=2).target_distribution
-    decomposition = DensityDecomposition.identity_from_target(target)
+    decomposition = LogProbTarget(target)
     x = jnp.asarray([0.5, 1.0, -1.0])
-    assert float(target._unnormalized_log_prob(x)) == pytest.approx(
-        float(decomposition.density_at(x)), abs=1e-6
-    )
+    target_val = float(jnp.asarray(unnormalized_log_prob(target, x)))
+    decomp_val = float(jnp.asarray(unnormalized_log_prob(decomposition, x)))
+    assert target_val == pytest.approx(decomp_val, abs=1e-6)

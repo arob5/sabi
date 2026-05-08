@@ -20,7 +20,7 @@ def make_acquisition_state(
 
     Defaults to the validated `gaussian_2d()` benchmark with a fitted
     `TinyGPEmulator` and an `EmulatedDistribution` wrapping a
-    ``DensityDecomposition.identity_from_target(...)``. Design points
+    ``LogProbTarget(...)``. Design points
     are drawn from a uniform-over-support distribution (the loop's
     default `initial_design_distribution`).
 
@@ -37,7 +37,7 @@ def make_acquisition_state(
     from sabi.acquisitions.base import AcquisitionState
     from sabi.acquisitions.random import DistributionSampling
     from sabi.algorithms.algorithm import Algorithm
-    from sabi.density_decomposition import DensityDecomposition
+    from sabi.density_decomposition import DensityDecomposition, LogProbTarget
     from sabi.emulators import TinyGPEmulator
     from sabi.problems.benchmarks import gaussian_2d
     from sabi.surrogate.surrogate_distribution import EmulatedDistribution
@@ -45,7 +45,7 @@ def make_acquisition_state(
     if problem is None:
         problem = gaussian_2d()
     target = problem.target_distribution
-    decomposition = DensityDecomposition.identity_from_target(target)
+    decomposition = LogProbTarget(target)
     # Uniform over the target's box support — the algorithm's default
     # initial-design distribution under the post-#65 layout.
     box = target.support

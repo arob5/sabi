@@ -99,160 +99,179 @@ and the `prior` field's four roles fan out to four different sites.
 
 ### 3.1 `TargetDistribution`
 
+`TargetDistribution` is an **abstract** ProbPipe `NumericRecordDistribution`.
+The constructor stores the math identity (`name`, `input_shape`,
+`support`); subclasses with an analytical density implement
+`_unnormalized_log_prob` per the ProbPipe protocol.
+
 ```python
 class TargetDistribution(NumericRecordDistribution):
-    """Mathematical identity of the target distribution.
+    def __init__(self, *, name, input_shape, support):
+        ...
 
-    A ProbPipe `Distribution` that may implement `_unnormalized_log_prob`
-    when the unnormalized log-density of the target is known
-    analytically — i.e., for benchmarks. For user inverse problems
-    where the analytical density is unknown, `_unnormalized_log_prob`
-    raises `NotImplementedError`; the algorithm interacts with the
-    target only through the `DensityDecomposition` (§3.2).
-    """
-    name: str
-    input_shape: tuple[int, ...]
-    support: Constraint   # explicit field; today derived from prior.support
+    # `_unnormalized_log_prob` intentionally NOT defined here.
+    # Subclasses with an analytical density override it; subclasses
+    # without leave it undefined.
 ```
 
-Dropped fields, relative to today: `prior`, `target_single`,
-`target_map`, `output_shape`, `log_density_form`. The
+For benchmarks, the subclass provides the analytical density
+directly:
+
+```python
+class BananaTarget(TargetDistribution):
+    def _unnormalized_log_prob(self, x):
+        # Vectorized: x.shape == batch_shape + (d,) -> batch_shape
+        ...
+```
+
+For user inverse problems where no analytical density is available,
+the subclass simply does not override `_unnormalized_log_prob` (or
+the user uses a bare `TargetDistribution` subclass with only the
+metadata). The absence of the override means
+`isinstance(target, SupportsUnnormalizedLogProb)` returns False and
+ProbPipe ops naturally complain — no hand-rolled `NotImplementedError`
+needed.
+
+Dropped fields, relative to the v0.x layout: `prior`, `target_single`,
+`target_map`, `output_shape`, `log_density_form`. `support` becomes a
+first-class field (no longer derived from `prior.support`). The
 `target_distribution` field on `Problem` (set by [#61](https://github.com/arob5/sabi/pull/61))
 remains; only its internal shape changes.
 
-When `_unnormalized_log_prob` raises `NotImplementedError` (user
-inverse problems with no analytical density), the MCMC-relevant
-random log-density boundary moves to
-`EmulatedDistribution._random_unnormalized_log_prob`, which composes
-the decomposition (`link(y) + shift(x)`) through the emulator
-predictive. ProbPipe MCMC sees the same shape it does today. See
-[#59 v0.4 §7](https://github.com/arob5/sabi/blob/docs/issue-55-link-functions-design/docs/link_functions.md#7-probpipe-boundary--log-density-at-the-mcmc-seam)
+The MCMC-relevant random log-density boundary is
+`EmulatedDistribution._random_unnormalized_log_prob`, which calls
+`decomposition.pushforward(X, emulator_predictive)`. See
+[link_functions.md §7](link_functions.md#7-probpipe-boundary--log-density-at-the-mcmc-seam)
 for the full boundary discussion.
 
-`support` becomes a first-class field on `TargetDistribution`. Today
-it's derived from `prior.support`; with the prior moved off, the
-support is its own thing. `Constraint` is the right type because
-(a) it's already what acquisitions consume for the unconstrained
-reparameterization bijector, (b) it covers bounded boxes, half-spaces,
-`NoConstraint` (= R^d), and whatever else, and (c) it cleanly admits
-the "unbounded parameter space" case (which today is expressed by an
-unbounded prior, an awkward overload of the field).
+`Constraint` is the right type for `support` because (a) it's
+already what acquisitions consume for the unconstrained
+reparameterization bijector, (b) it covers bounded boxes,
+half-spaces, `real`, and whatever else, and (c) it cleanly admits
+the "unbounded parameter space" case (which previously was expressed
+by an unbounded prior, an awkward overload of the field).
 
 ### 3.2 `DensityDecomposition`
 
+`DensityDecomposition` is an **abstract** ProbPipe
+`NumericRecordDistribution`. Subclasses define `target_map` (what the
+emulator approximates) and `link` (the `Map` from emulator output to
+log-density residual), and may override `shift` (default `None`).
+The base auto-derives `_unnormalized_log_prob`:
+
 ```python
-@dataclass(frozen=True)
-class DensityDecomposition:
-    """Encodes the relationship between the emulator and the target density.
-
-    Stores a target map (what the emulator approximates) and a function
-    that transforms the target map's output into the unnormalized log
-    target density. In other words, the composition of the target map
-    and the "link" function gives the unnormalized log target density.
-
-    There can be many `DensityDecomposition` instances for a single
-    `TargetDistribution` — the choice of what to emulate (full
-    log-density vs. log-likelihood vs. forward-model output) is an
-    algorithmic decision, not a property of the target.
-    """
-    target_single: Callable[[Array], Array]   # x -> y
-    output_shape: tuple[int, ...]              # shape of one y
-    link:  Map                                  # y -> log-density-residual
-    shift: Map = Constant(0.0)                  # x -> additive shift, default zero
-    constraint: Constraint = NoConstraint       # constraint on y values
-
-    @property
-    def target_map(self) -> Callable[[Array], Array]:
-        """Auto-derived via `jax.vmap(target_single)`."""
+class DensityDecomposition(NumericRecordDistribution, ABC):
+    def __init__(self, *, name, input_shape, support):
         ...
 
-    def __call__(self, x: Array, y: Array) -> Array:
-        """Deterministic evaluation: log-density at (x, y)."""
-        return self.link(y) + self.shift(x)
+    @abstractmethod
+    def target_map(self, x: Array) -> Array:
+        """Vectorized: batch_shape + input_shape -> batch_shape + output_shape."""
 
-    def density_at(self, x: Array) -> Array:
-        """Compose target_map with link/shift to get unnormalized log
-        target density at `x`."""
-        return self(x, self.target_single(x))
+    @property
+    @abstractmethod
+    def link(self) -> Map: ...
 
-    def pushforward(self, x: Array, y_dist: Distribution) -> Distribution:
-        """Push an emulator predictive `y_dist` at point(s) `x` to a
-        log-density distribution."""
+    @property
+    def shift(self) -> Map | None:
+        return None
+
+    @property
+    @abstractmethod
+    def output_shape(self) -> tuple[int, ...]: ...
+
+    @property
+    def output_constraint(self) -> Constraint:
+        return real    # constraint on y; subclasses override
+
+    def _unnormalized_log_prob(self, x):
+        log_prob_residual = self.link(self.target_map(x))
+        if self.shift is None:
+            return log_prob_residual
+        return log_prob_residual + self.shift(x)
+
+    def pushforward(self, x, y_dist) -> Distribution:
+        if self.shift is None:
+            return pushforward(self.link, y_dist)
         per_x_map = Affine(slope=1.0, intercept=self.shift(x)) @ self.link
         return pushforward(per_x_map, y_dist)
 ```
 
-`DensityDecomposition` is **one class, no hierarchy**. The choice of
-"emulate log-density" vs. "emulate log-likelihood" vs. "emulate forward
-model" is expressed by parameter choices — concrete `Map`s in the
-`link` and `shift` slots — not by subclassing. Specific patterns become
-specific `Map` choices:
+The unnormalized log-density at `x` decomposes as
+`link(target_map(x)) + shift(x)`. The first term — the **log-prob
+residual** — is the contribution attributable to the emulator's
+output `y = target_map(x)`, after the link is applied. It is the
+term the emulator's predictive distribution flows through under
+`pushforward`. The shift is the deterministic x-dependent additive
+term (typically `LogProb(prior)`); it carries no emulator
+uncertainty.
 
-| Pattern | `link` | `shift` |
-|---------|--------|---------|
-| Identity (emulator fits log-density) | `Identity()` | `Constant(0.0)` |
-| Likelihood + prior (emulator fits log-lik) | `Identity()` | `LogProb(modeling_prior)` |
-| Forward model with Gaussian likelihood | `GaussianLogLik(obs, cov)` | `LogProb(modeling_prior)` |
-| Softplus link, log-lik + prior | `LogSoftplus()` | `LogProb(modeling_prior)` |
-| Square link, log-lik + prior | `LogSquare()` | `LogProb(modeling_prior)` |
+`DensityDecomposition` is a Distribution: `support` is the
+constraint on `x` (parameter-space); `output_shape` is the shape of
+one `y`; `output_constraint` is the constraint on `y` (mostly
+metadata; default `real`). External callers go through the ProbPipe
+op (`unnormalized_log_prob(decomposition, X)`), which handles
+batching per the standard contract. There is no separate `__call__(x, y)`
+or `density_at(x)` method on the base class — the unnormalized
+log-density at `x` flows through the standard
+`unnormalized_log_prob` op like any other Distribution.
 
-The `link` and `shift` `Map` types and the `pushforward(Map,
-Distribution)` dispatch are exactly the abstractions [#59](https://github.com/arob5/sabi/pull/59)
-introduces. This proposal does not modify them. What it modifies is
-the host class: `DensityForm` (in #59) absorbs `target_single` and
-`output_shape` and is renamed to `DensityDecomposition`.
+There can be many `DensityDecomposition` instances for a single
+`TargetDistribution` — the choice of what to emulate (full
+log-density vs. log-likelihood vs. forward-model output) is an
+algorithmic decision, not a property of the target. The concrete
+subclasses below cover the canonical patterns:
 
-#### 3.2.1 Helper constructors
+| Pattern | Subclass | `link` | `shift` |
+|---------|----------|--------|---------|
+| Full log-density | `LogProbTermTarget(prior=None)` | `Identity()` | `None` |
+| Likelihood + prior | `LogProbTermTarget(prior=π)` | `Identity()` | `LogProb(π)` |
+| Forward model with Gaussian likelihood | `GaussianForwardModelTarget(obs, cov, prior=π)` | `GaussianLogLik(obs, cov)` | `LogProb(π)` |
+| `LogProbTarget(target)` | (concrete leaf of `LogProbTermTarget`) | `Identity()` | `None` |
 
-Four classmethods cover the common construction patterns and let
-benchmark factories produce decompositions without the user
-re-deriving the math:
+The `Map` types (`Identity`, `LogProb`, `GaussianLogLik`, `Affine`,
+…) and the `pushforward(Map, Distribution)` dispatch are exactly
+the abstractions from [#64](https://github.com/arob5/sabi/pull/72)
+(the Map ABC + pushforward landed earlier in the link-functions
+phasing). This refactor uses them; it does not modify them.
 
-```python
-@classmethod
-def identity_from_target(
-    cls,
-    target: TargetDistribution,
-    *,
-    output_shape: tuple[int, ...] = (),
-) -> "DensityDecomposition":
-    """Trivial decomposition: `target_single` is the target's analytical
-    unnormalized log-density (via `unnormalized_log_prob(target, x)`),
-    `link = Identity`, `shift = Constant(0.0)`. Requires `target` to
-    implement `_unnormalized_log_prob` analytically.
-    """
-    ...
+#### 3.2.1 Concrete subclasses
 
-@classmethod
-def likelihood_with_prior(
-    cls,
-    log_likelihood: Callable[[Array], Array],
-    *,
-    output_shape: tuple[int, ...],
-    modeling_prior: Distribution,
-    link: Map = Identity(),
-) -> "DensityDecomposition":
-    """`link(log_lik(x)) + log_prob(modeling_prior, x)`. Default
-    `link = Identity` corresponds to the exp-link assumption
-    `density ∝ exp(log_lik + log_prior)`."""
-    ...
+The hierarchy is:
 
-@classmethod
-def forward_model(
-    cls,
-    forward_model: Callable[[Array], Array],
-    *,
-    output_shape: tuple[int, ...],
-    log_lik_from_outputs: Map,
-    modeling_prior: Distribution,
-) -> "DensityDecomposition":
-    """`log_lik_from_outputs(forward_model(x)) + log_prob(modeling_prior, x)`."""
-    ...
-```
+- `DensityDecomposition` (abstract base; subclasses define
+  `target_map`, `link`, optionally override `shift`).
+- `LogProbTermTarget(DensityDecomposition, ABC)` — fixes
+  `link = Identity`. Optional `prior` field (when set,
+  `shift = LogProb(prior)`; else `shift = None`). Subclasses define
+  `target_map`. Used when the emulator emits one term in a
+  `link(·) + shift(x)` sum: the full log-prob (`prior=None`) or one
+  term + the prior shift (`prior=π`).
+- `LogProbTarget(LogProbTermTarget)` — concrete leaf. Wraps a
+  `TargetDistribution`'s analytical density: `target_map` delegates
+  to the target's `unnormalized_log_prob` op. The canonical idiom
+  for benchmarks: `LogProbTarget(problem.target_distribution)`.
+- `GaussianForwardModelTarget(DensityDecomposition, ABC)` — fixes
+  `link = GaussianLogLik(obs, cov)`, `shift = LogProb(prior)`.
+  Subclasses define `target_map` (the forward model `f`).
 
-These are conveniences only; users can always construct
-`DensityDecomposition(...)` directly with custom `link` / `shift`
-`Map`s.
+Each benchmark module (`problems/banana.py`, etc.) ships one
+`TargetDistribution` subclass with the analytical density and one
+or more `DensityDecomposition` subclasses for the canonical emulator
+strategies (e.g., `BananaTarget` and `BananaLogProbDecomposition`).
+Users adding new strategies subclass `DensityDecomposition`
+directly. The yaml runner config selects which subclass to
+instantiate via a `density_decomposition: { kind: <name> }` block;
+the registry plumbing currently supports `kind: identity_from_target`
+(constructs `LogProbTarget(problem.target_distribution)`) and
+extends as more shapes ship.
+
+The previous draft proposed four classmethod helpers
+(`identity_from_target`, `likelihood_with_prior`, `forward_model`,
+`gaussian_forward_model`). The implementation uses subclasses
+instead — cleaner OO, scales better when more decomposition shapes
+land, and aligns with how every ProbPipe `Distribution` is defined.
+
 
 #### 3.2.2 Self-consistency
 

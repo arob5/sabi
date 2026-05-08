@@ -129,41 +129,28 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
     def support(self) -> Constraint:
         return self._support_value
 
-    def _unnormalized_log_prob(self, value: Array) -> Array:
-        """Plug-in posterior log-density at ``value``.
+    def _unnormalized_log_prob(self, x: Array) -> Array:
+        """Plug-in unnormalized log-density at ``x``.
 
-        Detected by ``ndim``: single-point at rank ``len(input_shape)``,
-        batched at rank ``1 + len(input_shape)``. Avoids the shape-
-        equality misidentification trap (``(n, k)`` with ``n == k``
-        looks like a single point under shape-equality).
+        Substitutes the emulator's predictive mean for the
+        decomposition's ``target_map(x)`` and composes through ``link``
+        and ``shift``. ProbPipe's op handles batching.
         """
-        x = jnp.asarray(value)
-        ndim_single = len(self._input_shape)
-        if x.ndim == ndim_single:
-            if x.shape != self._input_shape:
-                raise ValueError(
-                    f"_unnormalized_log_prob: single-point input expects "
-                    f"shape {self._input_shape}, got {tuple(x.shape)}."
-                )
-            pred = self._emulator(x[None])
+        # The emulator expects a leading batch axis. For a single
+        # event, prepend one; the result is shape (1,) or (1,) +
+        # output_shape. For batched x, the emulator's predictive is
+        # shape (n,) + output_shape natively.
+        x_arr = jnp.asarray(x)
+        if x_arr.ndim == len(self._input_shape):
+            pred = self._emulator(x_arr[None])
+            pred_mean = jnp.asarray(mean(pred))[0]
+        else:
+            pred = self._emulator(x_arr)
             pred_mean = jnp.asarray(mean(pred))
-            return self._decomposition(x, pred_mean[0])
-        if x.ndim == ndim_single + 1:
-            if x.shape[1:] != self._input_shape:
-                raise ValueError(
-                    f"_unnormalized_log_prob: batched input expects shape "
-                    f"(n,) + {self._input_shape}, got {tuple(x.shape)}."
-                )
-            pred = self._emulator(x)
-            pred_mean = jnp.asarray(mean(pred))
-            # decomposition.__call__ broadcasts via Map semantics; vmap
-            # to be explicit over the leading n axis.
-            return jax.vmap(self._decomposition)(x, pred_mean)
-        raise ValueError(
-            f"_unnormalized_log_prob: expected ndim {ndim_single} (single "
-            f"point) or {ndim_single + 1} (batched), got ndim={x.ndim} "
-            f"(shape={tuple(x.shape)})."
-        )
+        residual = self._decomposition.link(pred_mean)
+        if self._decomposition.shift is None:
+            return residual
+        return residual + self._decomposition.shift(x_arr)
 
     def _sample(self, key, sample_shape: tuple[int, ...] = ()) -> Array:
         """Draw posterior samples via ProbPipe ``condition_on``.

@@ -140,22 +140,41 @@ bridge actually lands; the abstraction is fully general today.
 See [`tempering.md`](tempering.md) for the case analysis with worked
 examples.
 
-## Public batched / private single-point convention
+## Vectorization contract
 
-Across sabi, public methods that accept design data follow the
-**batched** convention: arguments have a leading batch axis of size
-`n`, return values prepend the same axis. When the public batched
-method is a `jax.vmap` of an underlying single-point implementation,
-the single-point implementation is **private** — its name is
-underscore-prefixed (e.g., `_call_single`), and external callers go
-through the batched API (or, for Distributions, through ProbPipe ops
-like `unnormalized_log_prob`).
+sabi defers to ProbPipe's vectorization contract for distributions:
 
-| Class | public batched | private single-point hook |
+- **Public APIs are vectorized.** Class methods that accept design
+  data (e.g., `decomposition.target_map(X)`) and ProbPipe ops on
+  `Distribution`s (`unnormalized_log_prob(target, X)`,
+  `log_prob(dist, X)`, `mean(rm)`, …) accept a leading batch axis
+  and return one. Subclasses' `_unnormalized_log_prob(x)` hooks are
+  expected to handle batched input natively (sum over the trailing
+  event axis with `axis=-1`, index with `x[..., k]`, etc.); the
+  ProbPipe ops do not vmap underneath you.
+- **`vmap` belongs to the implementation, not the API.** When a
+  method must internally apply a single-point computation per
+  event, that's an implementation detail of the method. Callers
+  pass batched inputs and get batched outputs; the conversion is
+  not their concern.
+- **Private hooks may be single-event by convention** in code that's
+  outside the ProbPipe distribution context (e.g., underscore
+  helpers like `_call_single` in older form classes, now mostly
+  gone). When sabi exposes such a hook, the public batched method
+  vmaps it. We minimize these cases — the goal is for most
+  density-bearing objects to be ProbPipe distributions and follow
+  the contract above directly.
+
+If something in ProbPipe's distributions doesn't follow this
+contract, that's a ProbPipe issue worth fixing upstream — see
+[probpipe_issues.md](probpipe_issues.md).
+
+| Class | public vectorized API | notes |
 |--|--|--|
 | `Emulator` | `__call__(X) -> Distribution` | inherited `predict_*` from `GaussianRandomFunction`, etc. |
-| `PointwiseScoredAcquisition` | `score(X, state) -> (n,)` | `_score_single(x, state) -> scalar` |
-| `DensityDecomposition` | `__call__(X, Y) -> (n,)`, `target_map(X) -> (n,) + output_shape` | `target_single(x) -> output_shape`, `density_at(x) -> ()` |
+| `PointwiseScoredAcquisition` | `score(X, state) -> (n,)` | `_score_single(x, state) -> scalar` is a private vmap-able single-point hook (one of the few exceptions) |
+| `TargetDistribution` (subclasses) | `unnormalized_log_prob(target, X)` op (ProbPipe) | subclasses' `_unnormalized_log_prob(x)` hook is itself vectorized |
+| `DensityDecomposition` (subclasses) | `unnormalized_log_prob(decomposition, X)` op + `decomposition.target_map(X)` | subclasses' `target_map(x)` is vectorized |
 
 Subclasses override the single-point hook; the batched method is
 provided by the base class via `jax.vmap` (or directly when a
@@ -164,21 +183,25 @@ batched `__call__` overriding the vmap path).
 
 ## `DensityDecomposition` shape contract
 
-``DensityDecomposition.__call__(x, y) = link(y) + shift(x)`` is the
-deterministic log-density at ``(x, y)``. Both single-point
-(``x.shape == input_shape``, ``y.shape == output_shape``) and batched
-(``x.shape == (n,) + input_shape``, ``y.shape == (n,) + output_shape``)
-inputs are supported via the underlying ``Map`` broadcasting. The
-batched form returns shape ``(n,)`` (one scalar per row).
+``DensityDecomposition`` is a ProbPipe ``NumericRecordDistribution``;
+its public surface is the standard ProbPipe ops. The unnormalized
+log-density at ``x`` decomposes as
+``link(target_map(x)) + shift(x)`` (or just ``link(target_map(x))``
+when ``shift is None``). The first term — the **log-prob residual**
+— is the contribution attributable to the emulator's output
+``y = target_map(x)``, after the link is applied; the shift is the
+deterministic x-dependent additive term.
 
-``density_at(x) = self(x, target_single(x))`` is the convenience for
-the typical "evaluate the decomposition at the analytical target's
-output." For batched ``X`` use ``self(X, target_map(X))`` directly —
-``density_at`` is single-point.
+Vectorized:
 
-Pushforward: ``pushforward(x, y_dist)`` constructs the per-``x`` map
-``Affine(slope=1.0, intercept=shift(x)) @ link`` and dispatches
-through ``sabi.maps.pushforward``. Closed-form for
+- ``unnormalized_log_prob(decomposition, X)`` returns ``(n,)`` for
+  ``X`` of shape ``(n,) + input_shape``.
+- ``decomposition.target_map(X)`` returns ``(n,) + output_shape``.
+
+Pushforward: ``decomposition.pushforward(x, y_dist)`` constructs the
+per-``x`` map ``Affine(slope=1.0, intercept=shift(x)) @ link`` (or
+just ``link`` when ``shift is None``) and dispatches through
+``sabi.maps.pushforward``. Closed-form for
 ``(Affine, Normal | MultivariateNormal)``; MC fallback for non-affine
 links via ``Compose`` recursion.
 

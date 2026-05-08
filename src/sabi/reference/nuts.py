@@ -1,10 +1,9 @@
-"""NUTS-based reference posterior generation via ProbPipe `condition_on`.
+"""NUTS-based reference posterior generation via ProbPipe ``condition_on``.
 
-Given an analytical ``target_log_prob`` callable + ``support`` +
-``input_shape``, wraps these in a ``TargetDistribution`` and calls
-``condition_on(target_dist, ...)``. ProbPipe's inference registry
-auto-dispatches to ``tfp_nuts`` since the distribution satisfies
-``SupportsUnnormalizedLogProb``.
+Given a :class:`TargetDistribution` whose subclass implements an
+analytical ``_unnormalized_log_prob``, calls
+``condition_on(target, ...)``. ProbPipe's inference registry
+auto-dispatches to ``tfp_nuts``.
 
 Diagnostics (R-hat, ESS, divergence count) are computed via ArviZ on
 the returned ``ApproximateDistribution.inference_data`` and embedded in
@@ -13,7 +12,6 @@ the saved metadata.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,14 +19,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax import Array
 from probpipe import condition_on
-from probpipe.core.constraints import Constraint
 
 from sabi.target_distribution import TargetDistribution
-
-
-# ---------------------------------------------------------------------------
-# Diagnostics
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -104,7 +96,6 @@ def _compute_diagnostics(approx) -> MCMCDiagnostics:
 
 
 def _flatten_diag_dataarray(da) -> dict[str, float]:
-    """Flatten an ArviZ R-hat / ESS xarray to a {label: value} dict."""
     out: dict[str, float] = {}
     for var_name in da.data_vars:
         arr = np.asarray(da[var_name].values)
@@ -115,41 +106,20 @@ def _flatten_diag_dataarray(da) -> dict[str, float]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# NUTS-driven reference generation
-# ---------------------------------------------------------------------------
-
-
 def generate_via_nuts(
     *,
-    target_log_prob: Callable[[Array], Array],
-    support: Constraint,
-    input_shape: tuple[int, ...],
+    target: TargetDistribution,
     num_results: int = 1000,
     num_warmup: int = 500,
     num_chains: int = 4,
     random_seed: int = 0,
-    name: str | None = None,
 ) -> tuple[Array, MCMCDiagnostics]:
-    """Run NUTS via ProbPipe ``condition_on`` against the problem's
-    unnormalized posterior.
+    """Run NUTS via ``condition_on(target, ...)``.
 
-    ``target_log_prob`` is the **single-point** analytical log-density
-    callable (shape ``input_shape -> ()``). Wrapped in a
-    :class:`TargetDistribution` (with the analytical density attached)
-    and fed to ``condition_on``.
-
-    Returns:
-        ``(samples, diagnostics)`` — flat
-        ``(num_chains * num_results, *input_shape)`` JAX array of
-        post-warmup draws plus R-hat / ESS / divergence counts.
+    Returns ``(samples, diagnostics)`` — flat
+    ``(num_chains * num_results, *target.input_shape)`` JAX array of
+    post-warmup draws plus R-hat / ESS / divergence counts.
     """
-    target = TargetDistribution(
-        name=name or "reference_target",
-        input_shape=input_shape,
-        support=support,
-        unnormalized_log_prob=target_log_prob,
-    )
     approx = condition_on(
         target,
         num_results=num_results,
@@ -159,5 +129,5 @@ def generate_via_nuts(
     )
     diagnostics = _compute_diagnostics(approx)
     chains = jnp.stack([jnp.asarray(c) for c in approx.chains], axis=0)
-    flat = chains.reshape((-1,) + tuple(input_shape))
+    flat = chains.reshape((-1,) + tuple(target.input_shape))
     return flat, diagnostics

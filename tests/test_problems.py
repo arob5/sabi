@@ -10,7 +10,7 @@ from probpipe.core.constraints import Constraint
 from probpipe.core.protocols import SupportsSampling
 from probpipe.distributions.multivariate import MultivariateNormal
 
-from sabi.density_decomposition import DensityDecomposition
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.problems.banana import banana
 from sabi.problems.base import BenchmarkProblem, Problem
 from sabi.problems.benchmarks import gaussian_2d
@@ -27,7 +27,7 @@ def test_gaussian_2d_has_expected_shapes_and_types():
 
 def test_gaussian_2d_log_prob_integrates_to_one():
     problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     xs = jnp.linspace(-6.0, 6.0, 300)
     ys = jnp.linspace(-6.0, 6.0, 300)
     grid = jnp.stack(jnp.meshgrid(xs, ys, indexing="ij"), axis=-1).reshape(-1, 2)
@@ -126,7 +126,7 @@ def test_banana_has_expected_shapes_and_types():
 
 def test_banana_log_prob_integrates_to_one():
     problem = banana(a=1.0, b=4.0)
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     xs = jnp.linspace(-4.0, 4.0, 300)
     ys = jnp.linspace(-10.0, 4.0, 300)
     grid = jnp.stack(jnp.meshgrid(xs, ys, indexing="ij"), axis=-1).reshape(-1, 2)

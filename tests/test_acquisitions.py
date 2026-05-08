@@ -11,7 +11,7 @@ from sabi.acquisitions.ei import ExpectedImprovement
 from sabi.acquisitions.optim import CandidateSetOptimizer
 from sabi.acquisitions.random import DistributionSampling
 from sabi.algorithms.algorithm import Algorithm
-from sabi.density_decomposition import DensityDecomposition
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.emulators.base import Emulator
 from sabi.surrogate.surrogate_distribution import EmulatedDistribution
 from sabi.surrogate.weighted_empirical import WeightedEmpiricalRandomMeasure
@@ -70,7 +70,7 @@ def test_ei_picks_points_with_higher_emulator_mean_than_random():
 
 def test_ei_average_best_beats_random_average_best_across_seeds():
     problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     state = make_acquisition_state(problem=problem, n=60)
 
     ei_bests = []
@@ -111,7 +111,7 @@ class _ConstantEmulator(Emulator):
 
 
 def _algorithm_for(problem) -> Algorithm:
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     return Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.input_shape),
         acquisition=DistributionSampling(),
@@ -125,7 +125,7 @@ def test_ei_collapses_to_zero_at_zero_variance():
     """`EI(x) = 0` whenever `σ(x) ≤ 1e-30`."""
     problem = gaussian_2d()
     target = problem.target_distribution
-    decomposition = DensityDecomposition.identity_from_target(target)
+    decomposition = LogProbTarget(target)
     design = _design_distribution(target)
     X = jnp.asarray(pp_sample(design, key=jax.random.key(0), sample_shape=(4,)))
     Y = decomposition.target_map(X)
@@ -154,7 +154,7 @@ def test_ei_raises_on_degenerate_surrogate_distribution():
     """`ExpectedImprovement` requires an emulator-backed `EmulatedDistribution`."""
     problem = gaussian_2d()
     target = problem.target_distribution
-    decomposition = DensityDecomposition.identity_from_target(target)
+    decomposition = LogProbTarget(target)
     design = _design_distribution(target)
     X = jnp.asarray(pp_sample(design, key=jax.random.key(0), sample_shape=(8,)))
     Y = decomposition.target_map(X)

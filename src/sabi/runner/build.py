@@ -24,7 +24,7 @@ from sabi.algorithms import (
     emulator_pushforward_factory,
     weighted_empirical_factory,
 )
-from sabi.density_decomposition import DensityDecomposition
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.metrics.base import Metric
 from sabi.metrics.mmd import MMD
 from sabi.metrics.scheduling import MetricTarget, ScheduledMetric
@@ -100,7 +100,9 @@ def build_density_decomposition(
             "for benchmark problems with analytical density."
         )
     if kind == "identity_from_target":
-        return DensityDecomposition.identity_from_target(problem.target_distribution)
+        # Trivial decomposition: emulator approximates the target's
+        # analytical unnormalized log-density directly.
+        return LogProbTarget(problem.target_distribution)
     raise ValueError(f"Unknown density_decomposition.kind={kind!r}.")
 
 

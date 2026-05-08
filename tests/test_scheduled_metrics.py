@@ -29,7 +29,7 @@ from probpipe.core._distribution_base import Distribution
 
 from sabi.acquisitions.random import DistributionSampling
 from sabi.algorithms import Algorithm, run
-from sabi.density_decomposition import DensityDecomposition
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.emulators import TinyGPEmulator
 from sabi.metrics import (
     Metric,
@@ -46,7 +46,7 @@ from sabi.problems.benchmarks import gaussian_2d
 def _algorithm(*, metrics, n_rounds=4, problem=None, **kwargs):
     if problem is None:
         problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     return Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.input_shape),
         acquisition=DistributionSampling(),
@@ -337,7 +337,7 @@ def test_terminal_target_differs_from_current_under_tempering():
     from sabi.tempering.schedule import FixedSchedule
 
     problem = gaussian_2d()
-    decomposition = DensityDecomposition.identity_from_target(problem.target_distribution)
+    decomposition = LogProbTarget(problem.target_distribution)
     box = problem.target_distribution.support
     initial = independent_uniform(low=jnp.asarray(box.low), high=jnp.asarray(box.high), name="init")
     alg = Algorithm(

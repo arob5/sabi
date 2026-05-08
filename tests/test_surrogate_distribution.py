@@ -38,11 +38,10 @@ from probpipe.core.protocols import (
     SupportsUnnormalizedLogProb,
 )
 from probpipe.distributions.continuous import Normal
-from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi._probpipe_compat import independent_uniform
-from sabi.density_decomposition import DensityDecomposition, ScalarConstant
-from sabi.maps import Identity as MapIdentity, LogProb, LogSquare
+from sabi.density_decomposition import LogProbTermTarget
+from sabi.maps import LogSquare
 from sabi.surrogate import (
     EmulatedDistribution,
     SurrogateDistribution,
@@ -53,7 +52,7 @@ from sabi.emulators import TinyGPEmulator
 
 
 # -------------------------------------------------------------------------
-# Fixtures
+# Fixtures: vectorized quadratic decompositions (per ProbPipe contract).
 # -------------------------------------------------------------------------
 
 
@@ -61,31 +60,50 @@ def _box_support(d: int = 2):
     return interval(jnp.full((d,), -5.0), jnp.full((d,), 5.0))
 
 
-def _quad(x):
-    return -0.5 * jnp.sum(x * x)
+def _quad_vectorized(x):
+    """Vectorized quadratic: sums over the trailing event axis only."""
+    return -0.5 * jnp.sum(x * x, axis=-1)
 
 
-def _identity_decomposition() -> DensityDecomposition:
-    return DensityDecomposition(
-        target_single=_quad,
-        output_shape=(),
-        link=MapIdentity(),
-    )
+class _QuadDecomp(LogProbTermTarget):
+    """Quadratic log-density decomposition, ``link=Identity``,
+    optional ``prior`` for shift."""
+
+    def __init__(self, *, d=2, prior=None):
+        super().__init__(
+            name="quad_decomp",
+            input_shape=(d,),
+            support=_box_support(d),
+            prior=prior,
+        )
+
+    def target_map(self, x):
+        return _quad_vectorized(x)
 
 
-def _log_lik_plus_prior_decomposition(prior) -> DensityDecomposition:
-    return DensityDecomposition(
-        target_single=_quad,
-        output_shape=(),
-        link=MapIdentity(),
-        shift=LogProb(prior),
-    )
+class _LogSquareDecomp(LogProbTermTarget):
+    """Decomposition with a non-affine link (forces MC fallback in pushforward)."""
+
+    def __init__(self, *, d=2):
+        super().__init__(
+            name="logsq_decomp",
+            input_shape=(d,),
+            support=_box_support(d),
+            prior=None,
+        )
+
+    def target_map(self, x):
+        return _quad_vectorized(x)
+
+    @property
+    def link(self):
+        return LogSquare()
 
 
 def _werm(n: int = 16, d: int = 2, seed: int = 0):
     key = jax.random.key(seed)
     X = jax.random.uniform(key, shape=(n, d), minval=-3.0, maxval=3.0)
-    log_w = -0.5 * jnp.sum(X ** 2, axis=-1)
+    log_w = _quad_vectorized(X)
     return WeightedEmpiricalRandomMeasure(
         X=X,
         log_weights=log_w,
@@ -98,10 +116,10 @@ def _werm(n: int = 16, d: int = 2, seed: int = 0):
 def _emulated(n: int = 20, d: int = 2, seed: int = 1, decomposition=None):
     key = jax.random.key(seed)
     X = jax.random.uniform(key, shape=(n, d), minval=-3.0, maxval=3.0)
-    Y = -0.5 * jnp.sum(X ** 2, axis=-1)
+    Y = _quad_vectorized(X)
     emulator = TinyGPEmulator(input_shape=(d,)).fit(X, Y)
     if decomposition is None:
-        decomposition = _identity_decomposition()
+        decomposition = _QuadDecomp(d=d)
     return EmulatedDistribution(
         emulator=emulator,
         decomposition=decomposition,
@@ -166,7 +184,7 @@ def test_emulated_distribution_requires_support():
     with pytest.raises(ValueError, match="support"):
         EmulatedDistribution(
             emulator=emulator,
-            decomposition=_identity_decomposition(),
+            decomposition=_QuadDecomp(),
             support=None,  # type: ignore[arg-type]
             input_shape=(2,),
         )
@@ -176,7 +194,7 @@ def test_emulated_distribution_rejects_none_emulator():
     with pytest.raises(ValueError, match="non-None `emulator`"):
         EmulatedDistribution(
             emulator=None,  # type: ignore[arg-type]
-            decomposition=_identity_decomposition(),
+            decomposition=_QuadDecomp(),
             support=_box_support(2),
             input_shape=(2,),
         )
@@ -202,7 +220,7 @@ def test_emulated_distribution_input_shape_must_match_emulator_input_shape():
     with pytest.raises(ValueError, match="input_shape"):
         EmulatedDistribution(
             emulator=emulator,
-            decomposition=_identity_decomposition(),
+            decomposition=_QuadDecomp(),
             support=_box_support(3),
             input_shape=(3,),
         )
@@ -244,13 +262,12 @@ def test_werm_random_log_prob_marginal_is_dirac_at_value():
 
 
 # -------------------------------------------------------------------------
-# EmulatedDistribution._random_unnormalized_log_prob — closed-form path
+# EmulatedDistribution._random_unnormalized_log_prob
 # -------------------------------------------------------------------------
 
 
 def test_emulated_random_unnormalized_log_prob_identity_returns_normal():
-    """Identity link + Constant(0) shift: pushforward through a Normal
-    emulator is a Normal with the same loc/scale (Affine(intercept=0))."""
+    """Identity link + no shift: pushforward through Normal returns Normal unchanged."""
     emulated = _emulated()
     X = jnp.asarray([[0.4, -0.1], [0.2, 0.3]])
     marginal = random_unnormalized_log_prob(emulated, X)
@@ -260,31 +277,22 @@ def test_emulated_random_unnormalized_log_prob_identity_returns_normal():
 
 
 def test_emulated_random_unnormalized_log_prob_log_lik_plus_prior_shifts_mean():
-    """Identity link + LogProb(prior) shift: pushforward through a Normal
-    is a Normal with loc shifted by ``log_prob(prior, x)`` per row."""
+    """Identity link + LogProb(prior) shift: pushforward shifts loc by per-row log_prior(x)."""
     prior = independent_uniform(
         low=jnp.full((2,), -5.0), high=jnp.full((2,), 5.0), name="p"
     )
-    emulated = _emulated(decomposition=_log_lik_plus_prior_decomposition(prior))
+    emulated = _emulated(decomposition=_QuadDecomp(prior=prior))
     X = jnp.asarray([[0.4, -0.1], [0.2, 0.3]])
     marginal = random_unnormalized_log_prob(emulated, X)
     assert isinstance(marginal, Normal)
     pred = emulated.emulator(X)
-    expected_shifts = jax.vmap(lambda x: jnp.asarray(log_prob(prior, x)))(X)
+    expected_shifts = jnp.asarray(log_prob(prior, X))
     expected_loc = jnp.asarray(pred.loc) + expected_shifts
     assert jnp.allclose(jnp.asarray(marginal.loc), expected_loc, atol=1e-5)
 
 
 def test_emulated_random_unnormalized_log_prob_non_affine_link_falls_to_mc():
-    """``LogSquare`` link is non-affine; the pushforward falls to MC and
-    returns a non-Normal Distribution."""
-    decomposition = DensityDecomposition(
-        target_single=_quad,
-        output_shape=(),
-        link=LogSquare(),
-        shift=ScalarConstant(jnp.asarray(0.0)),
-    )
-    emulated = _emulated(decomposition=decomposition)
+    emulated = _emulated(decomposition=_LogSquareDecomp())
     X = jnp.asarray([[0.4, -0.1], [0.2, 0.3]])
     marginal = random_unnormalized_log_prob(emulated, X)
     assert isinstance(marginal, Distribution)
@@ -323,12 +331,18 @@ def test_expected_target_for_emulated_satisfies_unnormalized_log_prob_and_sampli
 
 
 def test_expected_target_for_emulated_unnormalized_log_prob_matches_decomposition():
+    """``expected_target.unnormalized_log_prob(x)`` plugs the emulator's
+    predictive mean into the decomposition: equals
+    ``link(pred_mean) + shift(x)``."""
     emulated = _emulated()
     et = expected_target(emulated)
     x = jnp.asarray([0.3, -0.2])
     pred = emulated.emulator(x[None])
     pred_mean = jnp.asarray(mean(pred))[0]
-    expected = float(emulated.decomposition(x, pred_mean))
+    decomposition = emulated.decomposition
+    expected = float(decomposition.link(pred_mean))
+    if decomposition.shift is not None:
+        expected += float(decomposition.shift(x))
     assert float(et._unnormalized_log_prob(x)) == pytest.approx(expected, abs=1e-5)
 
 
