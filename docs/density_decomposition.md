@@ -81,7 +81,7 @@ seeds on the optimizers, modeling-prior add-on on the
 
 | Site | What it does |
 |------|--------------|
-| [`src/sabi/target_distribution.py`](../src/sabi/target_distribution.py) | `TargetDistribution(name, input_shape, output_shape, target_single, log_density_form, prior)` — six fields, three jobs (math identity + emulation strategy + algorithmic prior). |
+| `src/sabi/target_distribution.py` (deleted in #65) | Was the `TargetDistribution(name, input_shape, output_shape, target_single, log_density_form, prior)` wrapper — six fields, three jobs. Replaced by direct subclassing of ProbPipe's `NumericRecordDistribution` for benchmark targets, and `DensityDecomposition` for the algorithm-side bundle. |
 | `src/sabi/problems/forms.py` (deleted in #65) | Was the `LogDensityForm` family — three subclasses for one abstraction. Replaced by `DensityDecomposition` plus the `Map` ABC. |
 | [`src/sabi/problems/base.py`](../src/sabi/problems/base.py) | `Problem` (post-#61): pure identity wrapper. Unchanged by this refactor. |
 | `src/sabi/sampling.py` (deleted in #65) | Was the `BatchSampler` ABC + `PriorSampler` wrapper. Removed; importers route through `probpipe.sample` directly. |

@@ -99,7 +99,7 @@ The form hierarchy and its consumers:
 | `src/sabi/surrogate/_pushforward.py:144` (was) | `_shift_gaussian_loc` — bespoke handling of "shift `loc` by per-point log-prior, leave `scale_tril` alone." Generalised to `(Affine, Normal | MultivariateNormal)` registrations in [`sabi.maps`](../src/sabi/maps/_pushforward.py). |
 | [`src/sabi/surrogate/estimators.py:129`](../src/sabi/surrogate/estimators.py) | `_ExpectedTargetDistribution._unnormalized_log_prob` plug-in mean. The bias note at line 15 is a symptom of the existing exp-link composition. |
 | [`src/sabi/surrogate/weighted_empirical.py:64`](../src/sabi/surrogate/weighted_empirical.py) | `WeightedEmpiricalRandomMeasure` log-weights. Form output is converted externally; class is link-agnostic. |
-| [`src/sabi/target_distribution.py:56`](../src/sabi/target_distribution.py) | `TargetDistribution._unnormalized_log_prob` — ProbPipe boundary; consumes log-density. Link-agnostic boundary. |
+| `src/sabi/target_distribution.py:56` (deleted in #65) | Was `TargetDistribution._unnormalized_log_prob` — ProbPipe boundary; consumes log-density. Replaced by direct ProbPipe `NumericRecordDistribution` subclassing on the benchmark side. |
 | [`src/sabi/tempering/likelihood.py`](../src/sabi/tempering/likelihood.py) | `_LogLikPlusPriorTempered`, `_ForwardModelTempered`, `_IdentityTempered` — three subclasses for one β-scale rewrite. |
 
 Two things stand out:
