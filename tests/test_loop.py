@@ -33,7 +33,7 @@ def _algorithm(
 ):
     decomposition = LogProbTarget(problem.target_distribution)
     return Algorithm(
-        emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.input_shape),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.event_shape),
         acquisition=acquisition,
         density_decomposition=decomposition,
         n_initial=16,
@@ -48,7 +48,7 @@ def test_loop_runs_on_gaussian_2d_with_distribution_sampling_acq():
     problem = gaussian_2d()
     alg = _algorithm(problem, DistributionSampling(), n_rounds=5)
     result = run(problem, alg, jax.random.key(0))
-    assert result.X.shape == (16 + 4,) + problem.target_distribution.input_shape
+    assert result.X.shape == (16 + 4,) + problem.target_distribution.event_shape
     assert len(result.per_round_metrics) == 5
     assert all(m["tempering_state"] is None for m in result.per_round_metrics)
     assert "mmd2" in result.final_metrics
@@ -64,7 +64,7 @@ def test_loop_runs_on_banana_with_ei_acq():
         n_rounds=5,
     )
     result = run(problem, alg, jax.random.key(1))
-    assert result.X.shape == (16 + 4,) + problem.target_distribution.input_shape
+    assert result.X.shape == (16 + 4,) + problem.target_distribution.event_shape
     assert "mmd2" in result.final_metrics
 
 

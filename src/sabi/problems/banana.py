@@ -5,43 +5,14 @@ The 2-D form is the standard Rosenbrock-flavored banana benchmark; the
 and stacks Gaussian "filler" dimensions on top — a model widely used
 since Haario, Saksman & Tamminen (1999, 2001).
 
-Generative form (used to sample the reference):
-
-.. math::
-
-    z_1 &\sim \mathcal{N}(0, a^2), \\
-    z_2 &\sim \mathcal{N}(0, 1/b), \\
-    z_i &\sim \mathcal{N}(0, c^2), \quad i = 3, \dots, d.
-
-Twist:
-
-.. math::
-
-    x_1 = z_1, \quad x_2 = z_2 - z_1^2 + a^2, \quad x_i = z_i \;\; (i \ge 3).
-
-Resulting log-density on :math:`x \in \mathbb{R}^d`:
-
-.. math::
-
-    \log p(x) = -\tfrac{1}{2}\!\left(
-        \tfrac{x_1^2}{a^2}
-        + b\,(x_2 + x_1^2 - a^2)^2
-        + \tfrac{1}{c^2}\!\!\sum_{i=3}^{d} x_i^2
-    \right) + C.
-
-Reference samples are exact (factored Gaussian + inverse twist).
-
 Public surface:
 
-- :func:`banana` — factory returning a ``Problem`` whose
-  ``target_distribution`` is a :class:`BananaTarget` (analytical
-  density).
-- :class:`BananaTarget` — :class:`TargetDistribution` subclass with
-  the analytical ``_unnormalized_log_prob``.
+- :func:`banana` — factory returning a ``Problem``.
+- :class:`BananaTarget` — :class:`NumericRecordDistribution` subclass
+  with the analytical ``_unnormalized_log_prob`` (vectorized).
 - :class:`BananaLogProbDecomposition` —
   :class:`LogProbTermTarget` subclass that emulates the full
-  unnormalized log-density. The canonical decomposition for this
-  benchmark.
+  unnormalized log-density.
 """
 
 from __future__ import annotations
@@ -53,28 +24,23 @@ import jax.numpy as jnp
 from jax import Array
 from probpipe.core._distribution_base import Distribution
 from probpipe.core._empirical import NumericEmpiricalDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.density_decomposition import LogProbTermTarget
 from sabi.problems.base import Problem
-from sabi.target_distribution import TargetDistribution
 
 
 # ---------------------------------------------------------------------------
-# Private density helper — shared by the target's analytical density and the
-# decomposition's `target_map`. Single-event input (rank-1 ``x``).
+# Private density helper — vectorized.
 # ---------------------------------------------------------------------------
 
 
 def _banana_log_density(
     x: Array, *, a: float, b: float, c: float, d: int, log_norm: Array
 ) -> Array:
-    """Vectorized: ``x.shape == batch_shape + (d,)`` → ``batch_shape``.
-
-    Indexes the trailing event axis with ``x[..., k]`` so leading batch
-    dims pass through naturally.
-    """
+    """Vectorized: ``x.shape == batch_shape + (d,)`` → ``batch_shape``."""
     inv_c2 = 1.0 / (c * c)
     x1, x2 = x[..., 0], x[..., 1]
     z = x2 + x1 * x1 - a * a
@@ -90,7 +56,6 @@ def _banana_log_density(
 def _default_bounds(
     d: int, a: float, b: float, c: float
 ) -> tuple[tuple[float, float], ...]:
-    """Per-dim ``(lower, upper)`` covering ~4σ of the marginal."""
     sigma_2 = 1.0 / float(jnp.sqrt(b))
     x1_radius = 4.0 * a
     x2_lower = -10.0 * sigma_2 - 4.0 * a * a
@@ -102,31 +67,22 @@ def _default_bounds(
 
 
 # ---------------------------------------------------------------------------
-# TargetDistribution subclass — analytical density
+# NumericRecordDistribution subclass — analytical density
 # ---------------------------------------------------------------------------
 
 
-class BananaTarget(TargetDistribution):
-    """``TargetDistribution`` for the ``d``-dimensional banana benchmark.
-
-    Args:
-        name: ProbPipe distribution name.
-        input_shape: ``(d,)``.
-        support: ``Constraint`` over the parameter space.
-        a, b, c: banana-shape parameters.
-        d: parameter dimension.
-    """
+class BananaTarget(NumericRecordDistribution):
+    """``NumericRecordDistribution`` for the ``d``-dimensional banana benchmark."""
 
     def __init__(
         self,
         *,
-        name: str,
-        input_shape: tuple[int, ...],
-        support: Constraint,
+        d: int,
         a: float,
         b: float,
         c: float,
-        d: int,
+        support: Constraint,
+        name: str | None = None,
     ):
         self._a, self._b, self._c, self._d = a, b, c, d
         log2pi = jnp.log(2.0 * jnp.pi)
@@ -136,7 +92,16 @@ class BananaTarget(TargetDistribution):
             + 0.5 * jnp.log(b)
             - (d - 2) * jnp.log(c)
         )
-        super().__init__(name=name, input_shape=input_shape, support=support)
+        self._support = support
+        super().__init__(name=name or f"banana_d{d}_target")
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
+
+    @property
+    def support(self) -> Constraint:
+        return self._support
 
     def _unnormalized_log_prob(self, x: Array) -> Array:
         return _banana_log_density(
@@ -153,28 +118,18 @@ class BananaLogProbDecomposition(LogProbTermTarget):
     """Decomposition for the banana benchmark — full log-density emulation.
 
     ``link = Identity``, ``shift = None``: the emulator's
-    ``target_map(x)`` is the full unnormalized log-density. Equivalent
-    to ``LogProbTarget(banana_problem.target_distribution)`` but
-    implemented directly (no ``unnormalized_log_prob`` op indirection).
-
-    Args:
-        name: ProbPipe distribution name.
-        input_shape: ``(d,)``.
-        support: ``Constraint`` over the parameter space.
-        a, b, c: banana-shape parameters.
-        d: parameter dimension.
+    ``target_map(x)`` is the full unnormalized log-density.
     """
 
     def __init__(
         self,
         *,
-        name: str,
-        input_shape: tuple[int, ...],
-        support: Constraint,
+        d: int,
         a: float,
         b: float,
         c: float,
-        d: int,
+        support: Constraint,
+        name: str | None = None,
     ):
         self._a, self._b, self._c, self._d = a, b, c, d
         log2pi = jnp.log(2.0 * jnp.pi)
@@ -185,8 +140,12 @@ class BananaLogProbDecomposition(LogProbTermTarget):
             - (d - 2) * jnp.log(c)
         )
         super().__init__(
-            name=name, input_shape=input_shape, support=support, prior=None
+            name=name or f"banana_d{d}_decomp", support=support, prior=None
         )
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
 
     def target_map(self, x: Array) -> Array:
         return _banana_log_density(
@@ -207,14 +166,7 @@ def banana(
     bounds: Sequence[tuple[float, float]] | None = None,
     n_reference_samples: int = 4096,
 ) -> Problem:
-    """Build the `d`-dimensional banana benchmark.
-
-    Returns a ``Problem`` whose ``target_distribution`` is a
-    :class:`BananaTarget` (analytical density). The user constructs a
-    decomposition explicitly — typically
-    :class:`BananaLogProbDecomposition` for full log-density
-    emulation.
-    """
+    """Build the `d`-dimensional banana benchmark."""
     if d < 2:
         raise ValueError(f"d must be ≥ 2 (banana shape needs 2 dims), got {d}.")
     if a <= 0 or b <= 0 or c <= 0:
@@ -231,14 +183,8 @@ def banana(
         low=lower, high=upper, name=f"banana_d{d}_support"
     ).support
 
-    target = BananaTarget(
-        name=f"banana_d{d}_target",
-        input_shape=(d,),
-        support=support,
-        a=a, b=b, c=c, d=d,
-    )
+    target = BananaTarget(d=d, a=a, b=b, c=c, support=support)
 
-    # Reference samples (analytic factored draws).
     def sample_reference(key: Array, n: int) -> Array:
         keys = jax.random.split(key, 3)
         z1 = a * jax.random.normal(keys[0], shape=(n,))

@@ -29,7 +29,7 @@ from sabi.reference.io import (
     write_samples_parquet,
 )
 from sabi.reference.nuts import MCMCDiagnostics, generate_via_nuts
-from sabi.target_distribution import TargetDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 
 
 _DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "reference_posteriors"
@@ -57,7 +57,7 @@ def load_or_generate_reference_samples(
     *,
     problem_name: str,
     cache_key: str,
-    target: TargetDistribution,
+    target: NumericRecordDistribution,
     problem_params: dict[str, Any] | None = None,
     num_results: int = 1000,
     num_warmup: int = 500,
@@ -73,7 +73,7 @@ def load_or_generate_reference_samples(
     Args:
         problem_name: subdirectory under ``cache_dir``.
         cache_key: human-readable identifier of the problem variant.
-        target: a :class:`TargetDistribution` whose subclass implements
+        target: a :class:`NumericRecordDistribution` whose subclass implements
             an analytical ``_unnormalized_log_prob``. Fed directly to
             ``condition_on(...)``.
         problem_params: optional dict embedded verbatim in metadata.
@@ -128,7 +128,7 @@ def load_or_generate_reference_samples(
             "random_seed": random_seed,
         },
         "diagnostics": diagnostics.to_dict(),
-        "input_shape": list(target.input_shape),
+        "input_shape": list(target.event_shape),
         "n_samples": int(samples.shape[0]),
         "generated_at": now_iso(),
     }

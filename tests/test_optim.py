@@ -96,7 +96,7 @@ def test_candidate_set_optimizer_returns_top_q():
     state = _state()
     acq = ExpectedImprovement(optimizer=CandidateSetOptimizer(n_candidates=64))
     batch = acq.optimizer.optimize(acq, state, q=3, key=jax.random.key(7))
-    assert batch.shape == (3,) + state.problem.target_distribution.input_shape
+    assert batch.shape == (3,) + state.problem.target_distribution.event_shape
 
 
 def test_continuous_multistart_finds_known_concave_argmax():
@@ -139,7 +139,7 @@ def test_greedy_multi_point_returns_distinct_points():
     optimizer = GreedyMultiPointOptimizer(inner=inner, imputer=KrigingBeliever())
     acq = ExpectedImprovement(optimizer=optimizer)
     batch = optimizer.optimize(acq, state, q=3, key=jax.random.key(11))
-    assert batch.shape == (3,) + state.problem.target_distribution.input_shape
+    assert batch.shape == (3,) + state.problem.target_distribution.event_shape
     # No two picks coincide.
     pairs = [(0, 1), (0, 2), (1, 2)]
     for i, j in pairs:
@@ -155,7 +155,7 @@ def test_greedy_multi_point_with_constant_liar_min():
     )
     acq = ExpectedImprovement(optimizer=optimizer)
     batch = optimizer.optimize(acq, state, q=2, key=jax.random.key(13))
-    assert batch.shape == (2,) + state.problem.target_distribution.input_shape
+    assert batch.shape == (2,) + state.problem.target_distribution.event_shape
     assert not jnp.allclose(batch[0], batch[1], atol=1e-6)
 
 

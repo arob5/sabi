@@ -56,15 +56,14 @@ def make_acquisition_state(
     )
     X = jnp.asarray(pp_sample(initial_design, key=jax.random.key(seed), sample_shape=(n,)))
     Y = decomposition.target_map(X)
-    emulator = TinyGPEmulator(input_shape=target.input_shape).fit(X, Y)
+    emulator = TinyGPEmulator(input_shape=target.event_shape).fit(X, Y)
     surrogate_distribution = EmulatedDistribution(
         emulator=emulator,
         decomposition=decomposition,
         support=target.support,
-        input_shape=target.input_shape,
     )
     algorithm = Algorithm(
-        emulator_factory=lambda: TinyGPEmulator(input_shape=target.input_shape),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=target.event_shape),
         acquisition=DistributionSampling(),
         density_decomposition=decomposition,
         initial_design_distribution=initial_design,

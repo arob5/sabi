@@ -48,7 +48,7 @@ def _algorithm(*, metrics, n_rounds=4, problem=None, **kwargs):
         problem = gaussian_2d()
     decomposition = LogProbTarget(problem.target_distribution)
     return Algorithm(
-        emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.input_shape),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.event_shape),
         acquisition=DistributionSampling(),
         density_decomposition=decomposition,
         n_initial=8,

@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 from probpipe.core._empirical import NumericEmpiricalDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
 from sabi._probpipe_compat import independent_uniform
@@ -17,25 +18,11 @@ from sabi.reference.io import (
     write_metadata_json,
     write_samples_parquet,
 )
-from sabi.target_distribution import TargetDistribution
 
 
 # ---------------------------------------------------------------------------
-# Test target classes (subclasses with vectorized analytical density)
+# Test target classes (subclasses with vectorized analytical density).
 # ---------------------------------------------------------------------------
-
-
-class _Standard2DNormalTarget(TargetDistribution):
-    """Standard 2-D normal log-density. Vectorized over the trailing
-    event axis."""
-
-    def _unnormalized_log_prob(self, theta):
-        return -0.5 * jnp.sum(theta * theta, axis=-1)
-
-
-class _Standard1DNormalTarget(TargetDistribution):
-    def _unnormalized_log_prob(self, theta):
-        return -0.5 * jnp.sum(theta * theta, axis=-1)
 
 
 def _box_support(d: int = 2) -> Constraint:
@@ -44,20 +31,54 @@ def _box_support(d: int = 2) -> Constraint:
     ).support
 
 
-def _make_2d_target() -> TargetDistribution:
-    return _Standard2DNormalTarget(
-        name="std_2d_normal",
-        input_shape=(2,),
-        support=_box_support(2),
-    )
+class _StandardNormalTarget(NumericRecordDistribution):
+    """Standard ``d``-D normal log-density. Vectorized over the
+    trailing event axis."""
+
+    def __init__(self, *, d: int, name: str):
+        self._d = d
+        self._support = _box_support(d)
+        super().__init__(name=name)
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
+
+    @property
+    def support(self) -> Constraint:
+        return self._support
+
+    def _unnormalized_log_prob(self, theta):
+        return -0.5 * jnp.sum(theta * theta, axis=-1)
 
 
-def _make_1d_target() -> TargetDistribution:
-    return _Standard1DNormalTarget(
-        name="std_1d_normal",
-        input_shape=(1,),
-        support=_box_support(1),
-    )
+class _BadTarget(NumericRecordDistribution):
+    """Target whose `_unnormalized_log_prob` raises — used in cache-hit
+    tests to confirm NUTS doesn't run."""
+
+    def __init__(self, *, d: int = 2):
+        self._d = d
+        self._support = _box_support(d)
+        super().__init__(name="bad")
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
+
+    @property
+    def support(self) -> Constraint:
+        return self._support
+
+    def _unnormalized_log_prob(self, theta):
+        raise AssertionError("NUTS must not run on a cache hit.")
+
+
+def _make_2d_target() -> NumericRecordDistribution:
+    return _StandardNormalTarget(d=2, name="std_2d_normal")
+
+
+def _make_1d_target() -> NumericRecordDistribution:
+    return _StandardNormalTarget(d=1, name="std_1d_normal")
 
 
 # ---------------------------------------------------------------------------
@@ -92,14 +113,6 @@ def test_metadata_json_roundtrip(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-class _BadTarget(TargetDistribution):
-    """Target whose `_unnormalized_log_prob` raises — used in cache-hit
-    tests to confirm NUTS doesn't run."""
-
-    def _unnormalized_log_prob(self, theta):
-        raise AssertionError("NUTS must not run on a cache hit.")
-
-
 def test_cache_hit_skips_nuts(tmp_path):
     cache_dir = tmp_path / "refs"
     problem_dir = cache_dir / "fake_problem"
@@ -109,9 +122,7 @@ def test_cache_hit_skips_nuts(tmp_path):
     write_samples_parquet(samples, problem_dir / f"{fname}.parquet")
     write_metadata_json({"problem_name": "fake_problem"}, problem_dir / f"{fname}.json")
 
-    target = _BadTarget(
-        name="bad", input_shape=(2,), support=_box_support(2)
-    )
+    target = _BadTarget(d=2)
 
     ref = load_or_generate_reference_samples(
         problem_name="fake_problem",
@@ -140,7 +151,7 @@ def test_cache_keys_disambiguate_by_params(tmp_path):
     write_samples_parquet(samples_b, problem_dir / f"{fname_b}.parquet")
     write_metadata_json({"k": "B"}, problem_dir / f"{fname_b}.json")
 
-    target = _BadTarget(name="bad", input_shape=(2,), support=_box_support(2))
+    target = _BadTarget(d=2)
 
     ref_a = load_or_generate_reference_samples(
         problem_name="fake_problem",

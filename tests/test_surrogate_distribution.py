@@ -70,12 +70,16 @@ class _QuadDecomp(LogProbTermTarget):
     optional ``prior`` for shift."""
 
     def __init__(self, *, d=2, prior=None):
+        self._d = d
         super().__init__(
             name="quad_decomp",
-            input_shape=(d,),
             support=_box_support(d),
             prior=prior,
         )
+
+    @property
+    def event_shape(self):
+        return (self._d,)
 
     def target_map(self, x):
         return _quad_vectorized(x)
@@ -85,12 +89,16 @@ class _LogSquareDecomp(LogProbTermTarget):
     """Decomposition with a non-affine link (forces MC fallback in pushforward)."""
 
     def __init__(self, *, d=2):
+        self._d = d
         super().__init__(
             name="logsq_decomp",
-            input_shape=(d,),
             support=_box_support(d),
             prior=None,
         )
+
+    @property
+    def event_shape(self):
+        return (self._d,)
 
     def target_map(self, x):
         return _quad_vectorized(x)
@@ -108,7 +116,7 @@ def _werm(n: int = 16, d: int = 2, seed: int = 0):
         X=X,
         log_weights=log_w,
         support=_box_support(d),
-        input_shape=(d,),
+        inner_event_shape=(d,),
         name="werm_test",
     )
 
@@ -124,7 +132,6 @@ def _emulated(n: int = 20, d: int = 2, seed: int = 1, decomposition=None):
         emulator=emulator,
         decomposition=decomposition,
         support=_box_support(d),
-        input_shape=(d,),
         name="emulated_test",
     )
 
@@ -173,20 +180,18 @@ def test_werm_requires_support():
             X=jnp.zeros((4, 2)),
             log_weights=jnp.zeros(4),
             support=None,  # type: ignore[arg-type]
-            input_shape=(2,),
+            inner_event_shape=(2,),
         )
 
 
-def test_emulated_distribution_requires_support():
+def test_emulated_distribution_requires_decomposition():
     emulator = TinyGPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
-    with pytest.raises(ValueError, match="support"):
+    with pytest.raises(ValueError, match="decomposition"):
         EmulatedDistribution(
             emulator=emulator,
-            decomposition=_QuadDecomp(),
-            support=None,  # type: ignore[arg-type]
-            input_shape=(2,),
+            decomposition=None,  # type: ignore[arg-type]
         )
 
 
@@ -195,34 +200,19 @@ def test_emulated_distribution_rejects_none_emulator():
         EmulatedDistribution(
             emulator=None,  # type: ignore[arg-type]
             decomposition=_QuadDecomp(),
-            support=_box_support(2),
-            input_shape=(2,),
         )
 
 
-def test_emulated_distribution_rejects_none_decomposition():
+def test_emulated_distribution_event_shape_must_match_emulator_input_shape():
+    """``decomposition.event_shape`` must equal ``emulator.input_shape``."""
     emulator = TinyGPEmulator(input_shape=(2,)).fit(
         jnp.zeros((4, 2)), jnp.zeros(4)
     )
-    with pytest.raises(ValueError, match="decomposition"):
-        EmulatedDistribution(
-            emulator=emulator,
-            decomposition=None,  # type: ignore[arg-type]
-            support=_box_support(2),
-            input_shape=(2,),
-        )
-
-
-def test_emulated_distribution_input_shape_must_match_emulator_input_shape():
-    emulator = TinyGPEmulator(input_shape=(2,)).fit(
-        jnp.zeros((4, 2)), jnp.zeros(4)
-    )
+    decomposition_3d = _QuadDecomp(d=3)  # event_shape == (3,)
     with pytest.raises(ValueError, match="input_shape"):
         EmulatedDistribution(
             emulator=emulator,
-            decomposition=_QuadDecomp(),
-            support=_box_support(3),
-            input_shape=(3,),
+            decomposition=decomposition_3d,
         )
 
 

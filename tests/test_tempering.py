@@ -7,7 +7,8 @@ import pytest
 from sabi.density_decomposition import LogProbTarget
 from sabi.maps import Identity as MapIdentity
 from sabi.problems.base import Problem
-from sabi.target_distribution import IntermediateTarget, TargetDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
+from sabi.tempering import IntermediateTarget
 from sabi.tempering.base import NoTempering, TemperingScheme
 from sabi.tempering.schedule import FixedSchedule, TemperingSchedule, UntemperedSchedule
 
@@ -19,11 +20,10 @@ from tests._targets import OpaqueTarget, QuadraticTarget, box_support, quadratic
 # -------------------------------------------------------------------------
 
 
-def test_no_tempering_returns_intermediate_target_subclass():
+def test_no_tempering_returns_intermediate_target_dataclass():
     target = QuadraticTarget()
     intermediate = NoTempering().intermediate_target(target, state=None)
     assert isinstance(intermediate, IntermediateTarget)
-    assert isinstance(intermediate, TargetDistribution)
 
 
 def test_no_tempering_intermediate_decomposition_returns_base_unchanged():
@@ -59,24 +59,22 @@ def test_no_tempering_invariance_flags_are_true():
 
 
 def test_intermediate_target_is_metadata_only():
-    """``IntermediateTarget`` is metadata-only — no analytical density.
-    The per-state effective decomposition lives elsewhere."""
+    """``IntermediateTarget`` is a frozen dataclass carrying only
+    ``state`` and ``output_transform``. It is *not* a Distribution —
+    the per-state effective decomposition lives separately."""
     target = QuadraticTarget()
-    intermediate = NoTempering().intermediate_target(target, state=None)
-    # Intermediate has no `_unnormalized_log_prob` of its own — it does
-    # not satisfy SupportsUnnormalizedLogProb (the base TargetDistribution
-    # is abstract with respect to the density).
-    from probpipe.core.protocols import SupportsUnnormalizedLogProb
-    assert not isinstance(intermediate, SupportsUnnormalizedLogProb)
+    intermediate = NoTempering().intermediate_target(target, state=42.0)
+    assert intermediate.state == 42.0
+    assert hasattr(intermediate, "output_transform")
+    assert not hasattr(intermediate, "_unnormalized_log_prob")
 
 
-def test_no_tempering_intermediate_propagates_opaque_target():
-    """An intermediate built from an opaque target is also opaque
-    (metadata-only)."""
-    target = OpaqueTarget()
-    intermediate = NoTempering().intermediate_target(target, state=None)
-    from probpipe.core.protocols import SupportsUnnormalizedLogProb
-    assert not isinstance(intermediate, SupportsUnnormalizedLogProb)
+def test_no_tempering_intermediate_independent_of_target_density():
+    """The intermediate is decoupled from the target's density: an
+    opaque target produces the same metadata shape as an analytical one."""
+    intermediate_opaque = NoTempering().intermediate_target(OpaqueTarget(), state="x")
+    intermediate_analytic = NoTempering().intermediate_target(QuadraticTarget(), state="x")
+    assert intermediate_opaque.state == intermediate_analytic.state == "x"
 
 
 # -------------------------------------------------------------------------
@@ -173,11 +171,13 @@ def test_no_tempering_decomposition_link_is_identity_map():
 
 def test_problem_target_distribution_round_trips_via_no_tempering():
     """Wraps a target in a Problem; NoTempering's intermediate carries
-    matching support and input_shape (math identity preserved)."""
+    the schedule state + identity output_transform (metadata only)."""
+    from sabi.tempering.output_transform import Identity as IdentityTransform
+
     target = QuadraticTarget()
     problem = Problem(target_distribution=target, name="quad_problem")
     intermediate = NoTempering().intermediate_target(
         problem.target_distribution, state=None
     )
-    assert intermediate.input_shape == target.input_shape
-    assert intermediate.support is target.support
+    assert intermediate.state is None
+    assert isinstance(intermediate.output_transform, IdentityTransform)

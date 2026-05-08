@@ -76,7 +76,6 @@ def expected_target(
         return _ExpectedTargetDistribution(
             emulator=surrogate_distribution.emulator,
             decomposition=surrogate_distribution.decomposition,
-            input_shape=surrogate_distribution.inner_event_shape,
             support=surrogate_distribution.inner_support,
             sampler=sampler,
             sampler_kwargs=sampler_kwargs,
@@ -107,7 +106,6 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
         emulator: Emulator,
         decomposition: DensityDecomposition,
         *,
-        input_shape: tuple[int, ...],
         support: Constraint,
         sampler: str | None = None,
         sampler_kwargs: dict[str, Any] | None = None,
@@ -115,7 +113,6 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
     ):
         self._emulator = emulator
         self._decomposition = decomposition
-        self._input_shape = tuple(input_shape)
         self._support_value = support
         self._sampler = sampler
         self._sampler_kwargs = dict(sampler_kwargs) if sampler_kwargs else {}
@@ -123,7 +120,7 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
 
     @property
     def event_shape(self) -> tuple[int, ...]:
-        return self._input_shape
+        return self._decomposition.event_shape
 
     @property
     def support(self) -> Constraint:
@@ -134,14 +131,12 @@ class _ExpectedTargetDistribution(NumericRecordDistribution):
 
         Substitutes the emulator's predictive mean for the
         decomposition's ``target_map(x)`` and composes through ``link``
-        and ``shift``. ProbPipe's op handles batching.
+        and ``shift``.
         """
-        # The emulator expects a leading batch axis. For a single
-        # event, prepend one; the result is shape (1,) or (1,) +
-        # output_shape. For batched x, the emulator's predictive is
-        # shape (n,) + output_shape natively.
         x_arr = jnp.asarray(x)
-        if x_arr.ndim == len(self._input_shape):
+        # The emulator expects a leading batch axis. For a single event,
+        # prepend one; the result is shape (1,) + output_shape.
+        if x_arr.ndim == len(self.event_shape):
             pred = self._emulator(x_arr[None])
             pred_mean = jnp.asarray(mean(pred))[0]
         else:

@@ -54,10 +54,11 @@ from sabi.metrics.scheduling import (
     normalize_metrics,
     validate_metric_keys,
 )
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
+
 from sabi.surrogate.surrogate_distribution import SurrogateDistribution
 from sabi.problems.base import Problem
-from sabi.target_distribution import IntermediateTarget, TargetDistribution
-from sabi.tempering.base import InvarianceFlags
+from sabi.tempering.base import IntermediateTarget, InvarianceFlags
 from sabi.tempering.output_transform import OutputTransform
 
 
@@ -122,7 +123,7 @@ class _ResolvedAlgorithm:
     x_support: Constraint
 
 
-def _resolve_run_inputs(algorithm: Algorithm, target: TargetDistribution) -> _ResolvedAlgorithm:
+def _resolve_run_inputs(algorithm: Algorithm, target: NumericRecordDistribution) -> _ResolvedAlgorithm:
     """Fill `Algorithm`'s nullable fields from the target's defaults.
 
     Per ``docs/density_decomposition.md`` §3.3:
@@ -346,7 +347,7 @@ def _run_initial_round(
     problem: Problem,
     algorithm: Algorithm,
     scheduled: Sequence[ScheduledMetric],
-    target: TargetDistribution,
+    target: NumericRecordDistribution,
     base_decomposition: DensityDecomposition,
     initial_design_distribution: Distribution,
     x_support: Constraint,  # noqa: ARG001 — kept for symmetry / future use
@@ -410,7 +411,7 @@ def _run_final_eval(
     X: Array,
     Y_raw: Array,
     Y_train: Array,
-    target: TargetDistribution,
+    target: NumericRecordDistribution,
     base_decomposition: DensityDecomposition,
     algorithm: Algorithm,
     scheduled: Sequence[ScheduledMetric],
@@ -455,7 +456,7 @@ def _run_final_eval(
 
 def _resolve_round_state(
     algorithm: Algorithm,
-    target: TargetDistribution,
+    target: NumericRecordDistribution,
     base_decomposition: DensityDecomposition,
     round_idx: int,
 ) -> RoundState:
@@ -619,7 +620,7 @@ def _build_round_metrics_row(
     scheduled: Sequence[ScheduledMetric],
     algorithm: Algorithm,
     problem: Problem,
-    target: TargetDistribution,
+    target: NumericRecordDistribution,
     base_decomposition: DensityDecomposition,
     round_state: RoundState,
     emulator: Emulator,
@@ -666,7 +667,7 @@ def _eval_round(
     scheduled_firing: Sequence[ScheduledMetric],
     algorithm: Algorithm,
     problem: Problem,
-    target: TargetDistribution,  # noqa: ARG001 — kept for context plumbing
+    target: NumericRecordDistribution,  # noqa: ARG001 — kept for context plumbing
     base_decomposition: DensityDecomposition,
     current_intermediate: IntermediateTarget,  # noqa: ARG001
     current_decomposition: DensityDecomposition,
@@ -826,7 +827,6 @@ def _build_surrogate_distribution(
         Y=Y,
         decomposition=decomposition,
         support=target.support,
-        input_shape=target.input_shape,
         problem_name=problem.name,
     )
 

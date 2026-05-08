@@ -50,12 +50,13 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
     emulator and no form.
 
     Args:
-        X: design points, shape `(n,) + input_shape`.
+        X: design points, shape `(n,) + inner_event_shape`.
         log_weights: shape `(n,)` — unnormalized log-weights at each
             design point. Typically the deterministic log-posterior at
             `X[i]` under the loop's current `DensityDecomposition`.
         support: `Constraint` over the inner samples (parameter space).
-        input_shape: shape of one parameter-space point.
+        inner_event_shape: shape of one inner sample (one
+            parameter-space point).
         name: optional ProbPipe distribution name.
     """
 
@@ -68,15 +69,15 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
         log_weights: Array,
         *,
         support: Constraint,
-        input_shape: tuple[int, ...],
+        inner_event_shape: tuple[int, ...],
         name: str | None = None,
     ):
         X = jnp.asarray(X)
         log_weights = jnp.asarray(log_weights)
-        if X.shape[1:] != tuple(input_shape):
+        if X.shape[1:] != tuple(inner_event_shape):
             raise ValueError(
                 f"X.shape[1:]={X.shape[1:]} must match "
-                f"input_shape={tuple(input_shape)}."
+                f"inner_event_shape={tuple(inner_event_shape)}."
             )
         if log_weights.shape != (X.shape[0],):
             raise ValueError(
@@ -90,10 +91,7 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
         self._X = X
         self._log_weights = log_weights
         self._support = support
-        self._input_shape = tuple(input_shape)
-        # Direct super-init: the abstract `SurrogateDistribution` takes
-        # only `name`. No bogus `emulator=None, decomposition=None`
-        # kwargs (those didn't belong on the base in the first place).
+        self._inner_event_shape = tuple(inner_event_shape)
         super().__init__(name=name or type(self).__name__)
 
     # NumericRandomMeasure abstract properties
@@ -104,7 +102,7 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
 
     @property
     def inner_event_shape(self) -> tuple[int, ...]:
-        return self._input_shape
+        return self._inner_event_shape
 
     @property
     def X(self) -> Array:
@@ -140,7 +138,7 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
         emp = self.inner_distribution
         return _DiracArrayRandomFunction(
             evaluator=lambda x: jnp.asarray(log_prob(emp, x)),
-            input_shape=self._input_shape,
+            input_shape=self._inner_event_shape,
             output_shape=(),
             name=f"{self.name}_random_log_prob",
         )
@@ -151,7 +149,7 @@ class WeightedEmpiricalRandomMeasure(SurrogateDistribution):
         emp = self.inner_distribution
         return _DiracArrayRandomFunction(
             evaluator=lambda x: jnp.asarray(log_prob(emp, x)),
-            input_shape=self._input_shape,
+            input_shape=self._inner_event_shape,
             output_shape=(),
             name=f"{self.name}_random_unnormalized_log_prob",
         )

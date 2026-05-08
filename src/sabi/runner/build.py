@@ -231,7 +231,7 @@ def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
     )
     return Algorithm(
         emulator_factory=_build_emulator_factory(
-            cfg.emulator, input_shape=problem.target_distribution.input_shape
+            cfg.emulator, input_shape=problem.target_distribution.event_shape
         ),
         acquisition=_build_acquisition(cfg.acquisition),
         density_decomposition=decomposition,

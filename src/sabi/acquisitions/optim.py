@@ -267,7 +267,6 @@ class GreedyMultiPointOptimizer(PointwiseOptimizer):
                     emulator=new_emulator,
                     decomposition=current.decomposition,
                     support=current.inner_support,
-                    input_shape=current.inner_event_shape,
                     name=current.name,
                 )
                 cur_state = replace(

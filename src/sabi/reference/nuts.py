@@ -1,6 +1,6 @@
 """NUTS-based reference posterior generation via ProbPipe ``condition_on``.
 
-Given a :class:`TargetDistribution` whose subclass implements an
+Given a :class:`NumericRecordDistribution` whose subclass implements an
 analytical ``_unnormalized_log_prob``, calls
 ``condition_on(target, ...)``. ProbPipe's inference registry
 auto-dispatches to ``tfp_nuts``.
@@ -20,7 +20,7 @@ import numpy as np
 from jax import Array
 from probpipe import condition_on
 
-from sabi.target_distribution import TargetDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 
 
 @dataclass(frozen=True)
@@ -108,7 +108,7 @@ def _flatten_diag_dataarray(da) -> dict[str, float]:
 
 def generate_via_nuts(
     *,
-    target: TargetDistribution,
+    target: NumericRecordDistribution,
     num_results: int = 1000,
     num_warmup: int = 500,
     num_chains: int = 4,
@@ -117,7 +117,7 @@ def generate_via_nuts(
     """Run NUTS via ``condition_on(target, ...)``.
 
     Returns ``(samples, diagnostics)`` — flat
-    ``(num_chains * num_results, *target.input_shape)`` JAX array of
+    ``(num_chains * num_results, *target.event_shape)`` JAX array of
     post-warmup draws plus R-hat / ESS / divergence counts.
     """
     approx = condition_on(
@@ -129,5 +129,5 @@ def generate_via_nuts(
     )
     diagnostics = _compute_diagnostics(approx)
     chains = jnp.stack([jnp.asarray(c) for c in approx.chains], axis=0)
-    flat = chains.reshape((-1,) + tuple(target.input_shape))
+    flat = chains.reshape((-1,) + tuple(target.event_shape))
     return flat, diagnostics

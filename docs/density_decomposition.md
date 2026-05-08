@@ -97,59 +97,52 @@ and the `prior` field's four roles fan out to four different sites.
 
 ## 3. Proposal
 
-### 3.1 `TargetDistribution`
+### 3.1 The target: any `NumericRecordDistribution`
 
-`TargetDistribution` is an **abstract** ProbPipe `NumericRecordDistribution`.
-The constructor stores the math identity (`name`, `input_shape`,
-`support`); subclasses with an analytical density implement
-`_unnormalized_log_prob` per the ProbPipe protocol.
+The original draft proposed a sabi-side `TargetDistribution` class as
+a thin wrapper for ``(name, input_shape, support)`` plus the analytical
+density. The implementation drops that wrapper entirely:
+**``Problem.target_distribution`` is just a ProbPipe
+`NumericRecordDistribution`**, with no sabi-side class in between. The
+ProbPipe base already provides ``event_shape``, ``support``, ``name``,
+and the ``_unnormalized_log_prob`` protocol — exactly what the wrapper
+was duplicating.
 
-```python
-class TargetDistribution(NumericRecordDistribution):
-    def __init__(self, *, name, input_shape, support):
-        ...
-
-    # `_unnormalized_log_prob` intentionally NOT defined here.
-    # Subclasses with an analytical density override it; subclasses
-    # without leave it undefined.
-```
-
-For benchmarks, the subclass provides the analytical density
-directly:
+For benchmarks, the subclass provides the analytical density directly:
 
 ```python
-class BananaTarget(TargetDistribution):
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
+
+class BananaTarget(NumericRecordDistribution):
+    @property
+    def event_shape(self): return (self._d,)
+
+    @property
+    def support(self): return self._support
+
     def _unnormalized_log_prob(self, x):
         # Vectorized: x.shape == batch_shape + (d,) -> batch_shape
         ...
 ```
 
 For user inverse problems where no analytical density is available,
-the subclass simply does not override `_unnormalized_log_prob` (or
-the user uses a bare `TargetDistribution` subclass with only the
-metadata). The absence of the override means
-`isinstance(target, SupportsUnnormalizedLogProb)` returns False and
-ProbPipe ops naturally complain — no hand-rolled `NotImplementedError`
-needed.
+the subclass simply does not override `_unnormalized_log_prob`. The
+absence of the override means ``isinstance(target,
+SupportsUnnormalizedLogProb)`` returns False and ProbPipe ops
+naturally complain — no hand-rolled `NotImplementedError` needed.
 
-Dropped fields, relative to the v0.x layout: `prior`, `target_single`,
-`target_map`, `output_shape`, `log_density_form`. `support` becomes a
-first-class field (no longer derived from `prior.support`). The
-`target_distribution` field on `Problem` (set by [#61](https://github.com/arob5/sabi/pull/61))
-remains; only its internal shape changes.
+Dropped fields, relative to the v0.x layout: ``prior``,
+``target_single``, ``target_map``, ``output_shape``,
+``log_density_form``. ``support`` becomes a first-class field on the
+target's subclass (no longer derived from ``prior.support``). The
+``target_distribution`` field on ``Problem`` remains; its type widens
+from a sabi-specific class to ``NumericRecordDistribution``.
 
 The MCMC-relevant random log-density boundary is
-`EmulatedDistribution._random_unnormalized_log_prob`, which calls
-`decomposition.pushforward(X, emulator_predictive)`. See
+``EmulatedDistribution._random_unnormalized_log_prob``, which calls
+``decomposition.pushforward(X, emulator_predictive)``. See
 [link_functions.md §7](link_functions.md#7-probpipe-boundary--log-density-at-the-mcmc-seam)
 for the full boundary discussion.
-
-`Constraint` is the right type for `support` because (a) it's
-already what acquisitions consume for the unconstrained
-reparameterization bijector, (b) it covers bounded boxes,
-half-spaces, `real`, and whatever else, and (c) it cleanly admits
-the "unbounded parameter space" case (which previously was expressed
-by an unbounded prior, an awkward overload of the field).
 
 ### 3.2 `DensityDecomposition`
 

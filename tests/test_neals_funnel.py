@@ -21,7 +21,7 @@ def test_neals_funnel_shapes_and_types():
     """Construct neals_funnel; reference loads from cache."""
     problem = neals_funnel(d=2)
     target = problem.target_distribution
-    assert target.input_shape == (3,)
+    assert target.event_shape == (3,)
     assert isinstance(target.support, Constraint)
     assert isinstance(problem.reference_distribution, NumericEmpiricalDistribution)
     assert isinstance(problem.reference_distribution, SupportsSampling)

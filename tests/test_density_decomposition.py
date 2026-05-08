@@ -83,7 +83,6 @@ def test_density_decomposition_is_a_distribution():
     assert isinstance(dd, Distribution)
     assert isinstance(dd, SupportsUnnormalizedLogProb)
     assert dd.event_shape == (2,)
-    assert dd.input_shape == (2,)
     assert dd.output_shape == ()
 
 
@@ -126,6 +125,10 @@ def test_log_prob_target_delegates_to_wrapped_target():
 class _IdentityForwardDecomposition(GaussianForwardModelTarget):
     """Forward model is the identity ``f(x) = x``; obs and cov user-supplied."""
 
+    @property
+    def event_shape(self):
+        return (2,)
+
     def target_map(self, x):
         return x
 
@@ -137,7 +140,6 @@ def test_gaussian_forward_model_density():
     cov = jnp.eye(2)
     dd = _IdentityForwardDecomposition(
         name="gfm",
-        input_shape=(2,),
         support=box_support(),
         obs=obs,
         cov=cov,
@@ -186,6 +188,10 @@ def test_pushforward_mc_fallback_for_non_affine_link():
     """A non-affine link forces MC fallback (returns a non-Normal Distribution)."""
 
     class _LogSquareDecomp(LogProbTermTarget):
+        @property
+        def event_shape(self):
+            return (2,)
+
         def target_map(self, x):
             return quadratic_log_density(x)
 
@@ -193,7 +199,7 @@ def test_pushforward_mc_fallback_for_non_affine_link():
         def link(self):
             return LogSquare()
 
-    dd = _LogSquareDecomp(name="logsq", input_shape=(2,), support=box_support())
+    dd = _LogSquareDecomp(name="logsq", support=box_support())
     x = jnp.asarray([0.0, 0.0])
     y_dist = Normal(loc=jnp.asarray(1.0), scale=jnp.asarray(0.5), name="y_dist")
     pushed = dd.pushforward(x, y_dist)

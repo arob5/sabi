@@ -97,10 +97,10 @@ class EmulatedDistribution(SurrogateDistribution):
             ``__call__(X, joint_inputs, joint_outputs)``.
         decomposition: the :class:`DensityDecomposition` that composes
             the emulator's outputs with link / shift into an unnormalized
-            log-posterior.
-        support: ``Constraint`` over the parameter space.
-        input_shape: shape of one parameter-space point. Must equal
-            ``emulator.input_shape``.
+            log-posterior. Provides the inner event shape (via
+            ``decomposition.event_shape``) and default support.
+        support: optional ``Constraint`` over the parameter space.
+            Defaults to ``decomposition.support``.
         name: optional ProbPipe distribution name.
     """
 
@@ -109,8 +109,7 @@ class EmulatedDistribution(SurrogateDistribution):
         emulator: Emulator,
         decomposition: DensityDecomposition,
         *,
-        support: Constraint,
-        input_shape: tuple[int, ...],
+        support: Constraint | None = None,
         name: str | None = None,
     ):
         if emulator is None:
@@ -123,17 +122,16 @@ class EmulatedDistribution(SurrogateDistribution):
             raise ValueError(
                 "EmulatedDistribution requires a non-None `decomposition`."
             )
-        if support is None:
-            raise ValueError("EmulatedDistribution requires a non-None `support`.")
-        if tuple(input_shape) != tuple(emulator.input_shape):
+        inner_event_shape = tuple(decomposition.event_shape)
+        if tuple(emulator.input_shape) != inner_event_shape:
             raise ValueError(
-                f"input_shape={tuple(input_shape)} must match "
-                f"emulator.input_shape={tuple(emulator.input_shape)}."
+                f"emulator.input_shape={tuple(emulator.input_shape)} must "
+                f"match decomposition.event_shape={inner_event_shape}."
             )
         self._emulator = emulator
         self._decomposition = decomposition
-        self._support = support
-        self._input_shape = tuple(input_shape)
+        self._support = support if support is not None else decomposition.support
+        self._inner_event_shape = inner_event_shape
         super().__init__(name=name or type(self).__name__)
 
     # NumericRandomMeasure abstract properties
@@ -144,7 +142,7 @@ class EmulatedDistribution(SurrogateDistribution):
 
     @property
     def inner_event_shape(self) -> tuple[int, ...]:
-        return self._input_shape
+        return self._inner_event_shape
 
     @property
     def emulator(self) -> Emulator:

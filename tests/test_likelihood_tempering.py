@@ -19,7 +19,7 @@ from sabi.density_decomposition import (
     LogProbTermTarget,
 )
 from sabi.maps import GaussianLogLik
-from sabi.target_distribution import IntermediateTarget
+from sabi.tempering import IntermediateTarget
 from sabi.tempering.likelihood import (
     LikelihoodTemperingViaForm,
     LikelihoodTemperingViaTarget,
@@ -51,6 +51,10 @@ def _identity_decomposition() -> DensityDecomposition:
 
 class _IdentityForwardModelGaussian(GaussianForwardModelTarget):
     """Gaussian forward model with f(x) = x — for tempering tests."""
+
+    @property
+    def event_shape(self):
+        return (2,)
 
     def target_map(self, x):
         return x
@@ -98,7 +102,6 @@ def test_via_form_forward_model_scales_link():
     cov = jnp.eye(2)
     base = _IdentityForwardModelGaussian(
         name="fmtest",
-        input_shape=(2,),
         support=box_support(),
         obs=obs,
         cov=cov,
@@ -213,7 +216,6 @@ def test_via_target_rejects_non_identity_link():
     prior = box_uniform()
     base = _IdentityForwardModelGaussian(
         name="fmtest",
-        input_shape=(2,),
         support=box_support(),
         obs=jnp.asarray([1.0, 1.0]),
         cov=jnp.eye(2),

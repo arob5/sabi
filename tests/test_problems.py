@@ -20,7 +20,7 @@ from sabi.problems.gaussian import gaussian
 def test_gaussian_2d_has_expected_shapes_and_types():
     problem = gaussian_2d()
     target = problem.target_distribution
-    assert target.input_shape == (2,)
+    assert target.event_shape == (2,)
     assert isinstance(target.support, Constraint)
     assert isinstance(problem.reference_distribution, MultivariateNormal)
 
@@ -57,7 +57,7 @@ def test_gaussian_reference_distribution_samples_match_custom_moments():
 def test_gaussian_d_default_recovers_2d_shape():
     """`gaussian()` defaults to d=2; isotropic identity covariance."""
     p = gaussian()
-    assert p.target_distribution.input_shape == (2,)
+    assert p.target_distribution.event_shape == (2,)
     assert isinstance(p.reference_distribution, MultivariateNormal)
 
 
@@ -66,7 +66,7 @@ def test_gaussian_higher_d_shapes_and_log_prob():
     underlying MultivariateNormal for the same x."""
     p = gaussian(d=5)
     target = p.target_distribution
-    assert target.input_shape == (5,)
+    assert target.event_shape == (5,)
     x = jnp.zeros(5)
     # At x=0 with mean=0, cov=I_5, log p = -0.5 * 5 * log(2π).
     expected = -0.5 * 5.0 * float(jnp.log(2 * jnp.pi))
@@ -118,7 +118,7 @@ def test_gaussian_2d_benchmark_preserves_correlated_default():
 def test_banana_has_expected_shapes_and_types():
     problem = banana()
     target = problem.target_distribution
-    assert target.input_shape == (2,)
+    assert target.event_shape == (2,)
     assert isinstance(target.support, Constraint)
     assert isinstance(problem.reference_distribution, NumericEmpiricalDistribution)
     assert isinstance(problem.reference_distribution, SupportsSampling)
@@ -142,7 +142,7 @@ def test_banana_d_default_recovers_2d():
     p_explicit = banana(d=2)
     td_default = p_default.target_distribution
     td_explicit = p_explicit.target_distribution
-    assert td_default.input_shape == td_explicit.input_shape == (2,)
+    assert td_default.event_shape == td_explicit.event_shape == (2,)
     # The log-density at the same point must agree (both use Identity form).
     x = jnp.asarray([0.3, -1.7])
     assert float(td_default._unnormalized_log_prob(x)) == pytest.approx(
@@ -154,7 +154,7 @@ def test_banana_higher_d_shapes():
     """`banana(d=10)` exposes a 10-D Problem."""
     problem = banana(d=10)
     target = problem.target_distribution
-    assert target.input_shape == (10,)
+    assert target.event_shape == (10,)
     assert isinstance(problem.reference_distribution, NumericEmpiricalDistribution)
 
 
@@ -263,7 +263,7 @@ def test_benchmark_problem_isinstance_of_problem():
         name="banana_2d",
     )
     assert isinstance(bp, Problem)
-    assert bp.target_distribution.input_shape == base.target_distribution.input_shape
+    assert bp.target_distribution.event_shape == base.target_distribution.event_shape
     assert bp.artifact_version == "v1"
 
 

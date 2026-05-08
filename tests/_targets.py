@@ -1,9 +1,8 @@
-"""Shared test fixtures: reusable ``TargetDistribution`` and
+"""Shared test fixtures: reusable ``NumericRecordDistribution`` and
 ``DensityDecomposition`` subclasses.
 
 Tests that need a target / decomposition pair use these instead of
-defining one-off subclasses inline. Keeps test files focused on the
-behavior under test.
+defining one-off subclasses inline.
 """
 
 from __future__ import annotations
@@ -11,11 +10,11 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import Array
 from probpipe.core._distribution_base import Distribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.density_decomposition import LogProbTermTarget
-from sabi.target_distribution import TargetDistribution
 
 
 def box_support(d: int = 2, low: float = -5.0, high: float = 5.0) -> Constraint:
@@ -36,43 +35,67 @@ def quadratic_log_density(x: Array) -> Array:
     """``-0.5 * sum(x * x, axis=-1)`` — vectorized quadratic log-density.
 
     Per the ProbPipe vectorization contract, sums over the trailing
-    event axis only, leaving any leading batch dims intact.
+    event axis only.
     """
     return -0.5 * jnp.sum(x * x, axis=-1)
 
 
-class QuadraticTarget(TargetDistribution):
+class QuadraticTarget(NumericRecordDistribution):
     """Quadratic log-density target. Analytical density is
-    ``quadratic_log_density``."""
+    :func:`quadratic_log_density`."""
 
     def __init__(self, *, d: int = 2, name: str = "quadratic"):
-        super().__init__(name=name, input_shape=(d,), support=box_support(d))
+        self._d = d
+        self._support = box_support(d)
+        super().__init__(name=name)
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
+
+    @property
+    def support(self) -> Constraint:
+        return self._support
 
     def _unnormalized_log_prob(self, x: Array) -> Array:
         return quadratic_log_density(x)
 
 
-class OpaqueTarget(TargetDistribution):
+class OpaqueTarget(NumericRecordDistribution):
     """User-style target: no analytical density (no ``_unnormalized_log_prob``)."""
 
     def __init__(self, *, d: int = 2, name: str = "opaque"):
-        super().__init__(name=name, input_shape=(d,), support=box_support(d))
+        self._d = d
+        self._support = box_support(d)
+        super().__init__(name=name)
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
+
+    @property
+    def support(self) -> Constraint:
+        return self._support
 
 
 class QuadraticLogProbDecomposition(LogProbTermTarget):
     """``LogProbTermTarget`` whose ``target_map`` is the quadratic
-    log-density. ``link = Identity``, ``shift = None`` (full
-    log-density emulation)."""
+    log-density. ``link = Identity``, ``shift = LogProb(prior)`` if
+    ``prior`` else ``None``."""
 
     def __init__(
-        self, *, d: int = 2, name: str = "quadratic_decomp", prior: Distribution | None = None
+        self,
+        *,
+        d: int = 2,
+        name: str = "quadratic_decomp",
+        prior: Distribution | None = None,
     ):
-        super().__init__(
-            name=name,
-            input_shape=(d,),
-            support=box_support(d),
-            prior=prior,
-        )
+        self._d = d
+        super().__init__(name=name, support=box_support(d), prior=prior)
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
 
     def target_map(self, x: Array) -> Array:
         return quadratic_log_density(x)
@@ -80,16 +103,17 @@ class QuadraticLogProbDecomposition(LogProbTermTarget):
 
 class ConstantShiftedDecomposition(LogProbTermTarget):
     """``LogProbTermTarget`` whose ``target_map`` is the quadratic
-    log-density plus a fixed scalar offset.
-
-    Used for testing :func:`is_consistent_with`'s ``strict`` /
-    ``strict=False`` modes — pointwise mismatch but constant-offset
-    consistency.
-    """
+    log-density plus a fixed scalar offset. Used for testing
+    :func:`is_consistent_with`'s ``strict`` / ``strict=False`` modes."""
 
     def __init__(self, *, d: int = 2, offset: float = 0.0):
+        self._d = d
         self._offset = offset
-        super().__init__(name="quadratic_offset", input_shape=(d,), support=box_support(d))
+        super().__init__(name="quadratic_offset", support=box_support(d))
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
 
     def target_map(self, x: Array) -> Array:
         return quadratic_log_density(x) + self._offset

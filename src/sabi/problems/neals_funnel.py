@@ -1,46 +1,31 @@
 r"""Neal's funnel posterior — a stress benchmark with no analytic posterior.
 
-Standard form (Radford Neal, 2003):
-
-.. math::
-
-    v &\sim \mathcal{N}(0, \sigma_v^2), \\
-    x_i \mid v &\sim \mathcal{N}(0, e^{v}), \quad i = 1, \dots, d.
-
-Reference samples are generated via NUTS and cached on disk.
+Standard form (Radford Neal, 2003).
 
 Public surface:
 
 - :func:`neals_funnel` — factory returning a ``Problem``.
-- :class:`NealsFunnelTarget` — :class:`TargetDistribution` subclass.
+- :class:`NealsFunnelTarget` —
+  :class:`NumericRecordDistribution` subclass.
 - :class:`NealsFunnelLogProbDecomposition` —
-  :class:`LogProbTermTarget` subclass that emulates the full log-density.
+  :class:`LogProbTermTarget` subclass.
 """
 
 from __future__ import annotations
 
 import jax.numpy as jnp
 from jax import Array
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from probpipe.core.constraints import Constraint
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.density_decomposition import LogProbTermTarget
 from sabi.problems.base import Problem
-from sabi.target_distribution import TargetDistribution
 from sabi.reference.cache import load_or_generate_reference_samples
 
 
-# ---------------------------------------------------------------------------
-# Private density helper — single-event input.
-# ---------------------------------------------------------------------------
-
-
 def _funnel_log_density(theta: Array, *, d: int, sigma_v: float) -> Array:
-    """Vectorized: ``theta.shape == batch_shape + (d+1,)`` → ``batch_shape``.
-
-    Indexes the trailing event axis with ``theta[..., 0]`` /
-    ``theta[..., 1:]`` so leading batch dims pass through.
-    """
+    """Vectorized: ``theta.shape == batch_shape + (d+1,)`` → ``batch_shape``."""
     log2pi = jnp.log(2.0 * jnp.pi)
     sigma_v_sq = sigma_v * sigma_v
     norm_const = -0.5 * (log2pi + jnp.log(sigma_v_sq))
@@ -53,25 +38,28 @@ def _funnel_log_density(theta: Array, *, d: int, sigma_v: float) -> Array:
     return log_p_v + log_p_x_given_v
 
 
-# ---------------------------------------------------------------------------
-# Subclasses
-# ---------------------------------------------------------------------------
-
-
-class NealsFunnelTarget(TargetDistribution):
-    """``TargetDistribution`` for Neal's funnel."""
+class NealsFunnelTarget(NumericRecordDistribution):
+    """``NumericRecordDistribution`` for Neal's funnel."""
 
     def __init__(
         self,
         *,
-        name: str,
-        input_shape: tuple[int, ...],
-        support: Constraint,
         d: int,
         sigma_v: float,
+        support: Constraint,
+        name: str | None = None,
     ):
         self._d, self._sigma_v = d, sigma_v
-        super().__init__(name=name, input_shape=input_shape, support=support)
+        self._support = support
+        super().__init__(name=name or f"neals_funnel_d{d}_target")
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d + 1,)
+
+    @property
+    def support(self) -> Constraint:
+        return self._support
 
     def _unnormalized_log_prob(self, theta: Array) -> Array:
         return _funnel_log_density(theta, d=self._d, sigma_v=self._sigma_v)
@@ -83,24 +71,24 @@ class NealsFunnelLogProbDecomposition(LogProbTermTarget):
     def __init__(
         self,
         *,
-        name: str,
-        input_shape: tuple[int, ...],
-        support: Constraint,
         d: int,
         sigma_v: float,
+        support: Constraint,
+        name: str | None = None,
     ):
         self._d, self._sigma_v = d, sigma_v
         super().__init__(
-            name=name, input_shape=input_shape, support=support, prior=None
+            name=name or f"neals_funnel_d{d}_decomp",
+            support=support,
+            prior=None,
         )
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d + 1,)
 
     def target_map(self, theta: Array) -> Array:
         return _funnel_log_density(theta, d=self._d, sigma_v=self._sigma_v)
-
-
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
 
 
 def neals_funnel(
@@ -121,21 +109,13 @@ def neals_funnel(
     if sigma_v <= 0:
         raise ValueError(f"sigma_v must be positive, got {sigma_v}.")
 
-    total_dim = d + 1
-
     lower = jnp.asarray([-v_bound] + [-x_bound] * d, dtype=jnp.float64)
     upper = jnp.asarray([v_bound] + [x_bound] * d, dtype=jnp.float64)
     support = independent_uniform(
         low=lower, high=upper, name=f"neals_funnel_support_d{d}_sv{sigma_v}"
     ).support
 
-    target = NealsFunnelTarget(
-        name=f"neals_funnel_d{d}_target",
-        input_shape=(total_dim,),
-        support=support,
-        d=d,
-        sigma_v=sigma_v,
-    )
+    target = NealsFunnelTarget(d=d, sigma_v=sigma_v, support=support)
 
     cache_key = f"d{d}_sv{sigma_v}_vb{v_bound}_xb{x_bound}"
     funnel_thresholds = {
@@ -167,5 +147,4 @@ def neals_funnel(
     return Problem(
         target_distribution=target,
         reference_distribution=reference,
-        name="neals_funnel",
     )

@@ -38,8 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from probpipe.core._distribution_base import Distribution
-
-from sabi.target_distribution import TargetDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 
 
 @dataclass(frozen=True)
@@ -47,18 +46,21 @@ class Problem:
     """A named target distribution with an optional reference solution.
 
     Attributes:
-        target_distribution: the mathematical target — a
-            `TargetDistribution` carrying the target function, form,
-            design prior, and support.
+        target_distribution: the mathematical target — any
+            ``NumericRecordDistribution``. For benchmarks, the
+            subclass implements an analytical
+            ``_unnormalized_log_prob``. For user inverse problems
+            without an analytical density, the subclass simply leaves
+            ``_unnormalized_log_prob`` undefined; the algorithm
+            interacts with the target via the algorithm's
+            ``DensityDecomposition``.
         reference_distribution: optional ground-truth target distribution
-            used by reference-based metrics (analytic when one fits
-            naturally, otherwise an `EmpiricalDistribution` over
-            precomputed samples).
+            used by reference-based metrics.
         name: human-readable benchmark name (e.g. ``"gaussian"``,
             ``"banana"``). Used for cache keys and metadata.
     """
 
-    target_distribution: TargetDistribution
+    target_distribution: NumericRecordDistribution
     reference_distribution: Distribution | None = None
     name: str = ""
 

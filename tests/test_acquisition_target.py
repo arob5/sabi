@@ -26,7 +26,7 @@ from sabi.emulators import TinyGPEmulator
 from sabi.maps import Identity, LogProb
 from sabi.problems.base import Problem
 from sabi.problems.benchmarks import gaussian_2d
-from sabi.target_distribution import TargetDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 from sabi.tempering.likelihood import (
     LikelihoodTemperingViaForm,
     LikelihoodTemperingViaTarget,
@@ -238,7 +238,7 @@ def test_default_acquisition_target_preserves_untempered_metrics():
         q=1,
     )
     result = run(problem, alg, jax.random.key(0))
-    assert result.X.shape == (10,) + problem.target_distribution.input_shape
+    assert result.X.shape == (10,) + problem.target_distribution.event_shape
 
 
 # -------------------------------------------------------------------------
@@ -254,24 +254,29 @@ def test_via_target_with_next_lookahead_runs_to_completion():
         low=jnp.full((2,), -3.0), high=jnp.full((2,), 3.0), name="p"
     )
 
-    class _QuadLogLikTarget(TargetDistribution):
-        # Math identity only (subclass with no analytical density);
-        # `LikelihoodTemperingViaTarget` doesn't read it during the loop.
-        pass
+    class _QuadLogLikTarget(NumericRecordDistribution):
+        # Math identity only (no analytical density); the loop doesn't
+        # need it under `LikelihoodTemperingViaTarget`.
+        @property
+        def event_shape(self):
+            return (2,)
+
+        @property
+        def support(self):
+            return prior.support
 
     class _LogLikDecomp(LogProbTermTarget):
+        @property
+        def event_shape(self):
+            return (2,)
+
         def target_map(self, x):
             return -0.5 * jnp.sum(x * x, axis=-1)
 
-    target = _QuadLogLikTarget(
-        name="quad_loglik_target",
-        input_shape=(2,),
-        support=prior.support,
-    )
+    target = _QuadLogLikTarget(name="quad_loglik_target")
     problem = Problem(target_distribution=target, name="quad_loglik")
     decomposition = _LogLikDecomp(
         name="quad_loglik_decomp",
-        input_shape=(2,),
         support=prior.support,
         prior=prior,
     )
