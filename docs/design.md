@@ -49,34 +49,58 @@ The expensive Bayesian inference target plus everything needed to construct, tra
 
 ```
 Problem:
-  target_distribution: TargetDistribution             # math content (target_map, log_density_form, prior, support)
+  target_distribution: TargetDistribution             # math identity (name, input_shape, support, optional analytical _unnormalized_log_prob)
   reference_distribution: Distribution | None = None  # ground-truth posterior for reference-based metrics
   name: str = ""                                      # benchmark name (used for cache keys, metadata)
 ```
 
-`Problem` has convenience `@property` accessors that delegate to its
-inner `target_distribution`. There are no convenience forwarders on
-`Problem` — consumers reach `problem.target_distribution.input_shape`,
-`problem.target_distribution.prior`, and so on, so the layer being
-touched is explicit at every callsite.
+After the ``DensityDecomposition`` split (issue #65),
+``TargetDistribution`` carries only the math identity. The
+algorithm-side emulation choice — ``(target_single, output_shape,
+link, shift)`` — lives on a separate
+``Algorithm.density_decomposition``. A single
+``TargetDistribution`` can be paired with many decompositions;
+benchmark factories return only ``Problem``, and the user constructs
+the decomposition explicitly (``DensityDecomposition.identity_from_target(...)``
+is the canonical idiom for benchmarks).
 
-**Initial-design / acquisition-space resolution.** `prior` is required
-on `TargetDistribution`, so `problem.target_distribution.prior` is
-always available. The loop's `Algorithm.initial_sampler` defaults to
-`PriorSampler`, which draws i.i.d. from
-`problem.target_distribution.prior`. Sobol / LHS samplers will land
-alongside the first benchmark that needs them. There is no
-`sampling_bounds` fallback path — bounded support is expressed by
-constructing the prior with bounded support (e.g., a `Uniform`-based
-`independent_uniform`).
+**Initial-design / acquisition-space resolution.**
+``Algorithm.initial_design_distribution`` is the per-algorithm
+"design distribution" — sampled via ``probpipe.sample`` for the
+initial design and as the default for random acquisitions /
+pointwise-optimizer candidate sets. At ``run()`` entry it falls
+back to ``Uniform(x_support)`` when ``x_support`` is bounded;
+``x_support`` itself falls back to
+``problem.target_distribution.support``. The old
+``Algorithm.initial_sampler: BatchSampler`` field is removed —
+sampling everywhere uses ``probpipe.sample`` directly, and the
+``sabi.sampling`` module is gone.
 
-### 4.2 `LogDensityForm`
+### 4.2 `DensityDecomposition`
 
-Deterministic function `φ(x, y) → log_unnorm_posterior(x)` mapping a single target output `y = f(x)` at a single input `x` to an unnormalized log-posterior value. Built-in canonical cases:
+Single parametric class composing the emulator's output with
+``link`` and ``shift`` ``Map``s into an unnormalized log-density:
+``log p̃(x) = link(target_single(x)) + shift(x)``. Concrete
+patterns:
 
-- `Identity` — `φ(x, y) = y`. Emulator learns the full log-posterior (prior absorbed).
-- `LogLikPlusPrior` — `φ(x, y) = y + log_prior(x)`. Emulator learns log-likelihood only.
-- `ForwardModel` — `φ(x, y) = log_lik_from_outputs(data, y) + log_prior(x)`. Emulator learns a multi-output forward model; observation model is supplied separately.
+- ``link=Identity, shift=ScalarConstant(0)`` — emulator learns the
+  full log-density; the analytical density is absorbed into
+  ``target_single``.
+- ``link=Identity, shift=LogProb(modeling_prior)`` — emulator
+  learns log-likelihood; modeling prior added at the shift.
+- ``link=GaussianLogLik(obs, cov), shift=LogProb(modeling_prior)``
+  — emulator learns a forward-model output; observation likelihood
+  applied via the link, prior added at the shift.
+- ``link=LogSoftplus, shift=LogProb(modeling_prior)`` (Phase 6+) —
+  emulator learns ``softplus^{-1}(L(x))``; the link converts it
+  to log-likelihood under softplus.
+
+The four classmethod helpers (``identity_from_target``,
+``likelihood_with_prior``, ``forward_model``,
+``gaussian_forward_model``) cover the common patterns. The
+free-function ``is_consistent_with(decomposition, target,
+x_test=...)`` regression-checks that a decomposition reconstructs
+the target's analytical density at a handful of test points.
 
 ### 4.3 `Emulator` — stochastic predictive model of `target_map`
 
@@ -107,7 +131,7 @@ Acquisitions decouple **scoring** (the function to maximize) from **optimization
 
 `PointwiseOptimizer` ships three implementations in `acquisitions/optim.py`:
 
-- `CandidateSetOptimizer` — random candidates from `problem.target_distribution.prior` → top-q. Cheap; gradient-free; default.
+- `CandidateSetOptimizer` — random candidates from ``CandidateSetOptimizer.candidate_distribution`` (defaults to ``state.algorithm.initial_design_distribution`` at run time) → top-q. Cheap; gradient-free; default.
 - `ContinuousMultiStartOptimizer` — score-filter top-`n_starts` BFGS init points → optimistix BFGS in unconstrained reparameterization space → top-q. Sigmoid bijector for `interval(low, high)` supports; other supports raise.
 - `GreedyMultiPointOptimizer` — for `q > 1`. Picks one point at a time via an inner optimizer; hallucinates a pending observation via a pluggable `FantasyImputer` (`KrigingBeliever`, `ConstantLiar`); refits the surrogate; iterates. Pluggable imputer makes the strategy interchangeable.
 
@@ -115,9 +139,9 @@ Acquisitions implement only their scoring function (and pick an optimizer per th
 
 ### 4.5 `SurrogateDistribution` — a `RandomMeasure`
 
-`SurrogateDistribution` is a ProbPipe `NumericRandomMeasure[Array]`: a distribution over `Distribution[Array]`s on the parameter space. **Decoupled from `Problem`** — it carries math primitives directly (`support`, `prior`, `log_density_form`, `input_shape`). The algorithm loop pulls those primitives from a `Problem` when constructing the SP each round.
+`SurrogateDistribution` is a ProbPipe `NumericRandomMeasure[Array]`: a distribution over `Distribution[Array]`s on the parameter space. **Decoupled from `Problem`** — it carries math primitives directly (`support`, `decomposition`, `input_shape`). The algorithm loop pulls those primitives from a `Problem` plus the algorithm's `DensityDecomposition` when constructing the SP each round.
 
-A `SurrogateDistribution` holds a `Surrogate` (a sabi-side `ArrayRandomFunction` subclass — see §4.3) and a `LogDensityForm`; its `_random_unnormalized_log_prob()` returns a `RandomFunction` whose `__call__(X)` evaluates the surrogate at `X` (yielding a `Distribution[Array]`) and pushes it through the form via the shared `pushforward_marginal` dispatch (closed-form for Gaussian × affine cases, MC empirical via ProbPipe `WorkflowFunction` broadcasting otherwise). The class itself is Gaussian-agnostic — only the dispatch knows about Gaussianness.
+A `SurrogateDistribution` holds a `Surrogate` (a sabi-side `ArrayRandomFunction` subclass — see §4.3) and a `DensityDecomposition`; its `_random_unnormalized_log_prob()` returns a `RandomFunction` whose `__call__(X)` evaluates the surrogate at `X` (yielding a `Distribution[Array]`) and pushes it through the decomposition via `decomposition.pushforward(X, input_dist)`. Closed-form pushforward for the common ``(Affine, Normal | MultivariateNormal)`` cases; MC fallback via the ``Compose`` registration in ``sabi.maps.pushforward`` for non-affine links.
 
 `WeightedEmpiricalRandomMeasure` is the **sibling** no-GP-baseline random measure (NOT a `SurrogateDistribution` subclass): a Dirac at a weighted empirical of design points. Useful for testing the loop without a fitted surrogate, and as a reference for any random-measure consumer. Tracked for potential graduation to ProbPipe.
 
@@ -133,7 +157,7 @@ A `SurrogateDistribution` admits many deterministic posterior approximations. Th
 Currently shipped:
 
 - `mean(sp)` — the unbiased *expected posterior* `D̄(A) = ∫ D(A) dM(D)`, exposed via ProbPipe's `mean` op via `SupportsMean`. Implemented for the Dirac case (returns the inner empirical); for the GP path no general implementation in v1.2 — `mean(gp_sp)` raises until a v2 MC backend lands.
-- `expected_target(sp)` — the *biased plug-in posterior*: plug the surrogate's predictive mean into the log-density form. Returns the inner empirical for Dirac SPs; for the GP path returns a `Distribution[Array]` whose `_unnormalized_log_prob(x)` evaluates `log_density_form(x, surrogate_mean(x), prior)` and whose `_sample` delegates to ProbPipe `condition_on(self)` (auto-dispatched MCMC, typically NUTS, post-PR-#151).
+- `expected_target(sp)` — the *biased plug-in posterior*: plug the surrogate's predictive mean into the decomposition. Returns the inner empirical for Dirac SPs; for the GP path returns a `Distribution[Array]` whose `_unnormalized_log_prob(x)` evaluates `decomposition(x, surrogate_mean(x))` and whose `_sample` delegates to ProbPipe `condition_on(self)` (auto-dispatched MCMC, typically NUTS).
 
 Future estimators (motivated by the partial-pushforward primitive — see `docs/probpipe_issues.md`):
 
@@ -236,19 +260,26 @@ ProbPipe `Distribution` for `ctx.estimate`. Once ProbPipe's
 `requires` will gate against richer protocols (density vs samples)
 to support VI / Laplace / mixture estimators directly.
 
-### 4.8 `BatchSampler`
+### 4.8 Sampling for design / candidates / seeds
 
-Single abstraction for "draw `n` parameter-space points": Sobol, LHS,
-prior samples, uniform-in-bounds. Lives in `sabi/sampling.py`. Used by
+After issue #65, sampling everywhere routes through
+``probpipe.sample(distribution, key=..., sample_shape=...)``
+directly — the ``BatchSampler`` / ``PriorSampler`` abstraction is
+gone (``sabi/sampling.py`` deleted). The relevant ``Distribution``
+fields:
 
-- the loop's initial-design step (`Algorithm.initial_sampler`),
-- `PriorSampling.select_batch` (the prior-sampling acquisition),
-- pointwise optimizers' candidate / seed sets
-  (`CandidateSetOptimizer.candidate_sampler`,
-  `ContinuousMultiStartOptimizer.seed_sampler`).
+- ``Algorithm.initial_design_distribution`` — drives both the
+  initial-design step and the default for random acquisitions
+  (``DistributionSampling``) and pointwise-optimizer candidate /
+  seed sets.
+- ``CandidateSetOptimizer.candidate_distribution`` — per-optimizer
+  override; defaults to ``state.algorithm.initial_design_distribution``
+  at run time.
+- ``ContinuousMultiStartOptimizer.seed_distribution`` — same
+  pattern.
 
-v1.4.1 ships `PriorSampler` (i.i.d. samples from `problem.target_distribution.prior`); Sobol /
-LHS land alongside the first benchmark that needs them.
+Sobol / LHS samplers land as concrete ``Distribution`` types when
+the first benchmark needs them; no ``BatchSampler`` wrapper required.
 
 ### 4.9 `Algorithm` — composition
 
@@ -415,7 +446,7 @@ Per round (loop sketch):
    will replace the full refit.
 6. `SurrogateDistribution` for acquisition = `(emulator_for_acq,
    target_intermediate.log_density_form, ...)`. Acquisition picks
-   `x_new`, loop appends `y_new_raw = problem.target_distribution.target_map(x_new)`
+   `x_new`, loop appends `y_new_raw = algorithm.density_decomposition.target_map(x_new)`
    to `Y_raw`.
 7. Round-end emulator + SP at the *current* state for metrics:
    `Y_train = current_intermediate.output_transform(current_state, X, Y_raw)`;
@@ -485,7 +516,9 @@ sabi/
     acquisitions/      # + optim.py
     surrogate/         # SurrogateDistribution subclasses + deterministic estimators (expected_target, mean)
     metrics/           # PosteriorMetric + EmulatorMetric
-    sampling.py        # BatchSampler + PriorSampler
+    density_decomposition.py  # DensityDecomposition + ScalarConstant + is_consistent_with
+    target_distribution.py    # TargetDistribution (math identity) + IntermediateTarget
+    maps/              # Map ABC + concrete maps (Identity, Affine, LogProb, GaussianLogLik, ...) + pushforward dispatch
     tempering/         # Tempering + TemperingSchedule + dispatch registry
     algorithms/        # composed dataclasses
     runner/            # Hydra entry, seeding, logging

@@ -76,10 +76,9 @@ class Affine(Map):
     accept vector ``intercept`` against an MVN — the shape contract
     is enforced for ``Compose``, while pushforward broadcasting is
     permissive at the registered-handler level. A vector-``Affine``
-    variant for first-class vector composition is left to the
-    link-function refactor (#65), which integrates ``Map`` with
-    ``DensityDecomposition`` and makes the layered shape semantics
-    fully explicit.
+    variant for first-class vector composition is left as a future
+    extension; the layered shape semantics will become fully
+    explicit once that lands.
     """
 
     slope: Array = field(default_factory=lambda: jnp.asarray(1.0))

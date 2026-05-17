@@ -121,5 +121,5 @@ class ConstantLiar(FantasyImputer):
                 )
         else:
             v = jnp.asarray(self.value)
-        out_shape = state.problem.target_distribution.output_shape
+        out_shape = state.algorithm.density_decomposition.output_shape
         return jnp.full((n_pending,) + tuple(out_shape), v)

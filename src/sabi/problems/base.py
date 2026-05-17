@@ -3,34 +3,27 @@
 A `Problem` is the *identity* layer: what defines the inference problem
 mathematically, plus a human-readable name and (optionally) a reference
 solution used by reference-based metrics. The mathematical content
-itself — target function, form, design prior, support, batched vs.
-per-point views — lives on ``target_distribution: TargetDistribution``.
-
-Algorithmic-pipeline choices (which form, which design prior, vmapped
-vs. per-point views of the target) are reachable via
-``problem.target_distribution.X``. That extra hop is the point: it keeps
-``Problem`` honest about what's a problem-defining fact versus a
-consumer-side configuration.
+itself — name, ``event_shape``, ``support``, and (for benchmarks) an
+analytical ``_unnormalized_log_prob`` — lives on
+``target_distribution: NumericRecordDistribution``.
 
 This split — math vs. benchmark identity — was the right framing
 because:
 
-- A `TargetDistribution` is a self-contained mathematical object that
-  can be consumed by ProbPipe ops directly (`condition_on`,
+- The target distribution is a self-contained mathematical object
+  that can be consumed by ProbPipe ops directly (`condition_on`,
   `unnormalized_log_prob`, etc.). No `Problem` wrapping required.
-- `TemperingScheme` operates on `TargetDistribution` to produce
+- `TemperingScheme` operates on the target distribution to produce
   intermediate targets, with no awareness of `Problem`-level metadata.
 - `BenchmarkProblem` extends `Problem` with validated reference
   artifacts (locked-in name, ``artifact_version``) without touching
   the math layer.
 
-Shape conventions follow ProbPipe's `ArrayRandomFunction` (see
-`docs/notation.md`): a single input has shape ``input_shape``, a single
-output has shape ``output_shape``, and design sets ``X`` / ``Y``
-prepend a batch dimension. Reach through
-``problem.target_distribution`` for the batched (``target_map``) or
-per-point (``target_single``) view. See
-`sabi.target_distribution.TargetDistribution`.
+Shape conventions follow ProbPipe (see `docs/notation.md`): the
+target's ``event_shape`` is the per-point shape; design sets ``X`` /
+``Y`` prepend a batch dimension. The algorithm chooses how to emulate
+the target via its ``DensityDecomposition``; see
+:class:`sabi.density_decomposition.DensityDecomposition`.
 """
 
 from __future__ import annotations
@@ -38,8 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from probpipe.core._distribution_base import Distribution
-
-from sabi.target_distribution import TargetDistribution
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
 
 
 @dataclass(frozen=True)
@@ -47,18 +39,21 @@ class Problem:
     """A named target distribution with an optional reference solution.
 
     Attributes:
-        target_distribution: the mathematical target — a
-            `TargetDistribution` carrying the target function, form,
-            design prior, and support.
+        target_distribution: the mathematical target — any
+            ``NumericRecordDistribution``. For benchmarks, the
+            subclass implements an analytical
+            ``_unnormalized_log_prob``. For user inverse problems
+            without an analytical density, the subclass simply leaves
+            ``_unnormalized_log_prob`` undefined; the algorithm
+            interacts with the target via the algorithm's
+            ``DensityDecomposition``.
         reference_distribution: optional ground-truth target distribution
-            used by reference-based metrics (analytic when one fits
-            naturally, otherwise an `EmpiricalDistribution` over
-            precomputed samples).
+            used by reference-based metrics.
         name: human-readable benchmark name (e.g. ``"gaussian"``,
             ``"banana"``). Used for cache keys and metadata.
     """
 
-    target_distribution: TargetDistribution
+    target_distribution: NumericRecordDistribution
     reference_distribution: Distribution | None = None
     name: str = ""
 

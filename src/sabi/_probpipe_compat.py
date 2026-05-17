@@ -34,8 +34,8 @@ from probpipe.distributions._tfp_base import TFPDistribution
 #
 #   `log_prob(x)` for `x` of shape `(d,) + base.event_shape` returns
 #   scalar — TFP sums the per-element log-probs across the
-#   reinterpreted dims. This is what sabi's `LogDensityForm` requires
-#   from a multivariate-event prior.
+#   reinterpreted dims. This is what sabi's `DensityDecomposition`'s
+#   `LogProb` shift requires from a multivariate-event modeling prior.
 #
 # Why not use `ProbPipe.distributions.ProductDistribution`:
 #
@@ -130,8 +130,8 @@ def independent_uniform(
     Equivalent to `Independent(Uniform(low, high))` with
     `event_shape=(d,)` and `batch_shape=()` for a `d`-dim box. The
     resulting distribution's `log_prob(x)` returns a scalar for `x` of
-    shape `(d,)` — which is what sabi's `LogDensityForm` expects of a
-    multivariate-event prior.
+    shape `(d,)` — which is what sabi's `DensityDecomposition` expects
+    of a multivariate-event prior wrapped in a `LogProb` shift.
     """
     from probpipe.distributions.continuous import Uniform
 

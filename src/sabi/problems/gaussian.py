@@ -1,22 +1,16 @@
 r"""`d`-dimensional Gaussian posterior — analytic reference.
 
-Target is :math:`\mathcal{N}(\mu, \Sigma)` on :math:`\mathbb{R}^d`:
+Target is :math:`\mathcal{N}(\mu, \Sigma)` on :math:`\mathbb{R}^d`.
 
-.. math::
+Public surface:
 
-    \log p(x) = -\tfrac{1}{2} (x - \mu)^\top \Sigma^{-1} (x - \mu)
-                - \tfrac{1}{2} \log\!\big((2\pi)^d |\Sigma|\big).
+- :func:`gaussian` — factory returning a ``Problem``.
+- :class:`GaussianTarget` — :class:`NumericRecordDistribution` subclass
+  with the analytical ``_unnormalized_log_prob`` (delegates to a
+  ProbPipe ``MultivariateNormal``).
 
-``target_map`` routes through the ProbPipe ``MultivariateNormal``'s
-``log_prob``, so the analytic posterior IS the ``reference_distribution``
-(the same ProbPipe object) — exercising the abstractions end-to-end.
-
-Shapes: ``input_shape=(d,)``, ``output_shape=()``. See
-``docs/notation.md`` for sabi's shape conventions.
-
-The ``prior`` field doubles as the design distribution for initial-design
-/ random acquisition: ``Uniform`` over a symmetric box
-:math:`[\mu - r, \mu + r]^d` for ``bounds_radius`` :math:`r`.
+Callers that want to emulate the full unnormalized log-density should
+wrap the target with :class:`sabi.density_decomposition.LogProbTarget`.
 """
 
 from __future__ import annotations
@@ -25,13 +19,49 @@ from collections.abc import Sequence
 
 import jax.numpy as jnp
 from jax import Array
-from probpipe import log_prob
+from probpipe import log_prob as pp_log_prob
+from probpipe.core._numeric_record_distribution import NumericRecordDistribution
+from probpipe.core.constraints import Constraint
 from probpipe.distributions.multivariate import MultivariateNormal
 
 from sabi._probpipe_compat import independent_uniform
 from sabi.problems.base import Problem
-from sabi.problems.forms import Identity
-from sabi.target_distribution import TargetDistribution
+
+
+def _gaussian_log_density(x: Array, *, mvn: MultivariateNormal) -> Array:
+    return jnp.asarray(pp_log_prob(mvn, x))
+
+
+class GaussianTarget(NumericRecordDistribution):
+    """``NumericRecordDistribution`` for the multivariate Gaussian benchmark."""
+
+    def __init__(
+        self,
+        *,
+        d: int,
+        mvn: MultivariateNormal,
+        support: Constraint,
+        name: str | None = None,
+    ):
+        self._d = d
+        self._mvn = mvn
+        self._support = support
+        super().__init__(name=name or f"gaussian_d{d}_target")
+
+    @property
+    def mvn(self) -> MultivariateNormal:
+        return self._mvn
+
+    @property
+    def event_shape(self) -> tuple[int, ...]:
+        return (self._d,)
+
+    @property
+    def support(self) -> Constraint:
+        return self._support
+
+    def _unnormalized_log_prob(self, x: Array) -> Array:
+        return _gaussian_log_density(x, mvn=self._mvn)
 
 
 def gaussian(
@@ -40,22 +70,7 @@ def gaussian(
     cov: Sequence[Sequence[float]] | None = None,
     bounds_radius: float = 5.0,
 ) -> Problem:
-    """Build a `d`-dimensional Gaussian benchmark.
-
-    Args:
-        d: parameter dimension. Must be ≥ 1.
-        mean: posterior mean; defaults to :math:`0 \\in \\mathbb{R}^d`.
-        cov: posterior covariance (`d × d`, must be PD); defaults to
-            :math:`I_d`.
-        bounds_radius: symmetric per-dim half-width
-            (:math:`|x_i - \\mu_i| \\le r`) for the design distribution
-            and the support metadata.
-
-    Returns:
-        `Problem` with ``input_shape=(d,)``, ``Identity`` log-density
-        form, and the analytic `MultivariateNormal` itself as the
-        reference distribution.
-    """
+    """Build a `d`-dimensional Gaussian benchmark."""
     if d < 1:
         raise ValueError(f"d must be ≥ 1, got {d}.")
     if bounds_radius <= 0:
@@ -78,23 +93,14 @@ def gaussian(
 
     posterior = MultivariateNormal(loc=mu, cov=Sigma, name=f"gaussian_d{d}_{id(mu)}")
 
-    def target_single(x: Array) -> Array:
-        return jnp.asarray(log_prob(posterior, x))
-
     lower = mu - bounds_radius
     upper = mu + bounds_radius
-    prior = independent_uniform(
-        low=lower, high=upper, name=f"gaussian_d{d}_design_{id(mu)}"
-    )
+    support = independent_uniform(
+        low=lower, high=upper, name=f"gaussian_d{d}_support_{id(mu)}"
+    ).support
 
-    target = TargetDistribution(
-        target_single=target_single,
-        name=f"gaussian_d{d}_target_{id(mu)}",
-        input_shape=(d,),
-        output_shape=(),
-        log_density_form=Identity(),
-        prior=prior,
-    )
+    target = GaussianTarget(d=d, mvn=posterior, support=support)
+
     return Problem(
         target_distribution=target,
         reference_distribution=posterior,

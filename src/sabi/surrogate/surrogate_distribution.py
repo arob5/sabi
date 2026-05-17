@@ -5,12 +5,12 @@ random measures over `Distribution[Array]`s on the parameter space. Two
 concrete realizations live in this package, both inheriting from this base:
 
 - `EmulatedDistribution` (this module) — emulator-backed; pushes the
-  emulator's predictive through a `LogDensityForm`. Every emulator
-  function realization defines a deterministic posterior; the random
-  measure is the distribution over these.
+  emulator's predictive through a :class:`sabi.density_decomposition.DensityDecomposition`.
+  Every emulator function realization defines a deterministic posterior;
+  the random measure is the distribution over these.
 - `WeightedEmpiricalRandomMeasure` (in `weighted_empirical.py`) —
   degenerate / Dirac at a weighted empirical of design points. No
-  emulator, no form.
+  emulator, no decomposition.
 
 The two subtypes are **siblings**, not parent/child. Code that needs to
 operate on either uses `SurrogateDistribution` as the type. Code that
@@ -27,8 +27,8 @@ Protocol opt-ins
 `EmulatedDistribution` opts into:
 
 - `SupportsRandomUnnormalizedLogProb`: returns a thin `RandomFunction`
-  that pushes the emulator's predictive at `X` through the form via
-  `pushforward_marginal`.
+  that pushes the emulator's predictive at `X` through the
+  decomposition via :meth:`DensityDecomposition.pushforward`.
 
 It does NOT opt into `SupportsSampling`, `SupportsMean`, or
 `SupportsRandomLogProb` on the base class — function-trajectory
@@ -51,9 +51,8 @@ from probpipe.core._random_functions import RandomFunction
 from probpipe.core._random_measures import NumericRandomMeasure
 from probpipe.core.constraints import Constraint
 
+from sabi.density_decomposition import DensityDecomposition
 from sabi.emulators.base import Emulator
-from sabi.surrogate._pushforward import pushforward_marginal
-from sabi.problems.forms import LogDensityForm
 
 
 class SurrogateDistribution(NumericRandomMeasure):
@@ -62,9 +61,9 @@ class SurrogateDistribution(NumericRandomMeasure):
     Two concrete subtypes:
 
     - :class:`EmulatedDistribution` — emulator-backed; pushes the
-      emulator's predictive through a :class:`LogDensityForm`.
+      emulator's predictive through a :class:`DensityDecomposition`.
     - :class:`WeightedEmpiricalRandomMeasure` — degenerate (Dirac) at
-      a weighted empirical of design points; no emulator, no form.
+      a weighted empirical of design points; no emulator, no decomposition.
 
     Code that needs to operate on either subtype types against this
     base. Code that needs an emulator narrows to
@@ -85,34 +84,32 @@ class SurrogateDistribution(NumericRandomMeasure):
 
 class EmulatedDistribution(SurrogateDistribution):
     """Surrogate posterior obtained by composing an emulator's predictive
-    distribution with a `LogDensityForm` via pushforward.
+    distribution with a :class:`DensityDecomposition` via pushforward.
 
-    For each emulator function realization, the form defines a
+    For each emulator function realization, the decomposition defines a
     deterministic posterior; the random measure is the distribution
     over these posteriors as the emulator's random function varies.
 
     Args:
-        emulator: a fittable `Emulator` (an `ArrayRandomFunction` over
-            the parameter space). Provides the predictive distribution
-            at query points via `__call__(X, joint_inputs, joint_outputs)`.
-        log_density_form: composes the emulator's outputs with the prior
-            into an unnormalized log-posterior.
-        support: `Constraint` over the parameter space.
-        input_shape: shape of one parameter-space point. Must equal
-            `emulator.input_shape`.
-        prior: optional `Distribution`; required by forms that access it
-            (`LogLikPlusPrior`, `ForwardModel`).
+        emulator: a fittable :class:`Emulator` (an
+            ``ArrayRandomFunction`` over the parameter space). Provides
+            the predictive distribution at query points via
+            ``__call__(X, joint_inputs, joint_outputs)``.
+        decomposition: the :class:`DensityDecomposition` that composes
+            the emulator's outputs with link / shift into an unnormalized
+            log-posterior. Provides the inner event shape (via
+            ``decomposition.event_shape``) and default support.
+        support: optional ``Constraint`` over the parameter space.
+            Defaults to ``decomposition.support``.
         name: optional ProbPipe distribution name.
     """
 
     def __init__(
         self,
         emulator: Emulator,
-        log_density_form: LogDensityForm,
+        decomposition: DensityDecomposition,
         *,
-        support: Constraint,
-        input_shape: tuple[int, ...],
-        prior: Distribution | None = None,
+        support: Constraint | None = None,
         name: str | None = None,
     ):
         if emulator is None:
@@ -121,22 +118,20 @@ class EmulatedDistribution(SurrogateDistribution):
                 "Use `WeightedEmpiricalRandomMeasure` for the no-emulator "
                 "baseline."
             )
-        if log_density_form is None:
+        if decomposition is None:
             raise ValueError(
-                "EmulatedDistribution requires a non-None `log_density_form`."
+                "EmulatedDistribution requires a non-None `decomposition`."
             )
-        if support is None:
-            raise ValueError("EmulatedDistribution requires a non-None `support`.")
-        if tuple(input_shape) != tuple(emulator.input_shape):
+        inner_event_shape = tuple(decomposition.event_shape)
+        if tuple(emulator.input_shape) != inner_event_shape:
             raise ValueError(
-                f"input_shape={tuple(input_shape)} must match "
-                f"emulator.input_shape={tuple(emulator.input_shape)}."
+                f"emulator.input_shape={tuple(emulator.input_shape)} must "
+                f"match decomposition.event_shape={inner_event_shape}."
             )
         self._emulator = emulator
-        self._log_density_form = log_density_form
-        self._support = support
-        self._input_shape = tuple(input_shape)
-        self._prior = prior
+        self._decomposition = decomposition
+        self._support = support if support is not None else decomposition.support
+        self._inner_event_shape = inner_event_shape
         super().__init__(name=name or type(self).__name__)
 
     # NumericRandomMeasure abstract properties
@@ -147,19 +142,15 @@ class EmulatedDistribution(SurrogateDistribution):
 
     @property
     def inner_event_shape(self) -> tuple[int, ...]:
-        return self._input_shape
+        return self._inner_event_shape
 
     @property
     def emulator(self) -> Emulator:
         return self._emulator
 
     @property
-    def log_density_form(self) -> LogDensityForm:
-        return self._log_density_form
-
-    @property
-    def prior(self) -> Distribution | None:
-        return self._prior
+    def decomposition(self) -> DensityDecomposition:
+        return self._decomposition
 
     # Protocol implementation -------------------------------------------------
 
@@ -170,11 +161,11 @@ class EmulatedDistribution(SurrogateDistribution):
 class _EmulatedDistributionPushforward(RandomFunction):
     """The random unnormalized log-density of an `EmulatedDistribution`.
 
-    `__call__(X)` evaluates the emulator's predictive at `X` (a
-    `Distribution`) and pushes it through the surrogate's
-    `log_density_form` via `pushforward_marginal`. Joint flags pass
-    through to the emulator (so callers can request joint over inputs /
-    outputs when the emulator supports it).
+    ``__call__(X)`` evaluates the emulator's predictive at ``X`` (a
+    ``Distribution``) and pushes it through the surrogate's
+    :class:`DensityDecomposition` via ``decomposition.pushforward(X, ...)``.
+    Joint flags pass through to the emulator (so callers can request
+    joint over inputs / outputs when the emulator supports it).
     """
 
     _sampling_cost: ClassVar[str] = "low"
@@ -206,9 +197,4 @@ class _EmulatedDistributionPushforward(RandomFunction):
         input_dist = surrogate_distribution.emulator(
             X, joint_inputs=joint_inputs, joint_outputs=joint_outputs
         )
-        return pushforward_marginal(
-            input_dist,
-            surrogate_distribution.log_density_form,
-            X=X,
-            prior=surrogate_distribution.prior,
-        )
+        return surrogate_distribution.decomposition.pushforward(X, input_dist)

@@ -25,7 +25,7 @@ def test_banana_2d_is_a_benchmark_problem():
     assert isinstance(bp, Problem)
     assert bp.name == "banana_2d"
     assert bp.artifact_version == "v1"
-    assert bp.target_distribution.input_shape == (2,)
+    assert bp.target_distribution.event_shape == (2,)
     assert bp.reference_distribution is not None
     assert isinstance(bp.reference_distribution, NumericEmpiricalDistribution)
 
@@ -34,7 +34,7 @@ def test_banana_10d_is_a_benchmark_problem():
     bp = banana_10d()
     assert isinstance(bp, BenchmarkProblem)
     assert bp.name == "banana_10d"
-    assert bp.target_distribution.input_shape == (10,)
+    assert bp.target_distribution.event_shape == (10,)
     assert isinstance(bp.reference_distribution, NumericEmpiricalDistribution)
 
 
@@ -75,7 +75,7 @@ def test_benchmark_factories_are_pure():
     a_logp = a.target_distribution._unnormalized_log_prob(x)
     b_logp = b.target_distribution._unnormalized_log_prob(x)
     assert float(a_logp) == float(b_logp)
-    assert a.target_distribution.input_shape == b.target_distribution.input_shape
+    assert a.target_distribution.event_shape == b.target_distribution.event_shape
     assert a.name == b.name
 
 
@@ -90,7 +90,7 @@ def test_gaussian_2d_is_a_benchmark_problem():
     assert isinstance(bp, Problem)
     assert bp.name == "gaussian_2d"
     assert bp.artifact_version == "v1"
-    assert bp.target_distribution.input_shape == (2,)
+    assert bp.target_distribution.event_shape == (2,)
     assert isinstance(bp.reference_distribution, MultivariateNormal)
 
 
@@ -112,7 +112,7 @@ def test_gaussian_10d_is_a_benchmark_problem():
     bp = gaussian_10d()
     assert isinstance(bp, BenchmarkProblem)
     assert bp.name == "gaussian_10d"
-    assert bp.target_distribution.input_shape == (10,)
+    assert bp.target_distribution.event_shape == (10,)
     assert isinstance(bp.reference_distribution, MultivariateNormal)
 
 
@@ -138,7 +138,7 @@ def test_neals_funnel_3d_is_a_benchmark_problem():
     assert isinstance(bp, BenchmarkProblem)
     assert bp.name == "neals_funnel_3d"
     # 1 v dim + 2 x dims = 3 total.
-    assert bp.target_distribution.input_shape == (3,)
+    assert bp.target_distribution.event_shape == (3,)
     assert isinstance(bp.reference_distribution, NumericEmpiricalDistribution)
 
 

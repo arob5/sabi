@@ -225,3 +225,17 @@ This is closely related to the long-standing "pushforward not first-class" gap b
 **What we'd want.** ProbPipe's `condition_on(..., random_seed=...)` (and any MCMC method underneath) should accept a JAX key as well as a Python `int`. With key-aware MCMC, sabi's `_sample` can drop the `.item()` cast and trace cleanly under all transforms.
 
 **Why it matters for sabi.** Item 2 of issue #35; tracking here so we can drop the workaround the moment upstream lands key-aware seeds.
+
+---
+
+## `unnormalized_log_prob` op returns a `NumericRecord` wrapper, not a bare `Array`
+
+**Status:** open.
+
+**Sabi context.** sabi callers wrap the op output in `jnp.asarray(...)` to get an `Array` instead of the `NumericRecord(unnormalized_log_prob=...)` wrapper the op currently returns. Sites: `density_decomposition.is_consistent_with`, `LogProbTarget.target_map`, `test_neals_funnel`, `test_target_distribution`, etc. The same pattern shows up for other ProbPipe ops that return record-wrapped arrays (`log_prob`, ...) and is used elsewhere in sabi for the same reason.
+
+**What we observed.** `pp.unnormalized_log_prob(distribution, X)` returns `NumericRecord(unnormalized_log_prob=array(...))`; downstream JAX ops (`jnp.abs(diff)`, `jnp.sum(...)`, etc.) would see the wrapper unless we strip it first via `jnp.asarray(...)`.
+
+**What we'd want.** The op returns a bare `Array` matching the value's batch shape (or auto-strips when assigned to a typed `Array` slot). When this lands, drop the `jnp.asarray(...)` wrappers in sabi.
+
+**Why it matters for sabi.** Cosmetic but pervasive — every callsite that consumes the op's output adds an `asarray` cast. A small change upstream removes that boilerplate everywhere.

@@ -85,24 +85,20 @@ requires_regression = pytest.mark.skipif(
 
 
 def _algorithm(
-    input_shape: tuple[int, ...],
+    problem,
     n_initial: int,
     n_rounds: int,
 ) -> Algorithm:
-    """Canonical regression config: TinyGP + EI on a 512-candidate set.
+    """Canonical regression config: TinyGP + EI on a 512-candidate set."""
+    from sabi.density_decomposition import LogProbTarget
 
-    `n_initial` and `n_rounds` are tuned per benchmark to give the
-    surrogate enough data to be meaningful at the benchmark's
-    dimension, while keeping the per-test runtime in the 20-90 s
-    range. The choice is part of the benchmark's regression identity:
-    pinning a different budget is an explicit decision, not a silent
-    one.
-    """
+    input_shape = problem.target_distribution.event_shape
     return Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=input_shape),
         acquisition=ExpectedImprovement(
             optimizer=CandidateSetOptimizer(n_candidates=512)
         ),
+        density_decomposition=LogProbTarget(problem.target_distribution),
         n_initial=n_initial,
         n_rounds=n_rounds,
         q=1,
@@ -211,7 +207,7 @@ def test_benchmark_regression_mmd2_below_cap(benchmark_name: str) -> None:
     spec = _SPECS[benchmark_name]
     problem = spec.factory()
     algorithm = _algorithm(
-        input_shape=problem.target_distribution.input_shape,
+        problem=problem,
         n_initial=spec.n_initial,
         n_rounds=spec.n_rounds,
     )

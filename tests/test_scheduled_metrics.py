@@ -27,8 +27,9 @@ import jax.numpy as jnp
 import pytest
 from probpipe.core._distribution_base import Distribution
 
-from sabi.acquisitions.random import PriorSampling
+from sabi.acquisitions.random import DistributionSampling
 from sabi.algorithms import Algorithm, run
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.emulators import TinyGPEmulator
 from sabi.metrics import (
     Metric,
@@ -42,10 +43,14 @@ from sabi.metrics import (
 from sabi.problems.benchmarks import gaussian_2d
 
 
-def _algorithm(*, metrics, n_rounds=4, **kwargs):
+def _algorithm(*, metrics, n_rounds=4, problem=None, **kwargs):
+    if problem is None:
+        problem = gaussian_2d()
+    decomposition = LogProbTarget(problem.target_distribution)
     return Algorithm(
-        emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=PriorSampling(),
+        emulator_factory=lambda: TinyGPEmulator(input_shape=problem.target_distribution.event_shape),
+        acquisition=DistributionSampling(),
+        density_decomposition=decomposition,
         n_initial=8,
         n_rounds=n_rounds,
         q=1,
@@ -212,7 +217,7 @@ def test_collision_caught_before_loop_starts():
     problem = gaussian_2d()
     alg = Algorithm(
         emulator_factory=bad_factory,
-        acquisition=PriorSampling(),
+        acquisition=DistributionSampling(),
         n_initial=4,
         n_rounds=2,
         q=1,
@@ -326,19 +331,23 @@ def test_final_only_metric_via_large_every():
 
 def test_terminal_target_differs_from_current_under_tempering():
     """Under form-axis tempering with a non-trivial schedule, evaluating
-    at CURRENT vs TERMINAL produces different metric values — sanity
-    that the SP is built at a different log_density_form."""
+    at CURRENT vs TERMINAL produces different metric values."""
+    from sabi._probpipe_compat import independent_uniform
     from sabi.tempering.likelihood import LikelihoodTemperingViaForm
     from sabi.tempering.schedule import FixedSchedule
 
     problem = gaussian_2d()
+    decomposition = LogProbTarget(problem.target_distribution)
+    box = problem.target_distribution.support
+    initial = independent_uniform(low=jnp.asarray(box.low), high=jnp.asarray(box.high), name="init")
     alg = Algorithm(
         emulator_factory=lambda: TinyGPEmulator(input_shape=(2,)),
-        acquisition=PriorSampling(),
+        acquisition=DistributionSampling(),
+        density_decomposition=decomposition,
         n_initial=8,
         n_rounds=3,
         q=1,
-        tempering_scheme=LikelihoodTemperingViaForm(),
+        tempering_scheme=LikelihoodTemperingViaForm(initial=initial),
         schedule=FixedSchedule(states=(0.1, 0.5, 1.0)),
         metrics=(
             ScheduledMetric(

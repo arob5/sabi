@@ -17,13 +17,14 @@ from sabi.acquisitions.optim import (
     GreedyMultiPointOptimizer,
     PointwiseOptimizer,
 )
-from sabi.acquisitions.random import PriorSampling
+from sabi.acquisitions.random import DistributionSampling
 from sabi.algorithms import (
     Algorithm,
     SurrogateDistributionFactory,
     emulator_pushforward_factory,
     weighted_empirical_factory,
 )
+from sabi.density_decomposition import DensityDecomposition, LogProbTarget
 from sabi.metrics.base import Metric
 from sabi.metrics.mmd import MMD
 from sabi.metrics.scheduling import MetricTarget, ScheduledMetric
@@ -37,8 +38,6 @@ from sabi.emulators import TinyGPEmulator
 def build_problem(cfg: DictConfig) -> Problem:
     name = cfg.name
     if name == "gaussian":
-        # Generic d-D dispatch. `mean` / `cov` are optional; omit to use
-        # gaussian()'s defaults (zero mean, identity covariance).
         mean_cfg = cfg.get("mean", None)
         cov_cfg = cfg.get("cov", None)
         return gaussian(
@@ -50,9 +49,6 @@ def build_problem(cfg: DictConfig) -> Problem:
             bounds_radius=float(cfg.get("bounds_radius", 5.0)),
         )
     if name == "banana":
-        # `bounds` is optional in the d-D form: omit to fall through to
-        # banana()'s d-aware default. Tuple-of-tuples coercion only when
-        # the user supplied a value explicitly.
         bounds_cfg = cfg.get("bounds", None)
         bounds = (
             tuple(tuple(b) for b in bounds_cfg) if bounds_cfg is not None else None
@@ -78,6 +74,38 @@ def build_problem(cfg: DictConfig) -> Problem:
     raise ValueError(f"Unknown problem.name={name!r}.")
 
 
+def build_density_decomposition(
+    cfg: DictConfig, *, problem: Problem
+) -> DensityDecomposition:
+    """Build the algorithm's ``DensityDecomposition`` from config.
+
+    Required Hydra block ``density_decomposition:`` — there is no
+    default. Per ``docs/density_decomposition.md`` the user must
+    explicitly pick how the emulator composes into log-density.
+
+    Currently dispatched on a ``kind`` field:
+
+    - ``identity_from_target`` — the recommended idiom for benchmark
+      problems whose target distribution carries an analytical
+      ``_unnormalized_log_prob``. Equivalent to
+      ``LogProbTarget(problem.target_distribution)``.
+
+    Future kinds (``likelihood_with_prior``, ``forward_model``) wire in
+    here when their config schemas stabilize.
+    """
+    kind = cfg.get("kind")
+    if kind is None:
+        raise ValueError(
+            "density_decomposition.kind is required. Choose `identity_from_target` "
+            "for benchmark problems with analytical density."
+        )
+    if kind == "identity_from_target":
+        # Trivial decomposition: emulator approximates the target's
+        # analytical unnormalized log-density directly.
+        return LogProbTarget(problem.target_distribution)
+    raise ValueError(f"Unknown density_decomposition.kind={kind!r}.")
+
+
 def _build_emulator_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
     """Build a no-arg factory that constructs an `Emulator` with the
     problem's input_shape baked in."""
@@ -93,8 +121,6 @@ def _build_emulator_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
             )
         return factory
     if name == "dsp_gp":
-        # Imported lazily so the gpjax extra is only required when the
-        # config actually selects the DSP-prior emulator.
         from sabi.emulators.gpjax import DSPGPEmulator
 
         def factory() -> "DSPGPEmulator":
@@ -112,8 +138,7 @@ def _build_emulator_factory(cfg: DictConfig, *, input_shape: tuple[int, ...]):
 
 
 def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
-    """Build a `PointwiseOptimizer` from a config subsection. None →
-    `CandidateSetOptimizer()` for backwards compatibility."""
+    """Build a `PointwiseOptimizer` from a config subsection."""
     if cfg is None:
         return CandidateSetOptimizer()
     name = cfg.get("name", "candidate_set")
@@ -128,18 +153,15 @@ def _build_optimizer(cfg: DictConfig | None) -> PointwiseOptimizer:
             bfgs_atol=float(cfg.get("bfgs_atol", 1e-5)),
         )
     if name == "greedy":
-        # Greedy wraps an inner optimizer. Inner config under `cfg.inner`.
         inner = _build_optimizer(cfg.get("inner", None))
-        # Imputer wiring is left minimal: kriging_believer is the
-        # default; richer config support lands when a benchmark needs it.
         return GreedyMultiPointOptimizer(inner=inner)
     raise ValueError(f"Unknown acquisition.optimizer.name={name!r}.")
 
 
 def _build_acquisition(cfg: DictConfig) -> Acquisition:
     name = cfg.name
-    if name == "prior_sampling":
-        return PriorSampling()
+    if name == "distribution_sampling":
+        return DistributionSampling()
     if name == "ei":
         return ExpectedImprovement(
             optimizer=_build_optimizer(cfg.get("optimizer", None)),
@@ -161,13 +183,7 @@ _SCHEDULING_FIELDS = frozenset({"every", "target", "final", "name_suffix"})
 
 
 def _build_metric(cfg: DictConfig) -> Metric | ScheduledMetric:
-    """Build a single metric entry from YAML.
-
-    Bare entries (no scheduling fields present) return a `Metric`,
-    which the loop auto-wraps in `ScheduledMetric(defaults)`. When
-    any of `every` / `target` / `final` / `name_suffix` is present,
-    return an explicit `ScheduledMetric`.
-    """
+    """Build a single metric entry from YAML."""
     metric = _build_bare_metric(cfg)
     if not any(f in cfg for f in _SCHEDULING_FIELDS):
         return metric
@@ -198,13 +214,23 @@ def _build_surrogate_distribution_factory(name: str) -> SurrogateDistributionFac
 
 
 def build_algorithm(cfg: DictConfig, *, problem: Problem) -> Algorithm:
-    """Build the `Algorithm` from config, baking in problem shape metadata
-    where downstream components need it (e.g., the emulator factory)."""
+    """Build the `Algorithm` from config.
+
+    Wires in the required ``DensityDecomposition`` (via
+    :func:`build_density_decomposition`) and leaves
+    ``initial_design_distribution`` / ``x_support`` at ``None`` so the
+    loop's resolver fills them from
+    ``problem.target_distribution.support`` at run time.
+    """
+    decomposition = build_density_decomposition(
+        cfg.density_decomposition, problem=problem
+    )
     return Algorithm(
         emulator_factory=_build_emulator_factory(
-            cfg.emulator, input_shape=problem.target_distribution.input_shape
+            cfg.emulator, input_shape=problem.target_distribution.event_shape
         ),
         acquisition=_build_acquisition(cfg.acquisition),
+        density_decomposition=decomposition,
         surrogate_distribution_factory=_build_surrogate_distribution_factory(
             str(cfg.algorithm.get("surrogate_distribution", "emulator_pushforward"))
         ),
