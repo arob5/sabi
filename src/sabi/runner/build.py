@@ -86,9 +86,9 @@ def build_density_decomposition(
     Currently dispatched on a ``kind`` field:
 
     - ``identity_from_target`` — the recommended idiom for benchmark
-      problems whose ``TargetDistribution`` carries an analytical
+      problems whose target distribution carries an analytical
       ``_unnormalized_log_prob``. Equivalent to
-      ``DensityDecomposition.identity_from_target(problem.target_distribution)``.
+      ``LogProbTarget(problem.target_distribution)``.
 
     Future kinds (``likelihood_with_prior``, ``forward_model``) wire in
     here when their config schemas stabilize.

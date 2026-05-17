@@ -1,40 +1,42 @@
 # `TargetDistribution` / `DensityDecomposition` split
 
-**Status:** implemented (issue #65)
+**Status:** implemented (issue #65, PR #73)
 **Issue:** [#65](https://github.com/arob5/sabi/issues/65)
-**Last updated:** 2026-05-07
+**Last updated:** 2026-05-09
 
-> Two coupled refactors of `TargetDistribution` and the algorithm-side
-> "prior":
+> Two coupled refactors of the old `TargetDistribution` and the
+> algorithm-side "prior":
 >
-> 1. **Math vs. emulation split.** `TargetDistribution` carries only the
->    mathematical identity of the target distribution (support,
->    optionally an analytical unnormalized log-density). The
+> 1. **Math vs. emulation split.** The math identity stays on a
+>    ProbPipe `NumericRecordDistribution` — benchmarks subclass it
+>    directly (`BananaTarget`, `GaussianTarget`, `NealsFunnelTarget`),
+>    each carrying an analytical `_unnormalized_log_prob`. The
 >    algorithmically-relevant pieces — what the emulator approximates
->    (`target_single`) and how its output composes into log-density —
->    move into a new `DensityDecomposition` class.
+>    (`target_map`) and how its output composes into log-density —
+>    move into a new abstract `DensityDecomposition` class. The
+>    sabi-side `TargetDistribution` wrapper turned out to add
+>    nothing over `NumericRecordDistribution` and was deleted.
 > 2. **Per-role distribution fields.** The single `prior` field on
->    `TargetDistribution`, which today fills four distinct roles
+>    the old `TargetDistribution`, which filled four distinct roles
 >    (modeling-prior add-on, initial-design distribution, candidate-set
 >    sampler default, parameter-space support definer), splits into
 >    per-role fields on `Algorithm` and per-component fields on the
 >    optimizers.
 >
-> `DensityDecomposition` is a single parametric class — no subclass
-> hierarchy. It absorbs and supersedes [#59](https://github.com/arob5/sabi/pull/59)'s
-> `DensityForm`: same `(link: Map, shift: Map)` shape, plus
-> `target_single` and `output_shape`. PR #59's `Map` infrastructure and
-> pushforward dispatch are unchanged; this proposal renames + extends
-> the form class only.
+> `DensityDecomposition` is an abstract `NumericRecordDistribution`
+> subclass with concrete subclasses for each canonical shape:
+> `LogProbTermTarget`, `LogProbTarget`, `GaussianForwardModelTarget`.
+> It absorbs and supersedes [#59](https://github.com/arob5/sabi/pull/59)'s
+> `DensityForm`. PR #59's `Map` infrastructure and pushforward
+> dispatch are unchanged; this work renames + extends the form class
+> only.
 >
 > The `PriorSampler` / `BatchSampler` wrapper layer is removed in favor
 > of plain ProbPipe `Distribution` + `pp_sample` op.
 >
-> This is a **design-only** document. Implementation lands across
-> follow-up issues — see [§7](#7-phasing-and-follow-up-issues).
->
-> Sabi's API is not yet stable; this proposal does not preserve
-> back-compat with current names or signatures.
+> Sabi's API is not yet stable; this work does not preserve
+> back-compat with the prior `TargetDistribution` / `LogDensityForm`
+> names.
 
 ## 1. Motivation
 
@@ -270,15 +272,15 @@ land, and aligns with how every ProbPipe `Distribution` is defined.
 
 #### 3.2.2 Self-consistency
 
-When the user pairs a `DensityDecomposition` with a benchmark
-`TargetDistribution` (which carries an analytical
+When the user pairs a `DensityDecomposition` with a benchmark target
+distribution (a `NumericRecordDistribution` carrying an analytical
 `_unnormalized_log_prob`), there's a real question of whether the two
 agree.
 
 ```python
 def is_consistent_with(
     decomposition: DensityDecomposition,
-    target: TargetDistribution,
+    target: NumericRecordDistribution,
     *,
     x_test: Array,
     atol: float = 1e-6,
@@ -289,18 +291,18 @@ def is_consistent_with(
 
     Args:
         decomposition: candidate decomposition paired with `target`.
-        target: a `TargetDistribution` with analytical
-            `_unnormalized_log_prob`. Returns `True` trivially when
-            `target` does not implement an analytical density (i.e.,
-            user inverse problems).
-        x_test: shape `(n,) + input_shape`. Requires `n >= 2` when
+        target: a `NumericRecordDistribution` carrying an analytical
+            `_unnormalized_log_prob`. If the target does not implement
+            an analytical density, ProbPipe's op raises `TypeError`;
+            the consistency check is undefined and the error
+            propagates.
+        x_test: shape `(n,) + event_shape`. Requires `n >= 2` when
             `strict=False`.
         atol: numerical tolerance for the comparison.
         strict: when `True` (default), require pointwise equality
-            within `atol`:
-            ``decomposition.density_at(x) ≈ target._unnormalized_log_prob(x)``.
-            When `False`, allow an additive constant — only differences
-            across rows must match within `atol`. Requires `n >= 2`.
+            within `atol`. When `False`, allow an additive constant
+            — only differences across rows must match within `atol`.
+            Requires `n >= 2`.
 
     The strict default exists because some downstream paths
     (metrics that compare emulator predictions against the target's
@@ -358,7 +360,7 @@ specific:
 | Initial design distribution | `Algorithm.initial_design_distribution` |
 | Candidate-set sampler (pointwise optimizers) | `CandidateSetOptimizer.candidate_distribution` (per-optimizer field) |
 | BFGS seed sampler (continuous optimizer) | `ContinuousMultiStartOptimizer.seed_distribution` (per-optimizer field) |
-| Parameter-space support definer | `TargetDistribution.support` (math) + `Algorithm.x_support` (algorithmic search region, default-equal) |
+| Parameter-space support definer | target distribution's `support` (math) + `Algorithm.x_support` (algorithmic search region, default-equal) |
 
 In Bayesian inverse-problem benchmarks, the user can choose to pass
 the same `Distribution` to multiple of these slots (e.g., the
@@ -440,15 +442,13 @@ separately by the user:
 
 ```python
 problem = banana_2d()
-# Problem(target_distribution=TargetDistribution(...,
-#                                                support=…,
-#                                                _unnormalized_log_prob=…),
+# Problem(target_distribution=BananaTarget(...,
+#                                           support=…,
+#                                           _unnormalized_log_prob=…),
 #         reference_distribution=…,
 #         name="banana_2d")
 
-decomposition = DensityDecomposition.identity_from_target(
-    problem.target_distribution
-)
+decomposition = LogProbTarget(problem.target_distribution)
 algorithm = Algorithm(
     density_decomposition=decomposition,
     ...,
@@ -456,19 +456,19 @@ algorithm = Algorithm(
 run(problem, algorithm, key)
 ```
 
-`identity_from_target` is the recommended idiom for benchmarks. It
-wraps the target's analytical `_unnormalized_log_prob` (via ProbPipe's
-`unnormalized_log_prob` op) into a `target_single` callable, with
-`link = Identity` and `shift = Constant(0.0)`. Users who want a
-non-trivial decomposition (e.g., emulate log-likelihood instead of
-log-density) call `DensityDecomposition.likelihood_with_prior(...)` or
-construct `DensityDecomposition(...)` directly.
+`LogProbTarget` is the recommended idiom for benchmarks. It wraps the
+target's analytical `_unnormalized_log_prob` (via ProbPipe's
+`unnormalized_log_prob` op) into a `target_map`, with `link = Identity`
+and `shift = None`. Users who want a non-trivial decomposition
+(e.g., emulate log-likelihood instead of log-density) subclass
+`LogProbTermTarget` or `GaussianForwardModelTarget`, or subclass
+`DensityDecomposition` directly.
 
 **The benchmark module does not expose a standalone
 `banana_log_density(d, a, b)` factory.** The math identity lives on
-the `TargetDistribution` (via its analytical
-`_unnormalized_log_prob`); the recommended way to consume it is
-`DensityDecomposition.identity_from_target(...)`. No duplicate
+the benchmark's `NumericRecordDistribution` subclass (via its
+analytical `_unnormalized_log_prob`); the recommended way to consume
+it is `LogProbTarget(problem.target_distribution)`. No duplicate
 parameterization between benchmark factory and density factory.
 
 ## 4. Coordination with #59
