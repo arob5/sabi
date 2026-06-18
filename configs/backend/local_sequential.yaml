@@ -1,0 +1,3 @@
+# LocalSequentialBackend — run experiments one at a time in the calling process.
+# Use for local iteration and debugging.
+name: local_sequential
